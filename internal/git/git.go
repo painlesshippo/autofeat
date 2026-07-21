@@ -44,7 +44,7 @@ func AddWorktree(branchName, destPath string) error {
 // RemoveWorktree removes the worktree at destPath. When force is true, Git is
 // instructed to remove the worktree even if it contains modified files.
 func RemoveWorktree(destPath string, force bool) error {
-	args := []string{"worktree", "remove"}
+	args := []string{"-C", destPath, "worktree", "remove"}
 	if force {
 		args = append(args, "--force")
 	}

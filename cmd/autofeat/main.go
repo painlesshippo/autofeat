@@ -1,7 +1,225 @@
+// Command autofeat manages ephemeral Git worktrees for AI agent feature sessions.
 package main
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/painlesshippo/autofeat/internal/config"
+	gitcmd "github.com/painlesshippo/autofeat/internal/git"
+	"github.com/painlesshippo/autofeat/internal/state"
+	"github.com/painlesshippo/autofeat/internal/workspace"
+)
 
 func main() {
-	fmt.Println("autofeat")
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "autofeat:", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
+	if len(args) == 0 {
+		return usageError()
+	}
+
+	if args[0] == "list" {
+		if len(args) != 1 {
+			return usageError()
+		}
+		return listSessions()
+	}
+
+	featureName := args[0]
+	if err := validateFeatureName(featureName); err != nil {
+		return err
+	}
+
+	switch len(args) {
+	case 1:
+		insideWorkTree, err := gitcmd.IsInsideWorkTree()
+		if err != nil {
+			return err
+		}
+		if insideWorkTree {
+			return addRepository(featureName)
+		}
+		return openSession(featureName)
+	case 2:
+		switch args[1] {
+		case "open":
+			return openSession(featureName)
+		case "teardown":
+			return teardownSession(featureName, false)
+		default:
+			return usageError()
+		}
+	case 3:
+		if args[1] == "teardown" && args[2] == "--force" {
+			return teardownSession(featureName, true)
+		}
+		return usageError()
+	default:
+		return usageError()
+	}
+}
+
+func listSessions() error {
+	sessions, err := state.ListSessions()
+	if err != nil {
+		return err
+	}
+
+	names := make([]string, 0, len(sessions))
+	for name := range sessions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "FEATURE\tCREATED\tREPOSITORIES")
+	for _, name := range names {
+		session := sessions[name]
+		fmt.Fprintf(writer, "%s\t%s\t%d\n", name, session.CreatedAt.Format(time.RFC3339), len(session.Repos))
+	}
+
+	return writer.Flush()
+}
+
+func addRepository(featureName string) error {
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	repoRoot, err := gitcmd.GetRepoRoot()
+	if err != nil {
+		return err
+	}
+	repoName := filepath.Base(filepath.Clean(repoRoot))
+	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureName)
+	worktreePath := filepath.Join(featureDir, repoName)
+	workspaceFile := filepath.Join(featureDir, featureName+".code-workspace")
+
+	if err := os.MkdirAll(featureDir, 0o755); err != nil {
+		return fmt.Errorf("create feature directory: %w", err)
+	}
+	if err := gitcmd.AddWorktree("agent/"+featureName, worktreePath); err != nil {
+		return err
+	}
+
+	session, err := state.GetSession(featureName)
+	newSession := errors.Is(err, state.ErrSessionNotFound)
+	if err != nil && !newSession {
+		return err
+	}
+	if newSession {
+		session = state.Session{
+			CreatedAt:     time.Now().UTC(),
+			FeatureDir:    featureDir,
+			WorkspaceFile: workspaceFile,
+			Repos:         make([]state.Repository, 0, 1),
+		}
+	}
+
+	session.Repos = append(session.Repos, state.Repository{
+		Name:         repoName,
+		OriginalPath: repoRoot,
+		WorktreePath: worktreePath,
+	})
+	if newSession {
+		err = state.SaveSession(featureName, session)
+	} else {
+		err = state.UpdateSession(featureName, session)
+	}
+	if err != nil {
+		return err
+	}
+
+	repoNames := make([]string, 0, len(session.Repos))
+	for _, repo := range session.Repos {
+		repoNames = append(repoNames, repo.Name)
+	}
+	if err := workspace.Write(session.WorkspaceFile, repoNames); err != nil {
+		return err
+	}
+
+	fmt.Printf("Added %s to feature %s\n", repoName, featureName)
+	return nil
+}
+
+func openSession(featureName string) error {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return err
+	}
+
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	command := exec.Command(configuration.EditorCmd, session.WorkspaceFile)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("open feature %q with %q: %w", featureName, configuration.EditorCmd, err)
+	}
+
+	return nil
+}
+
+func teardownSession(featureName string, force bool) error {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return err
+	}
+
+	if !force {
+		for _, repo := range session.Repos {
+			dirty, err := gitcmd.HasUncommittedChanges(repo.WorktreePath)
+			if err != nil {
+				return err
+			}
+			if dirty {
+				fmt.Fprintf(os.Stderr, "Warning: %s has uncommitted changes; teardown aborted. Use --force to discard them.\n", repo.Name)
+				return errors.New("cannot teardown dirty worktree")
+			}
+		}
+	}
+
+	for _, repo := range session.Repos {
+		if err := gitcmd.RemoveWorktree(repo.WorktreePath, force); err != nil {
+			return err
+		}
+	}
+	if err := os.RemoveAll(session.FeatureDir); err != nil {
+		return fmt.Errorf("remove feature directory: %w", err)
+	}
+	if err := state.DeleteSession(featureName); err != nil {
+		return err
+	}
+
+	fmt.Printf("Tore down feature %s\n", featureName)
+	return nil
+}
+
+func validateFeatureName(name string) error {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name || strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("invalid feature name %q", name)
+	}
+
+	return nil
+}
+
+func usageError() error {
+	return errors.New("usage: autofeat list | autofeat <feature-name> [open|teardown [--force]]")
 }
