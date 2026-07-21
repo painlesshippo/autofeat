@@ -9,16 +9,20 @@ BIN_DIR="$PROJECT_ROOT/bin"
 BINARY_PATH="$BIN_DIR/autofeat"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 SHELL_RC="${SHELL_RC:-$HOME/.bashrc}"
+AUTOFEAT_DIR="${AUTOFEAT_DIR:-$HOME/.autofeat}"
+CONFIG_PATH="$AUTOFEAT_DIR/config.json"
+STATE_PATH="$AUTOFEAT_DIR/state.json"
 
 function help() {
     echo "Usage: $0 <function>"
     echo "Available functions:"
-    echo "  build   - Build the project"
-    echo "  run     - Build and run the CLI"
-    echo "  clean   - Clean build artifacts"
-    echo "  install - Install the CLI and add it to PATH"
+    echo "  build     - Build the project"
+    echo "  run       - Build and run the CLI"
+    echo "  clean     - Clean build artifacts"
+    echo "  install   - Install the CLI and add it to PATH"
     echo "  uninstall - Remove the installed CLI and PATH entry"
-    echo "  test    - Run tests"
+    echo "  debug     - Display the autofeat config and state"
+    echo "  test      - Run tests"
 }
 
 function build() {
@@ -96,6 +100,23 @@ function uninstall() {
     fi
 
     echo "Uninstalled $INSTALL_DIR/autofeat"
+}
+
+function debug() {
+    echo "Config: $CONFIG_PATH"
+    if [[ -f "$CONFIG_PATH" ]]; then
+        cat "$CONFIG_PATH"
+    else
+        echo "(not found)"
+    fi
+
+    echo
+    echo "State: $STATE_PATH"
+    if [[ -f "$STATE_PATH" ]]; then
+        cat "$STATE_PATH"
+    else
+        echo "(not found)"
+    fi
 }
 
 function test() {
