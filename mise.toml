@@ -10,9 +10,9 @@ description = "Run the test suite"
 run = "go test -v ./..."
 
 [tasks.run]
-description = "Build and run the autofeat CLI"
+description = "Build and run the autofeat CLI (lists sessions by default)"
 depends = ["build"]
-run = "./bin/autofeat"
+run = "bash ./scripts/run.sh"
 
 [tasks.clean]
 description = "Remove build artifacts"
