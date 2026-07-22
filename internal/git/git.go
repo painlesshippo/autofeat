@@ -41,6 +41,24 @@ func AddWorktree(branchName, destPath string) error {
 	return nil
 }
 
+// Clone clones url into destPath.
+func Clone(url, destPath string) error {
+	if _, err := run("clone", url, destPath); err != nil {
+		return fmt.Errorf("clone %q to %q: %w", url, destPath, err)
+	}
+
+	return nil
+}
+
+// CheckoutNewBranch creates and checks out branchName in the repository at destPath.
+func CheckoutNewBranch(destPath, branchName string) error {
+	if _, err := run("-C", destPath, "checkout", "-b", branchName); err != nil {
+		return fmt.Errorf("create branch %q in %q: %w", branchName, destPath, err)
+	}
+
+	return nil
+}
+
 // RemoveWorktree removes the worktree at destPath. When force is true, Git is
 // instructed to remove the worktree even if it contains modified files.
 func RemoveWorktree(destPath string, force bool) error {
@@ -65,6 +83,17 @@ func HasUncommittedChanges(destPath string) (bool, error) {
 	}
 
 	return len(output) > 0, nil
+}
+
+// HasUnpushedCommits reports whether branchName has commits that are not on its
+// corresponding origin branch in the repository at destPath.
+func HasUnpushedCommits(destPath, branchName string) (bool, error) {
+	output, err := run("-C", destPath, "log", "origin/"+branchName+".."+branchName)
+	if err != nil {
+		return false, fmt.Errorf("check unpushed commits for branch %q in %q: %w", branchName, destPath, err)
+	}
+
+	return strings.TrimSpace(output) != "", nil
 }
 
 func run(args ...string) (string, error) {

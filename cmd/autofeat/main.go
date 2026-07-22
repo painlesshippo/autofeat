@@ -53,6 +53,9 @@ func run(args []string) error {
 		}
 		return openSession(featureName)
 	case 2:
+		if isRemoteURL(args[1]) {
+			return addRemoteRepository(featureName, args[1])
+		}
 		switch args[1] {
 		case "open":
 			return openSession(featureName)
@@ -69,6 +72,12 @@ func run(args []string) error {
 	default:
 		return usageError()
 	}
+}
+
+func isRemoteURL(value string) bool {
+	return strings.HasPrefix(value, "http://") ||
+		strings.HasPrefix(value, "https://") ||
+		strings.HasPrefix(value, "git@")
 }
 
 func listSessions() error {
@@ -155,6 +164,82 @@ func addRepository(featureName string) error {
 	return nil
 }
 
+func addRemoteRepository(featureName, remoteURL string) error {
+	repoName, err := remoteRepositoryName(remoteURL)
+	if err != nil {
+		return err
+	}
+
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureName)
+	worktreePath := filepath.Join(featureDir, repoName)
+	workspaceFile := filepath.Join(featureDir, featureName+".code-workspace")
+
+	session, err := state.GetSession(featureName)
+	newSession := errors.Is(err, state.ErrSessionNotFound)
+	if err != nil && !newSession {
+		return err
+	}
+	if newSession {
+		session = state.Session{
+			CreatedAt:     time.Now().UTC(),
+			FeatureDir:    featureDir,
+			WorkspaceFile: workspaceFile,
+			Repos:         make([]state.Repository, 0, 1),
+		}
+	}
+
+	if err := os.MkdirAll(featureDir, 0o755); err != nil {
+		return fmt.Errorf("create feature directory: %w", err)
+	}
+	if err := gitcmd.Clone(remoteURL, worktreePath); err != nil {
+		return err
+	}
+	cloneSucceeded := false
+	defer func() {
+		if cloneSucceeded {
+			return
+		}
+		_ = os.RemoveAll(worktreePath)
+	}()
+
+	if err := gitcmd.CheckoutNewBranch(worktreePath, "agent/"+featureName); err != nil {
+		return err
+	}
+
+	session.Repos = append(session.Repos, state.Repository{
+		Name:          repoName,
+		OriginalPath:  remoteURL,
+		WorktreePath:  worktreePath,
+		IsRemoteClone: true,
+	})
+
+	repoNames := make([]string, 0, len(session.Repos))
+	for _, repo := range session.Repos {
+		repoNames = append(repoNames, repo.Name)
+	}
+	if err := workspace.Write(session.WorkspaceFile, repoNames); err != nil {
+		return err
+	}
+
+	if newSession {
+		err = state.SaveSession(featureName, session)
+	} else {
+		err = state.UpdateSession(featureName, session)
+	}
+	if err != nil {
+		return err
+	}
+	cloneSucceeded = true
+
+	fmt.Printf("Cloned remote repo '%s' to feature '%s'\n", repoName, featureName)
+	return nil
+}
+
 func openSession(featureName string) error {
 	session, err := state.GetSession(featureName)
 	if err != nil {
@@ -197,6 +282,20 @@ func teardownSession(featureName string, force bool) error {
 	}
 
 	for _, repo := range session.Repos {
+		if repo.IsRemoteClone {
+			unpushed, err := gitcmd.HasUnpushedCommits(repo.WorktreePath, "agent/"+featureName)
+			if err != nil {
+				return err
+			}
+			if unpushed {
+				fmt.Fprintf(os.Stderr, "Warning: %s has unpushed agent commits that will be deleted.\n", repo.Name)
+			}
+			if err := os.RemoveAll(repo.WorktreePath); err != nil {
+				return fmt.Errorf("remove cloned repository %q: %w", repo.WorktreePath, err)
+			}
+			continue
+		}
+
 		if err := gitcmd.RemoveWorktree(repo.WorktreePath, force); err != nil {
 			return err
 		}
@@ -220,6 +319,16 @@ func validateFeatureName(name string) error {
 	return nil
 }
 
+func remoteRepositoryName(remoteURL string) (string, error) {
+	trimmedURL := strings.TrimSuffix(strings.TrimSpace(remoteURL), "/")
+	repoName := strings.TrimSuffix(filepath.Base(trimmedURL), ".git")
+	if repoName == "" || repoName == "." || repoName == ".." || filepath.Base(repoName) != repoName {
+		return "", fmt.Errorf("invalid remote repository URL %q", remoteURL)
+	}
+
+	return repoName, nil
+}
+
 func usageError() error {
-	return errors.New("usage: autofeat list | autofeat <feature-name> [open|teardown [--force]]")
+	return errors.New("usage: autofeat list | autofeat <feature-name> [<remote-url>|open|teardown [--force]]")
 }

@@ -1,7 +1,9 @@
 package state
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,15 +19,23 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 			FeatureDir:    "/tmp/workspaces/feature1",
 			WorkspaceFile: "/tmp/workspaces/feature1/feature1.code-workspace",
 			Repos: []Repository{{
-				Name:         "repo1",
-				OriginalPath: "/tmp/repo1",
-				WorktreePath: "/tmp/workspaces/feature1/repo1",
+				Name:          "repo1",
+				OriginalPath:  "https://github.com/example/repo1.git",
+				WorktreePath:  "/tmp/workspaces/feature1/repo1",
+				IsRemoteClone: true,
 			}},
 		},
 	}}
 
 	if err := SaveToPath(path, want); err != nil {
 		t.Fatalf("SaveToPath() error = %v", err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(contents), `"is_remote_clone": true`) {
+		t.Errorf("state JSON does not contain is_remote_clone: %s", contents)
 	}
 
 	got, err := LoadFromPath(path)
@@ -37,6 +47,9 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 	}
 	if got.Sessions["feature1"].WorkspaceFile != want.Sessions["feature1"].WorkspaceFile {
 		t.Errorf("WorkspaceFile = %q, want %q", got.Sessions["feature1"].WorkspaceFile, want.Sessions["feature1"].WorkspaceFile)
+	}
+	if !got.Sessions["feature1"].Repos[0].IsRemoteClone {
+		t.Error("IsRemoteClone = false, want true")
 	}
 }
 

@@ -110,6 +110,50 @@ func TestRemoveWorktree(t *testing.T) {
 	}
 }
 
+func TestCloneCheckoutNewBranchAndDetectUnpushedCommits(t *testing.T) {
+	requireGit(t)
+
+	sourcePath := createRepository(t)
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, sourcePath, "init", "--bare", "-q", remotePath)
+	runGit(t, sourcePath, "remote", "add", "origin", remotePath)
+	runGit(t, sourcePath, "push", "-qu", "origin", "HEAD")
+	runGit(t, sourcePath, "checkout", "-qb", "agent/test")
+	runGit(t, sourcePath, "push", "-qu", "origin", "agent/test")
+
+	clonePath := filepath.Join(t.TempDir(), "clone")
+	if err := Clone(remotePath, clonePath); err != nil {
+		t.Fatalf("Clone() error = %v", err)
+	}
+	if err := CheckoutNewBranch(clonePath, "agent/test"); err != nil {
+		t.Fatalf("CheckoutNewBranch() error = %v", err)
+	}
+
+	unpushed, err := HasUnpushedCommits(clonePath, "agent/test")
+	if err != nil {
+		t.Fatalf("HasUnpushedCommits() clean branch error = %v", err)
+	}
+	if unpushed {
+		t.Error("HasUnpushedCommits() clean branch = true, want false")
+	}
+
+	if err := os.WriteFile(filepath.Join(clonePath, "new-file.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, clonePath, "add", "new-file.txt")
+	runGit(t, clonePath, "config", "user.email", "test@example.com")
+	runGit(t, clonePath, "config", "user.name", "Test User")
+	runGit(t, clonePath, "commit", "-qm", "new commit")
+
+	unpushed, err = HasUnpushedCommits(clonePath, "agent/test")
+	if err != nil {
+		t.Fatalf("HasUnpushedCommits() branch with local commit error = %v", err)
+	}
+	if !unpushed {
+		t.Error("HasUnpushedCommits() branch with local commit = false, want true")
+	}
+}
+
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {

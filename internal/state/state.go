@@ -20,9 +20,10 @@ var ErrSessionNotFound = errors.New("session not found")
 
 // Repository describes a source repository attached to a feature session.
 type Repository struct {
-	Name         string `json:"name"`
-	OriginalPath string `json:"original_path"`
-	WorktreePath string `json:"worktree_path"`
+	Name          string `json:"name"`
+	OriginalPath  string `json:"original_path"`
+	WorktreePath  string `json:"worktree_path"`
+	IsRemoteClone bool   `json:"is_remote_clone"`
 }
 
 // Session describes a feature session and its attached repository worktrees.
