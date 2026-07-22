@@ -6,7 +6,7 @@ and open them together in one VS Code workspace.
 
 ## Requirements
 
-* Go 1.24 or later, to build or install the CLI.
+* Go 1.26.5 or later, to build or install the CLI.
 * Git installed and available on `PATH`.
 * VS Code's `code` command on `PATH` to use the default workspace-opening
   command. Another editor command can be configured instead.
