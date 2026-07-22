@@ -54,6 +54,31 @@ mise run setup-hooks
 The pre-commit hook runs `rumdl check .` through Mise to lint all Markdown
 files.
 
+## Releasing
+
+The build derives the application version from annotated Git tags using
+GitVersion. Do not edit a version constant to make a release. Choose the next
+Semantic Versioning number: increment the patch for compatible fixes, the minor
+version for compatible features, or the major version for breaking changes.
+
+To create a minor release, first commit all intended changes and start from a
+clean working tree. For example, to bump `v0.1.0` to `v0.2.0`:
+
+```sh
+git status --short
+mise run test
+git tag -a v0.2.0 -m "Release v0.2.0"
+mise run build
+./bin/autofeat version
+```
+
+Confirm that the final command reports `autofeat 0.2.0`. When a remote is
+configured, publish the release tag with:
+
+```sh
+git push origin v0.2.0
+```
+
 ## Usage
 
 Run `autofeat <feature-name>` inside a Git repository to add that repository
