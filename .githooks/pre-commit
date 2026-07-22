@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+
+set -eu
+
+if command -v mise >/dev/null 2>&1; then
+	exec mise exec -- rumdl check .
+fi
+
+if [ -x "$HOME/.local/bin/mise" ]; then
+	exec "$HOME/.local/bin/mise" exec -- rumdl fmt
+fi
+
+printf '%s\n' 'Mise is required to run the pre-commit hook but was not found.' >&2
+exit 1
