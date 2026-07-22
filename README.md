@@ -49,6 +49,12 @@ cd ~/sources/repo2
 autofeat feature1
 ```
 
+Add a remote repository to a feature from any directory by passing its HTTP(S) or Git SSH URL. `autofeat` clones it into the feature directory and creates its `agent/<feature-name>` branch:
+
+```sh
+autofeat feature1 https://github.com/example/repo3.git
+```
+
 With the default configuration, this produces:
 
 ```text
@@ -56,6 +62,7 @@ With the default configuration, this produces:
 └── feature1/
     ├── repo1/
     ├── repo2/
+    ├── repo3/
     └── feature1.code-workspace
 ```
 
@@ -84,8 +91,10 @@ Tear down a session after confirming all worktrees are clean:
 autofeat feature1 teardown
 ```
 
-If a worktree has uncommitted changes, teardown stops without removing anything. To intentionally discard those changes while removing the worktrees, use:
+If a worktree or cloned remote repository has uncommitted changes, teardown stops without removing anything. To intentionally discard those changes while removing the worktrees, use:
 
 ```sh
 autofeat feature1 teardown --force
 ```
+
+Before deleting a cloned remote repository, `autofeat` warns when its agent branch has commits that have not been pushed to the corresponding remote branch.

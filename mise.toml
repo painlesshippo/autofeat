@@ -1,0 +1,32 @@
+[tools]
+go = "1.24.4"
+
+[tasks.build]
+description = "Build the autofeat CLI"
+run = "mkdir -p bin && go build -o bin/autofeat ./cmd/autofeat"
+
+[tasks.test]
+description = "Run the test suite"
+run = "go test -v ./..."
+
+[tasks.run]
+description = "Build and run the autofeat CLI"
+depends = ["build"]
+run = "./bin/autofeat"
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf bin"
+
+[tasks.debug]
+description = "Display the autofeat config and state"
+run = "bash ./scripts/debug.sh"
+
+[tasks.install]
+description = "Install the CLI and add it to PATH"
+depends = ["build"]
+run = "bash ./scripts/install.sh"
+
+[tasks.uninstall]
+description = "Remove the installed CLI and PATH entry"
+run = "bash ./scripts/uninstall.sh"
