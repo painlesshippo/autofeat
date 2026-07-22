@@ -1,0 +1,21 @@
+# Build artifacts
+/bin/
+
+# Go build and test outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+
+# Local Go workspace files
+go.work
+go.work.sum
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
