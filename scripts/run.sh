@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-# $# is the number of arguments passed to the script
+# $# is the number of arguments passed to this script
+# $@ is the list of arguments passed to this script
 
 set -euo pipefail
 
