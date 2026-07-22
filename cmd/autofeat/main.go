@@ -312,6 +312,7 @@ func previewSessions(baseRef string) error {
 		return err
 	}
 
+	generationStarted := time.Now()
 	report := preview.Build(sessions, baseRef, time.Now())
 	contents, err := preview.Render(report)
 	if err != nil {
@@ -326,12 +327,13 @@ func previewSessions(baseRef string) error {
 	if err := preview.WriteSnapshot(snapshotPath, contents); err != nil {
 		return err
 	}
+	generationDuration := time.Since(generationStarted)
 
 	if err := openPreview(snapshotPath); err != nil {
 		return err
 	}
 
-	fmt.Printf("Opened preview snapshot %s\n", snapshotPath)
+	fmt.Printf("Opened preview snapshot %s (generated in %s)\n", snapshotPath, generationDuration)
 	return nil
 }
 

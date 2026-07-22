@@ -3,11 +3,14 @@ package preview
 
 import (
 	"sort"
+	"sync"
 	"time"
 
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/painlesshippo/autofeat/internal/state"
 )
+
+const maxDiffWorkers = 4
 
 // Report contains the change data rendered into a preview snapshot.
 type Report struct {
@@ -29,9 +32,21 @@ type Repository struct {
 	Error string
 }
 
+type diffFunc func(destPath, baseRef string) (string, error)
+
+type diffJob struct {
+	sessionIndex    int
+	repositoryIndex int
+	repository      state.Repository
+}
+
 // Build collects a worktree diff for every repository in sessions. A failure
 // for one repository is retained in its report so other previews remain useful.
 func Build(sessions map[string]state.Session, baseRef string, generatedAt time.Time) Report {
+	return buildWithDiff(sessions, baseRef, generatedAt, gitcmd.Diff)
+}
+
+func buildWithDiff(sessions map[string]state.Session, baseRef string, generatedAt time.Time, collectDiff diffFunc) Report {
 	featureNames := make([]string, 0, len(sessions))
 	for featureName := range sessions {
 		featureNames = append(featureNames, featureName)
@@ -43,7 +58,8 @@ func Build(sessions map[string]state.Session, baseRef string, generatedAt time.T
 		GeneratedAt: generatedAt.UTC(),
 		Sessions:    make([]Session, 0, len(featureNames)),
 	}
-	for _, featureName := range featureNames {
+	jobs := make([]diffJob, 0)
+	for sessionIndex, featureName := range featureNames {
 		session := sessions[featureName]
 		repositories := append([]state.Repository(nil), session.Repos...)
 		sort.Slice(repositories, func(i, j int) bool {
@@ -55,19 +71,50 @@ func Build(sessions map[string]state.Session, baseRef string, generatedAt time.T
 
 		previewSession := Session{
 			FeatureName:  featureName,
-			Repositories: make([]Repository, 0, len(repositories)),
+			Repositories: make([]Repository, len(repositories)),
 		}
-		for _, repository := range repositories {
-			diff, err := gitcmd.Diff(repository.WorktreePath, baseRef)
-			previewRepository := Repository{Name: repository.Name, Diff: diff}
-			if err != nil {
-				previewRepository.Error = err.Error()
-			}
-			previewSession.Repositories = append(previewSession.Repositories, previewRepository)
+		for repositoryIndex, repository := range repositories {
+			jobs = append(jobs, diffJob{
+				sessionIndex:    sessionIndex,
+				repositoryIndex: repositoryIndex,
+				repository:      repository,
+			})
 		}
 
 		report.Sessions = append(report.Sessions, previewSession)
 	}
 
+	collectDiffs(&report, jobs, baseRef, collectDiff)
+
 	return report
+}
+
+func collectDiffs(report *Report, jobs []diffJob, baseRef string, collectDiff diffFunc) {
+	workerCount := min(maxDiffWorkers, len(jobs))
+	if workerCount == 0 {
+		return
+	}
+
+	jobQueue := make(chan diffJob)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for job := range jobQueue {
+				diff, err := collectDiff(job.repository.WorktreePath, baseRef)
+				result := Repository{Name: job.repository.Name, Diff: diff}
+				if err != nil {
+					result.Error = err.Error()
+				}
+				report.Sessions[job.sessionIndex].Repositories[job.repositoryIndex] = result
+			}
+		}()
+	}
+
+	for _, job := range jobs {
+		jobQueue <- job
+	}
+	close(jobQueue)
+	workers.Wait()
 }
