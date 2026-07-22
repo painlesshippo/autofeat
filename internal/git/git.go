@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -105,6 +106,52 @@ func HasUnpushedCommits(destPath, branchName string) (bool, error) {
 	}
 
 	return strings.TrimSpace(output) != "", nil
+}
+
+// Diff returns the complete worktree diff against baseRef, including
+// untracked files. The base reference must resolve to a commit in destPath.
+func Diff(destPath, baseRef string) (string, error) {
+	if _, err := run("-C", destPath, "rev-parse", "--verify", "--quiet", baseRef+"^{commit}"); err != nil {
+		return "", fmt.Errorf("verify base reference %q in worktree %q: %w", baseRef, destPath, err)
+	}
+
+	diff, err := run("-C", destPath, "diff", "--binary", baseRef)
+	if err != nil {
+		return "", fmt.Errorf("diff worktree %q against %q: %w", destPath, baseRef, err)
+	}
+
+	untracked, err := run("-C", destPath, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return "", fmt.Errorf("list untracked files in worktree %q: %w", destPath, err)
+	}
+	for _, relativePath := range strings.Split(strings.TrimSuffix(untracked, "\x00"), "\x00") {
+		if relativePath == "" {
+			continue
+		}
+
+		fileDiff, err := diffUntrackedFile(destPath, relativePath)
+		if err != nil {
+			return "", err
+		}
+		diff += fileDiff
+	}
+
+	return diff, nil
+}
+
+func diffUntrackedFile(destPath, relativePath string) (string, error) {
+	command := exec.Command("git", "-C", destPath, "diff", "--no-index", "--binary", "--", "/dev/null", relativePath)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		return string(output), nil
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return string(output), nil
+	}
+
+	return "", fmt.Errorf("diff untracked file %q in worktree %q: %w: %s", filepath.Clean(relativePath), destPath, err, strings.TrimSpace(string(output)))
 }
 
 func run(args ...string) (string, error) {

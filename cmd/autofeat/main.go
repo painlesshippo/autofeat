@@ -4,6 +4,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/painlesshippo/autofeat/internal/config"
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
+	"github.com/painlesshippo/autofeat/internal/preview"
 	"github.com/painlesshippo/autofeat/internal/state"
 	"github.com/painlesshippo/autofeat/internal/workspace"
 )
@@ -25,6 +27,10 @@ var (
 	buildDatetime = "unknown"
 	goVersion     = "unknown"
 )
+
+const defaultPreviewBase = "master"
+
+var previewCommand = previewSessions
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -50,6 +56,13 @@ func run(args []string) error {
 		}
 		fmt.Printf("autofeat %s\ncommit: %s\nbuilt: %s\ngo: %s\n", version, commit, buildDatetime, goVersion)
 		return nil
+	}
+	if args[0] == "preview" {
+		baseRef, err := previewBase(args[1:])
+		if err != nil {
+			return usageError()
+		}
+		return previewCommand(baseRef)
 	}
 
 	featureName := args[0]
@@ -279,6 +292,97 @@ func openSession(featureName string) error {
 	return nil
 }
 
+func previewBase(args []string) (string, error) {
+	if len(args) == 0 {
+		return defaultPreviewBase, nil
+	}
+	if len(args) != 2 || args[0] != "--base" || args[1] == "" {
+		return "", errors.New("invalid preview arguments")
+	}
+	if err := gitcmd.ValidateBranchName(args[1]); err != nil {
+		return "", fmt.Errorf("invalid preview base %q: %w", args[1], err)
+	}
+
+	return args[1], nil
+}
+
+func previewSessions(baseRef string) error {
+	sessions, err := state.ListSessions()
+	if err != nil {
+		return err
+	}
+
+	report := preview.Build(sessions, baseRef, time.Now())
+	contents, err := preview.Render(report)
+	if err != nil {
+		return fmt.Errorf("render preview: %w", err)
+	}
+
+	configPath, err := config.Path()
+	if err != nil {
+		return err
+	}
+	snapshotPath := filepath.Join(filepath.Dir(configPath), "preview.html")
+	if err := preview.WriteSnapshot(snapshotPath, contents); err != nil {
+		return err
+	}
+
+	if err := openPreview(snapshotPath); err != nil {
+		return err
+	}
+
+	fmt.Printf("Opened preview snapshot %s\n", snapshotPath)
+	return nil
+}
+
+func openPreview(snapshotPath string) error {
+	opener := "xdg-open"
+	target := (&url.URL{Scheme: "file", Path: snapshotPath}).String()
+	if isWSL() {
+		windowsPath, err := wslWindowsPath(snapshotPath)
+		if err != nil {
+			return err
+		}
+		opener = "explorer.exe"
+		target = windowsPath
+	}
+
+	if _, err := exec.LookPath(opener); err != nil {
+		return fmt.Errorf("find browser opener %q: %w", opener, err)
+	}
+
+	command := exec.Command(opener, target)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("open preview with %q: %w", opener, err)
+	}
+	go func() {
+		_ = command.Wait()
+	}()
+
+	return nil
+}
+
+func isWSL() bool {
+	release, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	return err == nil && isWSLRelease(string(release))
+}
+
+func isWSLRelease(release string) bool {
+	return strings.Contains(strings.ToLower(release), "microsoft")
+}
+
+func wslWindowsPath(path string) (string, error) {
+	output, err := exec.Command("wslpath", "-w", path).Output()
+	if err != nil {
+		return "", fmt.Errorf("convert preview path for Windows: %w", err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
 func teardownSession(featureName string, force bool) error {
 	session, err := state.GetSession(featureName)
 	if err != nil {
@@ -354,5 +458,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat list | autofeat version | autofeat <feature-name> [<remote-url>|open|teardown [--force]]")
+	return errors.New("usage: autofeat list | autofeat version | autofeat preview [--base <branch>] | autofeat <feature-name> [<remote-url>|open|teardown [--force]]")
 }

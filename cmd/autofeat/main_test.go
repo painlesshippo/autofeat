@@ -12,6 +12,84 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
+func TestPreviewBase(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "default", want: "master"},
+		{name: "custom branch", args: []string{"--base", "develop"}, want: "develop"},
+		{name: "hierarchical branch", args: []string{"--base", "release/next"}, want: "release/next"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := previewBase(test.args)
+			if err != nil {
+				t.Fatalf("previewBase(%v) error = %v", test.args, err)
+			}
+			if got != test.want {
+				t.Errorf("previewBase(%v) = %q, want %q", test.args, got, test.want)
+			}
+		})
+	}
+
+	for _, args := range [][]string{
+		{"--base"},
+		{"--other", "develop"},
+		{"--base", ""},
+		{"--base", "bad branch"},
+		{"--base", "develop", "extra"},
+	} {
+		if _, err := previewBase(args); err == nil {
+			t.Errorf("previewBase(%v) error = nil, want error", args)
+		}
+	}
+}
+
+func TestPreviewCommandDispatch(t *testing.T) {
+	originalPreviewCommand := previewCommand
+	t.Cleanup(func() {
+		previewCommand = originalPreviewCommand
+	})
+
+	var gotBase string
+	previewCommand = func(baseRef string) error {
+		gotBase = baseRef
+		return nil
+	}
+
+	if err := run([]string{"preview"}); err != nil {
+		t.Fatalf("run(preview) error = %v", err)
+	}
+	if gotBase != defaultPreviewBase {
+		t.Errorf("run(preview) base = %q, want %q", gotBase, defaultPreviewBase)
+	}
+
+	if err := run([]string{"preview", "--base", "develop"}); err != nil {
+		t.Fatalf("run(preview --base develop) error = %v", err)
+	}
+	if gotBase != "develop" {
+		t.Errorf("run(preview --base develop) base = %q, want develop", gotBase)
+	}
+
+	if err := run([]string{"preview", "--base"}); err == nil {
+		t.Error("run(preview --base) error = nil, want usage error")
+	}
+}
+
+func TestIsWSLRelease(t *testing.T) {
+	for release, want := range map[string]bool{
+		"6.6.87.2-microsoft-standard-WSL2":   true,
+		"5.15.153.1-microsoft-standard-WSL2": true,
+		"6.8.0-31-generic":                   false,
+	} {
+		if got := isWSLRelease(release); got != want {
+			t.Errorf("isWSLRelease(%q) = %t, want %t", release, got, want)
+		}
+	}
+}
+
 func TestIsRemoteURL(t *testing.T) {
 	t.Parallel()
 

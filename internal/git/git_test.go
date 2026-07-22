@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -81,6 +82,65 @@ func TestValidateBranchName(t *testing.T) {
 		if err := ValidateBranchName(branchName); err == nil {
 			t.Errorf("ValidateBranchName(%q) error = nil, want error", branchName)
 		}
+	}
+}
+
+func TestDiffIncludesCommittedAndWorkingTreeChanges(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "master")
+	runGit(t, repoPath, "checkout", "-qb", "feature/preview")
+
+	if err := os.WriteFile(filepath.Join(repoPath, "committed.txt"), []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "committed.txt")
+	runGit(t, repoPath, "commit", "-qm", "add committed file")
+
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("modified\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "staged.txt"), []byte("staged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "staged.txt")
+	if err := os.WriteFile(filepath.Join(repoPath, "untracked.txt"), []byte("untracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff, err := Diff(repoPath, "master")
+	if err != nil {
+		t.Fatalf("Diff() error = %v", err)
+	}
+	for _, want := range []string{"committed.txt", "staged.txt", "README.md", "untracked.txt", "+untracked"} {
+		if !strings.Contains(diff, want) {
+			t.Errorf("Diff() output does not contain %q:\n%s", want, diff)
+		}
+	}
+}
+
+func TestDiffWithNoChanges(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "master")
+
+	diff, err := Diff(repoPath, "master")
+	if err != nil {
+		t.Fatalf("Diff() error = %v", err)
+	}
+	if diff != "" {
+		t.Errorf("Diff() = %q, want empty output", diff)
+	}
+}
+
+func TestDiffRejectsMissingBase(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	if _, err := Diff(repoPath, "does-not-exist"); err == nil {
+		t.Fatal("Diff() error = nil, want missing base error")
 	}
 }
 

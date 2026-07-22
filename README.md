@@ -10,6 +10,8 @@ and open them together in one VS Code workspace.
 * Git installed and available on `PATH`.
 * VS Code's `code` command on `PATH` to use the default workspace-opening
   command. Another editor command can be configured instead.
+* Linux's `xdg-open` command on `PATH` to open generated previews in a browser.
+  In WSL, `autofeat` uses `explorer.exe` and `wslpath` instead.
 
 On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
 
@@ -68,8 +70,7 @@ clean working tree. For example, to bump `v0.1.0` to `v0.2.0`:
 git status --short
 mise run test
 git tag -a v0.2.0 -m "Release v0.2.0"
-mise run build
-./bin/autofeat version
+mise run build./bin/autofeat version
 ```
 
 Confirm that the final command reports `autofeat 0.2.0`. When a remote is
@@ -138,6 +139,28 @@ List active sessions:
 ```sh
 autofeat list
 ```
+
+Generate and open a static HTML preview of the changes in every active
+session. The preview compares each worktree with `master` by default and
+includes committed, staged, unstaged, and untracked changes:
+
+```sh
+autofeat preview
+```
+
+Use another branch as the comparison base when a repository uses a different
+mainline branch:
+
+```sh
+autofeat preview --base develop
+```
+
+The command writes `$HOME/.autofeat/preview.html`, opens it in the default
+browser, and exits. It renders repository-level errors when the selected base
+branch is unavailable, while continuing to render the other repositories.
+The file is a snapshot: run `autofeat preview` again after changes to refresh
+it. Browser refresh only reloads the latest generated snapshot. Native Linux
+uses `xdg-open`; WSL opens the snapshot through Windows `explorer.exe`.
 
 Print the build version, commit, and timestamp:
 
