@@ -7,7 +7,7 @@ if command -v mise >/dev/null 2>&1; then
 fi
 
 if [ -x "$HOME/.local/bin/mise" ]; then
-	exec "$HOME/.local/bin/mise" exec -- rumdl fmt
+	exec "$HOME/.local/bin/mise" exec -- rumdl check .
 fi
 
 printf '%s\n' 'Mise is required to run the pre-commit hook but was not found.' >&2
