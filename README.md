@@ -85,6 +85,12 @@ List active sessions:
 autofeat list
 ```
 
+Print the build version, commit, and timestamp:
+
+```sh
+autofeat version
+```
+
 Tear down a session after confirming all worktrees are clean:
 
 ```sh

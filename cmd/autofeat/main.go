@@ -18,6 +18,13 @@ import (
 	"github.com/painlesshippo/autofeat/internal/workspace"
 )
 
+// Build metadata is set with Go linker flags by scripts/build.sh.
+var (
+	version       = "dev"
+	commit        = "unknown"
+	buildDatetime = "unknown"
+)
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "autofeat:", err)
@@ -35,6 +42,13 @@ func run(args []string) error {
 			return usageError()
 		}
 		return listSessions()
+	}
+	if args[0] == "version" {
+		if len(args) != 1 {
+			return usageError()
+		}
+		fmt.Printf("autofeat %s\ncommit: %s\nbuilt: %s\n", version, commit, buildDatetime)
+		return nil
 	}
 
 	featureName := args[0]
@@ -330,5 +344,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat list | autofeat <feature-name> [<remote-url>|open|teardown [--force]]")
+	return errors.New("usage: autofeat list | autofeat version | autofeat <feature-name> [<remote-url>|open|teardown [--force]]")
 }

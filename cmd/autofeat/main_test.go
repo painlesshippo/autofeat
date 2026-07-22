@@ -2,6 +2,16 @@ package main
 
 import "testing"
 
+func TestVersionCommand(t *testing.T) {
+	if err := run([]string{"version"}); err != nil {
+		t.Fatalf("run(version) error = %v", err)
+	}
+
+	if err := run([]string{"version", "extra"}); err == nil {
+		t.Error("run(version, extra) error = nil, want usage error")
+	}
+}
+
 func TestIsRemoteURL(t *testing.T) {
 	t.Parallel()
 

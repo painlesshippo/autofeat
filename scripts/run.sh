@@ -5,7 +5,7 @@
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
-	./bin/autofeat list
+	./bin/autofeat version
 else
 	./bin/autofeat "$@"
 fi

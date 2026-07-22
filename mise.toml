@@ -1,9 +1,11 @@
 [tools]
 go = "1.24.4"
+gitversion = "6.8.2"
+jq = "1.8.2"
 
 [tasks.build]
 description = "Build the autofeat CLI"
-run = "mkdir -p bin && go build -o bin/autofeat ./cmd/autofeat"
+run = "bash ./scripts/build.sh"
 
 [tasks.test]
 description = "Run the test suite"
