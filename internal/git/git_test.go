@@ -53,6 +53,37 @@ func TestGetRepoRoot(t *testing.T) {
 	}
 }
 
+func TestValidateBranchName(t *testing.T) {
+	requireGit(t)
+
+	for _, branchName := range []string{
+		"feature/potato",
+		"bug/f321s-aaa",
+		"feature/team/potato",
+		"flat-feature",
+	} {
+		if err := ValidateBranchName(branchName); err != nil {
+			t.Errorf("ValidateBranchName(%q) error = %v", branchName, err)
+		}
+	}
+
+	for _, branchName := range []string{
+		"",
+		"/feature",
+		"feature/",
+		"feature//potato",
+		"feature/.",
+		"feature/..",
+		"feature/potato.lock",
+		"feature potato",
+		"feature?potato",
+	} {
+		if err := ValidateBranchName(branchName); err == nil {
+			t.Errorf("ValidateBranchName(%q) error = nil, want error", branchName)
+		}
+	}
+}
+
 func TestAddWorktreeAndDetectUncommittedChanges(t *testing.T) {
 	requireGit(t)
 

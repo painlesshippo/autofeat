@@ -128,14 +128,15 @@ func addRepository(featureName string) error {
 		return err
 	}
 	repoName := filepath.Base(filepath.Clean(repoRoot))
-	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureName)
+	featureDirName := featureDirectoryName(featureName)
+	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
 	worktreePath := filepath.Join(featureDir, repoName)
-	workspaceFile := filepath.Join(featureDir, featureName+".code-workspace")
+	workspaceFile := filepath.Join(featureDir, featureDirName+".code-workspace")
 
 	if err := os.MkdirAll(featureDir, 0o755); err != nil {
 		return fmt.Errorf("create feature directory: %w", err)
 	}
-	if err := gitcmd.AddWorktree("agent/"+featureName, worktreePath); err != nil {
+	if err := gitcmd.AddWorktree(featureName, worktreePath); err != nil {
 		return err
 	}
 
@@ -190,9 +191,10 @@ func addRemoteRepository(featureName, remoteURL string) error {
 		return err
 	}
 
-	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureName)
+	featureDirName := featureDirectoryName(featureName)
+	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
 	worktreePath := filepath.Join(featureDir, repoName)
-	workspaceFile := filepath.Join(featureDir, featureName+".code-workspace")
+	workspaceFile := filepath.Join(featureDir, featureDirName+".code-workspace")
 
 	session, err := state.GetSession(featureName)
 	newSession := errors.Is(err, state.ErrSessionNotFound)
@@ -222,7 +224,7 @@ func addRemoteRepository(featureName, remoteURL string) error {
 		_ = os.RemoveAll(worktreePath)
 	}()
 
-	if err := gitcmd.CheckoutNewBranch(worktreePath, "agent/"+featureName); err != nil {
+	if err := gitcmd.CheckoutNewBranch(worktreePath, featureName); err != nil {
 		return err
 	}
 
@@ -298,12 +300,12 @@ func teardownSession(featureName string, force bool) error {
 
 	for _, repo := range session.Repos {
 		if repo.IsRemoteClone {
-			unpushed, err := gitcmd.HasUnpushedCommits(repo.WorktreePath, "agent/"+featureName)
+			unpushed, err := gitcmd.HasUnpushedCommits(repo.WorktreePath, featureName)
 			if err != nil {
 				return err
 			}
 			if unpushed {
-				fmt.Fprintf(os.Stderr, "Warning: %s has unpushed agent commits that will be deleted.\n", repo.Name)
+				fmt.Fprintf(os.Stderr, "Warning: %s has unpushed feature commits that will be deleted.\n", repo.Name)
 			}
 			if err := os.RemoveAll(repo.WorktreePath); err != nil {
 				return fmt.Errorf("remove cloned repository %q: %w", repo.WorktreePath, err)
@@ -327,11 +329,18 @@ func teardownSession(featureName string, force bool) error {
 }
 
 func validateFeatureName(name string) error {
-	if name == "" || name == "." || name == ".." || filepath.Base(name) != name || strings.ContainsAny(name, "/\\") {
+	if name == "" {
 		return fmt.Errorf("invalid feature name %q", name)
+	}
+	if err := gitcmd.ValidateBranchName(name); err != nil {
+		return fmt.Errorf("invalid feature name %q: %w", name, err)
 	}
 
 	return nil
+}
+
+func featureDirectoryName(featureName string) string {
+	return strings.NewReplacer("%", "%25", "/", "%2F").Replace(featureName)
 }
 
 func remoteRepositoryName(remoteURL string) (string, error) {

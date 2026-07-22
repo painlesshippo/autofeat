@@ -32,6 +32,17 @@ func GetRepoRoot() (string, error) {
 	return strings.TrimSpace(output), nil
 }
 
+// ValidateBranchName reports whether branchName is a valid local Git branch
+// name. Git is the authority for ref-name syntax, including slash-delimited
+// branch hierarchies.
+func ValidateBranchName(branchName string) error {
+	if _, err := run("check-ref-format", "--branch", branchName); err != nil {
+		return fmt.Errorf("validate branch name %q: %w", branchName, err)
+	}
+
+	return nil
+}
+
 // AddWorktree creates a worktree at destPath on a new branch named branchName.
 func AddWorktree(branchName, destPath string) error {
 	if _, err := run("worktree", "add", destPath, "-b", branchName); err != nil {
