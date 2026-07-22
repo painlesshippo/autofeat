@@ -45,6 +45,11 @@ go build -o autofeat ./cmd/autofeat
 Ensure the installed binary directory, or the directory containing the built
 binary, is on `PATH`.
 
+`mise run install` installs the built binary into `$HOME/.local/bin` and adds
+the `af`, `afp`, and `afl` aliases for `autofeat`, `autofeat preview`, and
+`autofeat list` to `$HOME/.bashrc` by default. Override these locations with
+`INSTALL_DIR` and `SHELL_RC` when necessary.
+
 ## Development
 
 Enable the repository's Git hooks after cloning:
