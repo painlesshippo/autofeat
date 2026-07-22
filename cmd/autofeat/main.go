@@ -23,6 +23,7 @@ var (
 	version       = "dev"
 	commit        = "unknown"
 	buildDatetime = "unknown"
+	goVersion     = "unknown"
 )
 
 func main() {
@@ -47,7 +48,7 @@ func run(args []string) error {
 		if len(args) != 1 {
 			return usageError()
 		}
-		fmt.Printf("autofeat %s\ncommit: %s\nbuilt: %s\n", version, commit, buildDatetime)
+		fmt.Printf("autofeat %s\ncommit: %s\nbuilt: %s\ngo: %s\n", version, commit, buildDatetime, goVersion)
 		return nil
 	}
 
