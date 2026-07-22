@@ -1,6 +1,9 @@
 # Build artifacts
 /bin/
 
+# rumdl
+.rumdl_cache/
+
 # Go build and test outputs
 *.exe
 *.exe~
