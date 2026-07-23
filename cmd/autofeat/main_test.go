@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestVersionCommand(t *testing.T) {
 	if err := run([]string{"version"}); err != nil {
@@ -12,24 +16,24 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
-func TestPreviewBase(t *testing.T) {
+func TestReviewBase(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{name: "default", want: "master"},
+		{name: "stored base", want: ""},
 		{name: "custom branch", args: []string{"--base", "develop"}, want: "develop"},
 		{name: "hierarchical branch", args: []string{"--base", "release/next"}, want: "release/next"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := previewBase(test.args)
+			got, err := reviewBase(test.args)
 			if err != nil {
-				t.Fatalf("previewBase(%v) error = %v", test.args, err)
+				t.Fatalf("reviewBase(%v) error = %v", test.args, err)
 			}
 			if got != test.want {
-				t.Errorf("previewBase(%v) = %q, want %q", test.args, got, test.want)
+				t.Errorf("reviewBase(%v) = %q, want %q", test.args, got, test.want)
 			}
 		})
 	}
@@ -41,40 +45,132 @@ func TestPreviewBase(t *testing.T) {
 		{"--base", "bad branch"},
 		{"--base", "develop", "extra"},
 	} {
-		if _, err := previewBase(args); err == nil {
-			t.Errorf("previewBase(%v) error = nil, want error", args)
+		if _, err := reviewBase(args); err == nil {
+			t.Errorf("reviewBase(%v) error = nil, want error", args)
 		}
 	}
 }
 
-func TestPreviewCommandDispatch(t *testing.T) {
-	originalPreviewCommand := previewCommand
+func TestReviewCommandDispatch(t *testing.T) {
+	originalReviewCommand := reviewCommand
 	t.Cleanup(func() {
-		previewCommand = originalPreviewCommand
+		reviewCommand = originalReviewCommand
 	})
 
 	var gotBase string
-	previewCommand = func(baseRef string) error {
+	reviewCommand = func(baseRef string) error {
 		gotBase = baseRef
 		return nil
+	}
+
+	if err := run([]string{"review"}); err != nil {
+		t.Fatalf("run(review) error = %v", err)
+	}
+	if gotBase != "" {
+		t.Errorf("run(review) base = %q, want stored base", gotBase)
+	}
+
+	if err := run([]string{"review", "--base", "develop"}); err != nil {
+		t.Fatalf("run(review --base develop) error = %v", err)
+	}
+	if gotBase != "develop" {
+		t.Errorf("run(review --base develop) base = %q, want develop", gotBase)
+	}
+
+	if err := run([]string{"review", "--base"}); err == nil {
+		t.Error("run(review --base) error = nil, want usage error")
 	}
 
 	if err := run([]string{"preview"}); err != nil {
 		t.Fatalf("run(preview) error = %v", err)
 	}
-	if gotBase != defaultPreviewBase {
-		t.Errorf("run(preview) base = %q, want %q", gotBase, defaultPreviewBase)
+}
+
+func TestRunAndReviewCommandDispatch(t *testing.T) {
+	originalRunFeatureCommand := runFeatureCommand
+	originalReviewFeatureCommand := reviewFeatureCommand
+	t.Cleanup(func() {
+		runFeatureCommand = originalRunFeatureCommand
+		reviewFeatureCommand = originalReviewFeatureCommand
+	})
+
+	var gotFeatureName string
+	var gotTask string
+	var gotBase string
+	runFeatureCommand = func(featureName, task string) error {
+		gotFeatureName = featureName
+		gotTask = task
+		return nil
+	}
+	if err := run([]string{"feature/run", "run"}); err != nil {
+		t.Fatalf("run(feature/run run) error = %v", err)
+	}
+	if gotFeatureName != "feature/run" || gotTask != "" {
+		t.Errorf("run command = (%q, %q), want feature and empty task", gotFeatureName, gotTask)
 	}
 
-	if err := run([]string{"preview", "--base", "develop"}); err != nil {
-		t.Fatalf("run(preview --base develop) error = %v", err)
+	if err := run([]string{"feature/run", "run", "-task", "write tests"}); err != nil {
+		t.Fatalf("run(feature/run run -task) error = %v", err)
 	}
-	if gotBase != "develop" {
-		t.Errorf("run(preview --base develop) base = %q, want develop", gotBase)
+	if gotTask != "write tests" {
+		t.Errorf("run task = %q, want write tests", gotTask)
 	}
 
-	if err := run([]string{"preview", "--base"}); err == nil {
-		t.Error("run(preview --base) error = nil, want usage error")
+	reviewFeatureCommand = func(featureName, baseRef string) error {
+		gotFeatureName = featureName
+		gotBase = baseRef
+		return nil
+	}
+	if err := run([]string{"feature/review", "review"}); err != nil {
+		t.Fatalf("run(feature/review review) error = %v", err)
+	}
+	if gotFeatureName != "feature/review" {
+		t.Errorf("review feature = %q, want feature/review", gotFeatureName)
+	}
+	if gotBase != "" {
+		t.Errorf("review base = %q, want stored base", gotBase)
+	}
+
+	if err := run([]string{"feature/review", "review", "--base", "main"}); err != nil {
+		t.Fatalf("run(feature/review review --base main) error = %v", err)
+	}
+	if gotBase != "main" {
+		t.Errorf("feature review base = %q, want main", gotBase)
+	}
+
+	if err := run([]string{"feature/run", "run", "-task"}); err == nil {
+		t.Error("run(feature/run run -task) error = nil, want usage error")
+	}
+}
+
+func TestAppendTask(t *testing.T) {
+	featureDir := t.TempDir()
+	if err := appendTask(featureDir, "first task"); err != nil {
+		t.Fatalf("appendTask() first write error = %v", err)
+	}
+	if err := appendTask(featureDir, "second task"); err != nil {
+		t.Fatalf("appendTask() second write error = %v", err)
+	}
+
+	contents, err := os.ReadFile(filepath.Join(featureDir, "TASK.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(contents), "first task\nsecond task\n"; got != want {
+		t.Errorf("TASK.md = %q, want %q", got, want)
+	}
+}
+
+func TestFeatureBranchName(t *testing.T) {
+	if got, want := featureBranchName("feature/potato"), "agent/feature/potato"; got != want {
+		t.Errorf("featureBranchName() = %q, want %q", got, want)
+	}
+}
+
+func TestHeadlessArgs(t *testing.T) {
+	got := headlessArgs()
+	if len(got) != 2 || got[0] != "-i" || got[1] != headlessPrompt {
+		t.Errorf("headlessArgs() = %q, want [-i %q]", got, headlessPrompt)
 	}
 }
 

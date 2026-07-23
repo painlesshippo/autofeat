@@ -27,9 +27,10 @@ type Session struct {
 
 // Repository contains the preview result for one worktree.
 type Repository struct {
-	Name  string
-	Diff  string
-	Error string
+	Name       string
+	BaseBranch string
+	Diff       string
+	Error      string
 }
 
 type diffFunc func(destPath, baseRef string) (string, error)
@@ -38,15 +39,16 @@ type diffJob struct {
 	sessionIndex    int
 	repositoryIndex int
 	repository      state.Repository
+	baseBranch      string
 }
 
 // Build collects a worktree diff for every repository in sessions. A failure
 // for one repository is retained in its report so other previews remain useful.
-func Build(sessions map[string]state.Session, baseRef string, generatedAt time.Time) Report {
-	return buildWithDiff(sessions, baseRef, generatedAt, gitcmd.Diff)
+func Build(sessions map[string]state.Session, defaultBaseBranch, overrideBaseBranch string, generatedAt time.Time) Report {
+	return buildWithDiff(sessions, defaultBaseBranch, overrideBaseBranch, generatedAt, gitcmd.Diff)
 }
 
-func buildWithDiff(sessions map[string]state.Session, baseRef string, generatedAt time.Time, collectDiff diffFunc) Report {
+func buildWithDiff(sessions map[string]state.Session, defaultBaseBranch, overrideBaseBranch string, generatedAt time.Time, collectDiff diffFunc) Report {
 	featureNames := make([]string, 0, len(sessions))
 	for featureName := range sessions {
 		featureNames = append(featureNames, featureName)
@@ -54,7 +56,7 @@ func buildWithDiff(sessions map[string]state.Session, baseRef string, generatedA
 	sort.Strings(featureNames)
 
 	report := Report{
-		BaseRef:     baseRef,
+		BaseRef:     reviewBaseDescription(defaultBaseBranch, overrideBaseBranch),
 		GeneratedAt: generatedAt.UTC(),
 		Sessions:    make([]Session, 0, len(featureNames)),
 	}
@@ -78,18 +80,19 @@ func buildWithDiff(sessions map[string]state.Session, baseRef string, generatedA
 				sessionIndex:    sessionIndex,
 				repositoryIndex: repositoryIndex,
 				repository:      repository,
+				baseBranch:      selectBaseBranch(repository.BaseBranch, defaultBaseBranch, overrideBaseBranch),
 			})
 		}
 
 		report.Sessions = append(report.Sessions, previewSession)
 	}
 
-	collectDiffs(&report, jobs, baseRef, collectDiff)
+	collectDiffs(&report, jobs, collectDiff)
 
 	return report
 }
 
-func collectDiffs(report *Report, jobs []diffJob, baseRef string, collectDiff diffFunc) {
+func collectDiffs(report *Report, jobs []diffJob, collectDiff diffFunc) {
 	workerCount := min(maxDiffWorkers, len(jobs))
 	if workerCount == 0 {
 		return
@@ -102,8 +105,8 @@ func collectDiffs(report *Report, jobs []diffJob, baseRef string, collectDiff di
 		go func() {
 			defer workers.Done()
 			for job := range jobQueue {
-				diff, err := collectDiff(job.repository.WorktreePath, baseRef)
-				result := Repository{Name: job.repository.Name, Diff: diff}
+				diff, err := collectDiff(job.repository.WorktreePath, job.baseBranch)
+				result := Repository{Name: job.repository.Name, BaseBranch: job.baseBranch, Diff: diff}
 				if err != nil {
 					result.Error = err.Error()
 				}
@@ -117,4 +120,21 @@ func collectDiffs(report *Report, jobs []diffJob, baseRef string, collectDiff di
 	}
 	close(jobQueue)
 	workers.Wait()
+}
+
+func selectBaseBranch(repositoryBaseBranch, defaultBaseBranch, overrideBaseBranch string) string {
+	if overrideBaseBranch != "" {
+		return overrideBaseBranch
+	}
+	if repositoryBaseBranch != "" {
+		return repositoryBaseBranch
+	}
+	return defaultBaseBranch
+}
+
+func reviewBaseDescription(defaultBaseBranch, overrideBaseBranch string) string {
+	if overrideBaseBranch != "" {
+		return overrideBaseBranch
+	}
+	return "repository defaults (" + defaultBaseBranch + ")"
 }

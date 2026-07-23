@@ -13,6 +13,8 @@ import (
 const (
 	appDirectoryName = ".autofeat"
 	stateFileName    = "state.json"
+	// DefaultBaseBranch is used when no global or repository-specific base is set.
+	DefaultBaseBranch = "master"
 )
 
 // ErrSessionNotFound indicates that no session exists with the requested name.
@@ -24,6 +26,7 @@ type Repository struct {
 	OriginalPath  string `json:"original_path"`
 	WorktreePath  string `json:"worktree_path"`
 	IsRemoteClone bool   `json:"is_remote_clone"`
+	BaseBranch    string `json:"base_branch"`
 }
 
 // Session describes a feature session and its attached repository worktrees.
@@ -36,7 +39,8 @@ type Session struct {
 
 // State is the complete persisted autofeat state.
 type State struct {
-	Sessions map[string]Session `json:"sessions"`
+	DefaultBaseBranch string             `json:"default_base_branch"`
+	Sessions          map[string]Session `json:"sessions"`
 }
 
 // Path returns the location of the global state file.
@@ -122,7 +126,7 @@ func Save(state State) error {
 func LoadFromPath(path string) (State, error) {
 	contents, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return State{Sessions: make(map[string]Session)}, nil
+		return State{DefaultBaseBranch: DefaultBaseBranch, Sessions: make(map[string]Session)}, nil
 	}
 	if err != nil {
 		return State{}, fmt.Errorf("read state %q: %w", path, err)
@@ -135,6 +139,9 @@ func LoadFromPath(path string) (State, error) {
 	if state.Sessions == nil {
 		state.Sessions = make(map[string]Session)
 	}
+	if state.DefaultBaseBranch == "" {
+		state.DefaultBaseBranch = DefaultBaseBranch
+	}
 
 	return state, nil
 }
@@ -143,6 +150,9 @@ func LoadFromPath(path string) (State, error) {
 func SaveToPath(path string, state State) error {
 	if state.Sessions == nil {
 		state.Sessions = make(map[string]Session)
+	}
+	if state.DefaultBaseBranch == "" {
+		state.DefaultBaseBranch = DefaultBaseBranch
 	}
 
 	contents, err := json.MarshalIndent(state, "", "  ")

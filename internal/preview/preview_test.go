@@ -20,7 +20,7 @@ func TestBuildSortsSessionsAndRetainsRepositoryErrors(t *testing.T) {
 		"a-feature": {
 			Repos: []state.Repository{{Name: "a-repository", WorktreePath: "/also/does/not/exist"}},
 		},
-	}, "master", time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC))
+	}, "master", "", time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC))
 
 	if len(report.Sessions) != 2 {
 		t.Fatalf("Build() sessions = %d, want 2", len(report.Sessions))
@@ -52,7 +52,7 @@ func TestBuildPreservesOrderAfterConcurrentCollection(t *testing.T) {
 		reportResult <- buildWithDiff(map[string]state.Session{
 			"feature/z": {Repos: repositories},
 			"feature/a": {Repos: []state.Repository{{Name: "repository-d", WorktreePath: "d"}}},
-		}, "master", time.Now(), func(destPath, _ string) (string, error) {
+		}, "master", "", time.Now(), func(destPath, _ string) (string, error) {
 			started <- destPath
 			<-release[destPath]
 			return "diff " + destPath, nil
@@ -107,7 +107,7 @@ func TestBuildBoundsConcurrentDiffCollection(t *testing.T) {
 	go func() {
 		reportResult <- buildWithDiff(map[string]state.Session{
 			"feature": {Repos: repositories},
-		}, "master", time.Now(), func(_, _ string) (string, error) {
+		}, "master", "", time.Now(), func(_, _ string) (string, error) {
 			current := active.Add(1)
 			setMaximum(&maximum, current)
 			started <- struct{}{}
@@ -144,7 +144,7 @@ func TestBuildRetainsMixedDiffResults(t *testing.T) {
 				{Name: "success", WorktreePath: "success"},
 			},
 		},
-	}, "master", time.Now(), func(destPath, _ string) (string, error) {
+	}, "master", "", time.Now(), func(destPath, _ string) (string, error) {
 		if destPath == "failure" {
 			return "", errors.New("missing base reference")
 		}
@@ -157,6 +157,38 @@ func TestBuildRetainsMixedDiffResults(t *testing.T) {
 	}
 	if repositories[1].Diff != "diff success" || repositories[1].Error != "" {
 		t.Errorf("success repository = %+v, want successful diff", repositories[1])
+	}
+}
+
+func TestBuildUsesRepositoryBaseBranchesAndOverrides(t *testing.T) {
+	sessions := map[string]state.Session{
+		"feature": {
+			Repos: []state.Repository{
+				{Name: "main-repository", WorktreePath: "main", BaseBranch: "main"},
+				{Name: "default-repository", WorktreePath: "default"},
+			},
+		},
+	}
+
+	var basesByPath = make(map[string]string)
+	report := buildWithDiff(sessions, "master", "", time.Now(), func(path, base string) (string, error) {
+		basesByPath[path] = base
+		return "", nil
+	})
+	if basesByPath["main"] != "main" || basesByPath["default"] != "master" {
+		t.Errorf("stored bases = %#v, want main and master", basesByPath)
+	}
+	if report.Sessions[0].Repositories[0].BaseBranch != "master" || report.Sessions[0].Repositories[1].BaseBranch != "main" {
+		t.Errorf("report repositories = %#v, want sorted repositories with their bases", report.Sessions[0].Repositories)
+	}
+
+	basesByPath = make(map[string]string)
+	buildWithDiff(sessions, "master", "develop", time.Now(), func(path, base string) (string, error) {
+		basesByPath[path] = base
+		return "", nil
+	})
+	if basesByPath["main"] != "develop" || basesByPath["default"] != "develop" {
+		t.Errorf("override bases = %#v, want develop for every repository", basesByPath)
 	}
 }
 

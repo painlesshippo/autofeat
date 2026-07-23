@@ -144,6 +144,40 @@ func TestDiffRejectsMissingBase(t *testing.T) {
 	}
 }
 
+func TestDetectBaseBranch(t *testing.T) {
+	requireGit(t)
+
+	masterRepository := createRepository(t)
+	runGit(t, masterRepository, "branch", "-M", "master")
+	baseBranch, err := DetectBaseBranch(masterRepository)
+	if err != nil {
+		t.Fatalf("DetectBaseBranch(master repository) error = %v", err)
+	}
+	if baseBranch != "master" {
+		t.Errorf("DetectBaseBranch(master repository) = %q, want master", baseBranch)
+	}
+
+	mainRepository := createRepository(t)
+	runGit(t, mainRepository, "branch", "-M", "main")
+	baseBranch, err = DetectBaseBranch(mainRepository)
+	if err != nil {
+		t.Fatalf("DetectBaseBranch(main repository) error = %v", err)
+	}
+	if baseBranch != "main" {
+		t.Errorf("DetectBaseBranch(main repository) = %q, want main", baseBranch)
+	}
+
+	noBaseRepository := createRepository(t)
+	runGit(t, noBaseRepository, "branch", "-M", "feature/no-base")
+	baseBranch, err = DetectBaseBranch(noBaseRepository)
+	if err != nil {
+		t.Fatalf("DetectBaseBranch(no-base repository) error = %v", err)
+	}
+	if baseBranch != "" {
+		t.Errorf("DetectBaseBranch(no-base repository) = %q, want empty", baseBranch)
+	}
+}
+
 func TestAddWorktreeAndDetectUncommittedChanges(t *testing.T) {
 	requireGit(t)
 

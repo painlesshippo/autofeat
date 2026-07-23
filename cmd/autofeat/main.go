@@ -28,9 +28,13 @@ var (
 	goVersion     = "unknown"
 )
 
-const defaultPreviewBase = "master"
+const headlessPrompt = "Please execute the objectives defined in TASK.md"
 
-var previewCommand = previewSessions
+var (
+	reviewCommand        = reviewAllSessions
+	runFeatureCommand    = runFeature
+	reviewFeatureCommand = reviewFeatureSession
+)
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -57,12 +61,12 @@ func run(args []string) error {
 		fmt.Printf("autofeat %s\ncommit: %s\nbuilt: %s\ngo: %s\n", version, commit, buildDatetime, goVersion)
 		return nil
 	}
-	if args[0] == "preview" {
-		baseRef, err := previewBase(args[1:])
+	if args[0] == "review" || args[0] == "preview" {
+		baseRef, err := reviewBase(args[1:])
 		if err != nil {
 			return usageError()
 		}
-		return previewCommand(baseRef)
+		return reviewCommand(baseRef)
 	}
 
 	featureName := args[0]
@@ -87,6 +91,10 @@ func run(args []string) error {
 		switch args[1] {
 		case "open":
 			return openSession(featureName)
+		case "run":
+			return runFeatureCommand(featureName, "")
+		case "review":
+			return reviewFeatureCommand(featureName, "")
 		case "teardown":
 			return teardownSession(featureName, false)
 		default:
@@ -95,6 +103,18 @@ func run(args []string) error {
 	case 3:
 		if args[1] == "teardown" && args[2] == "--force" {
 			return teardownSession(featureName, true)
+		}
+		return usageError()
+	case 4:
+		if args[1] == "run" && args[2] == "-task" {
+			return runFeatureCommand(featureName, args[3])
+		}
+		if args[1] == "review" {
+			baseRef, err := reviewBase(args[2:])
+			if err != nil {
+				return usageError()
+			}
+			return reviewFeatureCommand(featureName, baseRef)
 		}
 		return usageError()
 	default:
@@ -140,6 +160,10 @@ func addRepository(featureName string) error {
 	if err != nil {
 		return err
 	}
+	baseBranch, err := detectBaseBranch(repoRoot)
+	if err != nil {
+		return err
+	}
 	repoName := filepath.Base(filepath.Clean(repoRoot))
 	featureDirName := featureDirectoryName(featureName)
 	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
@@ -149,7 +173,7 @@ func addRepository(featureName string) error {
 	if err := os.MkdirAll(featureDir, 0o755); err != nil {
 		return fmt.Errorf("create feature directory: %w", err)
 	}
-	if err := gitcmd.AddWorktree(featureName, worktreePath); err != nil {
+	if err := gitcmd.AddWorktree(featureBranchName(featureName), worktreePath); err != nil {
 		return err
 	}
 
@@ -171,6 +195,7 @@ func addRepository(featureName string) error {
 		Name:         repoName,
 		OriginalPath: repoRoot,
 		WorktreePath: worktreePath,
+		BaseBranch:   baseBranch,
 	})
 	if newSession {
 		err = state.SaveSession(featureName, session)
@@ -236,8 +261,12 @@ func addRemoteRepository(featureName, remoteURL string) error {
 		}
 		_ = os.RemoveAll(worktreePath)
 	}()
+	baseBranch, err := detectBaseBranch(worktreePath)
+	if err != nil {
+		return err
+	}
 
-	if err := gitcmd.CheckoutNewBranch(worktreePath, featureName); err != nil {
+	if err := gitcmd.CheckoutNewBranch(worktreePath, featureBranchName(featureName)); err != nil {
 		return err
 	}
 
@@ -246,6 +275,7 @@ func addRemoteRepository(featureName, remoteURL string) error {
 		OriginalPath:  remoteURL,
 		WorktreePath:  worktreePath,
 		IsRemoteClone: true,
+		BaseBranch:    baseBranch,
 	})
 
 	repoNames := make([]string, 0, len(session.Repos))
@@ -292,52 +322,205 @@ func openSession(featureName string) error {
 	return nil
 }
 
-func previewBase(args []string) (string, error) {
+func runFeature(featureName, task string) error {
+	insideWorkTree, err := gitcmd.IsInsideWorkTree()
+	if err != nil {
+		return err
+	}
+	if insideWorkTree {
+		if err := ensureRepositoryAdded(featureName); err != nil {
+			return err
+		}
+	}
+
+	return runHeadless(featureName, task)
+}
+
+func ensureRepositoryAdded(featureName string) error {
+	repoRoot, err := gitcmd.GetRepoRoot()
+	if err != nil {
+		return err
+	}
+
+	session, err := state.GetSession(featureName)
+	if errors.Is(err, state.ErrSessionNotFound) {
+		return addRepository(featureName)
+	}
+	if err != nil {
+		return err
+	}
+
+	for _, repository := range session.Repos {
+		if !repository.IsRemoteClone && filepath.Clean(repository.OriginalPath) == filepath.Clean(repoRoot) {
+			return nil
+		}
+	}
+
+	return addRepository(featureName)
+}
+
+func runHeadless(featureName, task string) error {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return err
+	}
+	if task != "" {
+		if err := appendTask(session.FeatureDir, task); err != nil {
+			return err
+		}
+	}
+
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if _, err := exec.LookPath(configuration.HeadlessCmd); err != nil {
+		return fmt.Errorf("find headless command %q: %w", configuration.HeadlessCmd, err)
+	}
+
+	command := exec.Command(configuration.HeadlessCmd, headlessArgs()...)
+	command.Dir = session.FeatureDir
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("run feature %q with %q: %w", featureName, configuration.HeadlessCmd, err)
+	}
+
+	return nil
+}
+
+func headlessArgs() []string {
+	return []string{"-i", headlessPrompt}
+}
+
+func appendTask(featureDir, task string) error {
+	taskFile, err := os.OpenFile(filepath.Join(featureDir, "TASK.md"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open task file: %w", err)
+	}
+
+	if _, err := fmt.Fprintln(taskFile, task); err != nil {
+		_ = taskFile.Close()
+		return fmt.Errorf("append task: %w", err)
+	}
+	if err := taskFile.Close(); err != nil {
+		return fmt.Errorf("close task file: %w", err)
+	}
+
+	return nil
+}
+
+func reviewAllSessions(baseRef string) error {
+	reviewState, err := loadReviewState()
+	if err != nil {
+		return err
+	}
+
+	return openReview(reviewState.Sessions, reviewState.DefaultBaseBranch, baseRef)
+}
+
+func reviewFeatureSession(featureName, baseRef string) error {
+	reviewState, err := loadReviewState()
+	if err != nil {
+		return err
+	}
+	session, ok := reviewState.Sessions[featureName]
+	if !ok {
+		return fmt.Errorf("%w: %s", state.ErrSessionNotFound, featureName)
+	}
+
+	return openReview(map[string]state.Session{featureName: session}, reviewState.DefaultBaseBranch, baseRef)
+}
+
+func reviewBase(args []string) (string, error) {
 	if len(args) == 0 {
-		return defaultPreviewBase, nil
+		return "", nil
 	}
 	if len(args) != 2 || args[0] != "--base" || args[1] == "" {
-		return "", errors.New("invalid preview arguments")
+		return "", errors.New("invalid review arguments")
 	}
 	if err := gitcmd.ValidateBranchName(args[1]); err != nil {
-		return "", fmt.Errorf("invalid preview base %q: %w", args[1], err)
+		return "", fmt.Errorf("invalid review base %q: %w", args[1], err)
 	}
 
 	return args[1], nil
 }
 
-func previewSessions(baseRef string) error {
-	sessions, err := state.ListSessions()
-	if err != nil {
-		return err
-	}
-
+func openReview(sessions map[string]state.Session, defaultBaseBranch, overrideBaseBranch string) error {
 	generationStarted := time.Now()
-	report := preview.Build(sessions, baseRef, time.Now())
+	report := preview.Build(sessions, defaultBaseBranch, overrideBaseBranch, time.Now())
 	contents, err := preview.Render(report)
 	if err != nil {
-		return fmt.Errorf("render preview: %w", err)
+		return fmt.Errorf("render review: %w", err)
 	}
 
 	configPath, err := config.Path()
 	if err != nil {
 		return err
 	}
-	snapshotPath := filepath.Join(filepath.Dir(configPath), "preview.html")
+	snapshotPath := filepath.Join(filepath.Dir(configPath), "review.html")
 	if err := preview.WriteSnapshot(snapshotPath, contents); err != nil {
 		return err
 	}
 	generationDuration := time.Since(generationStarted)
 
-	if err := openPreview(snapshotPath); err != nil {
+	if err := openReviewInBrowser(snapshotPath); err != nil {
 		return err
 	}
 
-	fmt.Printf("Opened preview snapshot %s (generated in %s)\n", snapshotPath, generationDuration)
+	fmt.Printf("Opened review snapshot %s (generated in %s)\n", snapshotPath, generationDuration)
 	return nil
 }
 
-func openPreview(snapshotPath string) error {
+func loadReviewState() (state.State, error) {
+	reviewState, err := state.Load()
+	if err != nil {
+		return state.State{}, err
+	}
+
+	changed := false
+	for featureName, session := range reviewState.Sessions {
+		for index := range session.Repos {
+			if session.Repos[index].BaseBranch != "" {
+				continue
+			}
+
+			baseBranch, err := gitcmd.DetectBaseBranch(session.Repos[index].WorktreePath)
+			if err != nil || baseBranch == "" {
+				baseBranch = reviewState.DefaultBaseBranch
+			}
+			session.Repos[index].BaseBranch = baseBranch
+			changed = true
+		}
+		reviewState.Sessions[featureName] = session
+	}
+	if changed {
+		if err := state.Save(reviewState); err != nil {
+			return state.State{}, err
+		}
+	}
+
+	return reviewState, nil
+}
+
+func detectBaseBranch(repositoryPath string) (string, error) {
+	baseBranch, err := gitcmd.DetectBaseBranch(repositoryPath)
+	if err != nil {
+		return "", err
+	}
+	if baseBranch != "" {
+		return baseBranch, nil
+	}
+
+	currentState, err := state.Load()
+	if err != nil {
+		return "", err
+	}
+	return currentState.DefaultBaseBranch, nil
+}
+
+func openReviewInBrowser(snapshotPath string) error {
 	opener := "xdg-open"
 	target := (&url.URL{Scheme: "file", Path: snapshotPath}).String()
 	if isWSL() {
@@ -406,7 +589,7 @@ func teardownSession(featureName string, force bool) error {
 
 	for _, repo := range session.Repos {
 		if repo.IsRemoteClone {
-			unpushed, err := gitcmd.HasUnpushedCommits(repo.WorktreePath, featureName)
+			unpushed, err := gitcmd.HasUnpushedCommits(repo.WorktreePath, featureBranchName(featureName))
 			if err != nil {
 				return err
 			}
@@ -445,6 +628,10 @@ func validateFeatureName(name string) error {
 	return nil
 }
 
+func featureBranchName(featureName string) string {
+	return "agent/" + featureName
+}
+
 func featureDirectoryName(featureName string) string {
 	return strings.NewReplacer("%", "%25", "/", "%2F").Replace(featureName)
 }
@@ -460,5 +647,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat list | autofeat version | autofeat preview [--base <branch>] | autofeat <feature-name> [<remote-url>|open|teardown [--force]]")
+	return errors.New("usage: autofeat list | autofeat version | autofeat review [--base <branch>] | autofeat <feature-name> [<remote-url>|open|run [-task <prompt>]|review [--base <branch>]|teardown [--force]]")
 }

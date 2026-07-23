@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>autofeat preview</title>
+  <title>autofeat review</title>
   <style>{{template "stylesheet"}}</style>
 </head>
 <body>
-  <h1>autofeat preview</h1>
+  <h1>autofeat review</h1>
   <p class="metadata">Generated {{.GeneratedAt.Format "2006-01-02 15:04:05 MST"}} · Base branch: {{.BaseRef}}</p>
   {{if .Sessions}}
     {{range .Sessions}}
@@ -23,7 +23,7 @@
                 <pre>{{range diffLines .Diff}}<span class="{{.Class}}">{{.Text}}</span>
 {{end}}</pre>
               {{else}}
-                <p class="empty">No changes relative to {{$.BaseRef}}.</p>
+                <p class="empty">No changes relative to {{.BaseBranch}}.</p>
               {{end}}
             </article>
           {{end}}

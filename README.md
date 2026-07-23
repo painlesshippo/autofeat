@@ -10,7 +10,7 @@ and open them together in one VS Code workspace.
 * Git installed and available on `PATH`.
 * VS Code's `code` command on `PATH` to use the default workspace-opening
   command. Another editor command can be configured instead.
-* Linux's `xdg-open` command on `PATH` to open generated previews in a browser.
+* Linux's `xdg-open` command on `PATH` to open generated reviews in a browser.
   In WSL, `autofeat` uses `explorer.exe` and `wslpath` instead.
 
 On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
@@ -18,13 +18,21 @@ On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
 ```json
 {
   "workspace_base_dir": "/home/your-user/.autofeat-workspaces",
-  "editor_cmd": "code"
+  "editor_cmd": "code",
+  "headless_cmd": "copilot"
 }
 ```
 
 Set `workspace_base_dir` to choose where feature worktrees and
 `.code-workspace` files are created. Set `editor_cmd` to the executable that
-should receive a workspace-file path.
+should receive a workspace-file path. Set `headless_cmd` to the interactive
+agent command used by `run`.
+
+`$HOME/.autofeat/state.json` stores `default_base_branch`, which defaults to
+`master`. When a repository is added, `autofeat` detects `master` or `main`
+and records the result as that repository's `base_branch`. Change either value
+in the state file to use a different persistent review base; a command-line
+`--base` option is a one-time override.
 
 ## Installation
 
@@ -46,7 +54,7 @@ Ensure the installed binary directory, or the directory containing the built
 binary, is on `PATH`.
 
 `mise run install` installs the built binary into `$HOME/.local/bin` and adds
-the `af`, `afp`, and `afl` aliases for `autofeat`, `autofeat preview`, and
+the `af`, `afp`, and `afl` aliases for `autofeat`, `autofeat review`, and
 `autofeat list` to `$HOME/.bashrc` by default. Override these locations with
 `INSTALL_DIR` and `SHELL_RC` when necessary.
 
@@ -88,10 +96,10 @@ git push origin v0.2.0
 ## Usage
 
 Run `autofeat <feature-name>` inside a Git repository to add that repository
-to a feature session. The command creates a branch with the supplied feature
-name, adds a worktree, records the session, and regenerates its VS Code
-workspace. Feature names use valid Git branch syntax, so hierarchical names
-such as `feature/potato` and `bug/f321s-aaa` are supported.
+to a feature session. The command creates an `agent/<feature-name>` branch,
+adds a worktree, records the session, and regenerates its VS Code workspace.
+Feature names use valid Git branch syntax, so hierarchical names such as
+`feature/potato` and `bug/f321s-aaa` are supported.
 
 ```sh
 cd ~/sources/repo1
@@ -131,6 +139,35 @@ Open a session explicitly from any directory:
 autofeat feature/potato open
 ```
 
+Run the configured headless agent from a feature directory. When started from
+a Git repository, `run` first adds that repository to the session when it has
+not already been added. The agent inherits the terminal's standard input,
+output, and error streams:
+
+```sh
+autofeat feature/potato run
+```
+
+Append an objective to the feature's `TASK.md` before starting the agent:
+
+```sh
+autofeat feature/potato run -task "Implement the potato feature and add tests"
+```
+
+Generate and open a static HTML review of the changes in every active session.
+The review compares each worktree with its stored base branch and includes
+committed, staged, unstaged, and untracked changes:
+
+```sh
+autofeat review
+```
+
+Review only one feature session:
+
+```sh
+autofeat feature/potato review
+```
+
 Running the feature command outside a Git repository also opens an existing
 session:
 
@@ -145,27 +182,19 @@ List active sessions:
 autofeat list
 ```
 
-Generate and open a static HTML preview of the changes in every active
-session. The preview compares each worktree with `master` by default and
-includes committed, staged, unstaged, and untracked changes:
+Use another branch as a one-time comparison override when needed:
 
 ```sh
-autofeat preview
+autofeat review --base develop
+autofeat feature/potato review --base develop
 ```
 
-Use another branch as the comparison base when a repository uses a different
-mainline branch:
-
-```sh
-autofeat preview --base develop
-```
-
-The command writes `$HOME/.autofeat/preview.html`, opens it in the default
+The command writes `$HOME/.autofeat/review.html`, opens it in the default
 browser, and exits. It renders repository-level errors when the selected base
-branch is unavailable, while continuing to render the other repositories.
-The file is a snapshot: run `autofeat preview` again after changes to refresh
-it. Browser refresh only reloads the latest generated snapshot. Native Linux
-uses `xdg-open`; WSL opens the snapshot through Windows `explorer.exe`.
+branch is unavailable, while continuing to render the other repositories. The
+file is a snapshot: run `autofeat review` again after changes to refresh it.
+Browser refresh only reloads the latest generated snapshot. Native Linux uses
+`xdg-open`; WSL opens the snapshot through Windows `explorer.exe`.
 
 Print the build version, commit, and timestamp:
 

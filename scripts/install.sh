@@ -9,7 +9,7 @@ shell_rc="${SHELL_RC:-$HOME/.bashrc}"
 path_export="export PATH=\"$install_dir:\$PATH\""
 alias_definitions=(
     "alias af='autofeat'"
-    "alias afp='autofeat preview'"
+    "alias afp='autofeat review'"
     "alias afl='autofeat list'"
 )
 

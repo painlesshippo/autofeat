@@ -10,15 +10,17 @@ import (
 )
 
 const (
-	appDirectoryName     = ".autofeat"
-	configFileName       = "config.json"
-	defaultEditorCommand = "code"
+	appDirectoryName       = ".autofeat"
+	configFileName         = "config.json"
+	defaultEditorCommand   = "code"
+	defaultHeadlessCommand = "copilot"
 )
 
 // Config is the global autofeat configuration stored in ~/.autofeat/config.json.
 type Config struct {
 	WorkspaceBaseDir string `json:"workspace_base_dir"`
 	EditorCmd        string `json:"editor_cmd"`
+	HeadlessCmd      string `json:"headless_cmd"`
 }
 
 // Default returns the default configuration for the current user.
@@ -31,6 +33,7 @@ func Default() (Config, error) {
 	return Config{
 		WorkspaceBaseDir: filepath.Join(homeDir, ".autofeat-workspaces"),
 		EditorCmd:        defaultEditorCommand,
+		HeadlessCmd:      defaultHeadlessCommand,
 	}, nil
 }
 
@@ -92,6 +95,9 @@ func LoadFromPath(path string) (Config, error) {
 	if err := json.Unmarshal(contents, &config); err != nil {
 		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
 	}
+	if strings.TrimSpace(config.HeadlessCmd) == "" {
+		config.HeadlessCmd = defaultHeadlessCommand
+	}
 	if err := config.Validate(); err != nil {
 		return Config{}, fmt.Errorf("validate config %q: %w", path, err)
 	}
@@ -128,6 +134,9 @@ func (config Config) Validate() error {
 	}
 	if strings.TrimSpace(config.EditorCmd) == "" {
 		return errors.New("editor_cmd is required")
+	}
+	if strings.TrimSpace(config.HeadlessCmd) == "" {
+		return errors.New("headless_cmd is required")
 	}
 
 	return nil

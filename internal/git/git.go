@@ -108,6 +108,25 @@ func HasUnpushedCommits(destPath, branchName string) (bool, error) {
 	return strings.TrimSpace(output) != "", nil
 }
 
+// DetectBaseBranch returns master when it exists, otherwise main when it
+// exists. An empty result indicates neither branch exists in destPath.
+func DetectBaseBranch(destPath string) (string, error) {
+	for _, branchName := range []string{"master", "main"} {
+		command := exec.Command("git", "-C", destPath, "rev-parse", "--verify", "--quiet", branchName+"^{commit}")
+		if err := command.Run(); err == nil {
+			return branchName, nil
+		} else {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				continue
+			}
+			return "", fmt.Errorf("detect base branch in worktree %q: %w", destPath, err)
+		}
+	}
+
+	return "", nil
+}
+
 // Diff returns the complete worktree diff against baseRef, including
 // untracked files. The base reference must resolve to a commit in destPath.
 func Diff(destPath, baseRef string) (string, error) {
