@@ -4,7 +4,7 @@ set -euo pipefail
 
 mkdir -p bin
 
-gitversion > bin/gitversion.json
+gitversion >bin/gitversion.json
 
 VERSION=$(jq -r '.SemVer' bin/gitversion.json)
 COMMIT_SHA=$(jq -r '.Sha' bin/gitversion.json)

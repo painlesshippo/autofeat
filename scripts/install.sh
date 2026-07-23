@@ -19,8 +19,8 @@ chmod +x "$install_dir/autofeat"
 
 add_path=false
 case ":$PATH:" in
-    *":$install_dir:"*) ;;
-    *) add_path=true ;;
+*":$install_dir:"*) ;;
+*) add_path=true ;;
 esac
 
 aliases_to_add=()
@@ -41,7 +41,7 @@ if [[ "$add_path" == true || ${#aliases_to_add[@]} -gt 0 ]]; then
         for alias_definition in "${aliases_to_add[@]}"; do
             echo "$alias_definition"
         done
-    } >> "$shell_rc"
+    } >>"$shell_rc"
 fi
 
 if [[ "$add_path" == true ]]; then

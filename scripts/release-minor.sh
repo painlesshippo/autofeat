@@ -20,7 +20,7 @@ if ! git ls-remote --exit-code origin HEAD >/dev/null 2>&1; then
     exit 1
 fi
 
-latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | \
+latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname |
     grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)"
 
 if [[ -z "$latest_tag" ]]; then
@@ -29,7 +29,7 @@ if [[ -z "$latest_tag" ]]; then
 fi
 
 version="${latest_tag#v}"
-IFS='.' read -r major minor _ <<< "$version"
+IFS='.' read -r major minor _ <<<"$version"
 next_tag="v${major}.$((minor + 1)).0"
 
 if git rev-parse --verify --quiet "refs/tags/$next_tag" >/dev/null; then

@@ -23,7 +23,7 @@ if [[ -f "$shell_rc" ]] && grep -Fqx "# Added by autofeat install" "$shell_rc"; 
             remove_next = 0
             print
         }
-    ' "$shell_rc" > "$temporary_rc"
+    ' "$shell_rc" >"$temporary_rc"
     mv "$temporary_rc" "$shell_rc"
     echo "Removed $install_dir from PATH in $shell_rc"
     echo "Run: source $shell_rc"

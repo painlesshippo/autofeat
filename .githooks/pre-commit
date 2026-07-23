@@ -3,30 +3,53 @@
 set -eu
 
 if command -v mise >/dev/null 2>&1; then
-	mise="$(command -v mise)"
+    mise="$(command -v mise)"
 elif [ -x "$HOME/.local/bin/mise" ]; then
-	mise="$HOME/.local/bin/mise"
+    mise="$HOME/.local/bin/mise"
 else
-	printf '%s\n' 'Mise is required to run the pre-commit hook but was not found.' >&2
-	exit 1
+    printf '%s\n' 'Mise is required to run the pre-commit hook but was not found.' >&2
+    exit 1
 fi
 
-check_gofmt() {
-	git diff --cached --name-only --diff-filter=ACMR -- '*.go' |
-	while IFS= read -r file; do
-		[ -n "$file" ] || continue
+check_formatting() {
+    git diff --cached --name-only --diff-filter=ACMR |
+        while IFS= read -r file; do
+            [ -n "$file" ] || continue
 
-		if ! diff="$(git show ":$file" | "$mise" exec -- gofmt -d)"; then
-			printf 'Unable to format staged file: %s\n' "$file" >&2
-			return 1
-		fi
-
-		if [ -n "$diff" ]; then
-			printf 'Run gofmt on %s and stage the result.\n' "$file" >&2
-			return 1
-		fi
-	done
+            case "$file" in
+            *.go)
+                diff="$(git show ":$file" | "$mise" exec -- gofmt -d)"
+                if [ -n "$diff" ]; then
+                    printf '%s\n' "$diff"
+                    printf 'Run gofmt on %s and stage the result.\n' "$file" >&2
+                    return 1
+                fi
+                ;;
+            *.md | *.markdown)
+                if ! git show ":$file" | "$mise" exec -- rumdl fmt --check --stdin --stdin-filename "$file"; then
+                    printf 'Run rumdl fmt on %s and stage the result.\n' "$file" >&2
+                    return 1
+                fi
+                ;;
+            *.sh | .githooks/*)
+                if ! git show ":$file" | "$mise" exec -- shfmt -d -i 4 --filename "$file"; then
+                    printf 'Run shfmt on %s and stage the result.\n' "$file" >&2
+                    return 1
+                fi
+                ;;
+            *.toml)
+                original="$(git show ":$file")"
+                if ! formatted="$(printf '%s\n' "$original" | "$mise" exec -- taplo format --stdin-filepath "$file" -)"; then
+                    printf 'Unable to format staged file: %s\n' "$file" >&2
+                    return 1
+                fi
+                if [ "$original" != "$formatted" ]; then
+                    printf 'Run taplo format on %s and stage the result.\n' "$file" >&2
+                    return 1
+                fi
+                ;;
+            esac
+        done
 }
 
-check_gofmt
-exec "$mise" exec -- rumdl check .
+check_formatting

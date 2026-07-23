@@ -3,6 +3,8 @@ go = "1.26.5"
 gitversion = "6.8.2"
 jq = "1.8.2"
 rumdl = "0.2.38"
+shfmt = "3.13.1"
+taplo = "0.10.0"
 
 [tasks.build]
 description = "Build the autofeat CLI"
@@ -11,6 +13,10 @@ run = "bash ./scripts/build.sh"
 [tasks.test]
 description = "Run the test suite"
 run = "go test -v ./..."
+
+[tasks.format]
+description = "Format all supported repository files"
+run = "bash ./scripts/format.sh"
 
 [tasks.release-minor]
 description = "Create, verify, and publish the next minor release"

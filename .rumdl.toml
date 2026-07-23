@@ -2,30 +2,31 @@
 respect-gitignore = true
 
 [MD003]
-style = "atx"  # Heading style (atx, atx_closed, setext)
+style = "atx" # Heading style (atx, atx_closed, setext)
 
 [MD004]
-style = "asterisk"  # Unordered list style (asterisk, plus, dash, consistent)
+style = "asterisk" # Unordered list style (asterisk, plus, dash, consistent)
 
 [MD007]
-indent = 4  # Unordered list indentation
+indent = 4 # Unordered list indentation
 
 [MD022]
-lines-above = 1  # Require a blank line before headings
-lines-below = 0  # Do not require a blank line after headings
+lines-above = 1 # Require a blank line before headings
+lines-below = 0 # Do not require a blank line after headings
 
 [MD032]
-enabled = false  # Allow lists directly after headings
+enabled = false # Allow lists directly after headings
 
 [MD012]
-maximum = 1  # Allow at most one consecutive blank line
+maximum = 1 # Allow at most one consecutive blank line
 
 [MD013]
-line-length = 100  # Line length
-code-blocks = false  # Exclude code blocks from line length check
-tables = false  # Exclude tables from line length check
-headings = true  # Include headings in line length check
+line-length = 100   # Line length
+code-blocks = false # Exclude code blocks from line length check
+tables = false      # Exclude tables from line length check
+headings = true     # Include headings in line length check
 
 [MD044]
-names = ["rumdl", "Markdown", "GitHub"]  # Proper names that should be capitalized correctly
-code-blocks = false  # Check code blocks for proper names (default: false, skips code blocks)
+# Proper names that should be capitalized correctly
+names = ["rumdl", "Markdown", "GitHub"]
+code-blocks = false                     # Check code blocks for proper names (default: false, skips code blocks)
