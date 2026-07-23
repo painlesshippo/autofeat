@@ -76,22 +76,18 @@ GitVersion. Do not edit a version constant to make a release. Choose the next
 Semantic Versioning number: increment the patch for compatible fixes, the minor
 version for compatible features, or the major version for breaking changes.
 
-To create a minor release, first commit all intended changes and start from a
-clean working tree. For example, to bump `v0.1.0` to `v0.2.0`:
+To create and publish the next minor release, first commit all intended changes,
+start from a clean working tree, and ensure `origin` is reachable with Git
+authentication:
 
 ```sh
-git status --short
-mise run test
-git tag -a v0.2.0 -m "Release v0.2.0"
-mise run build./bin/autofeat version
+mise run release-minor
 ```
 
-Confirm that the final command reports `autofeat 0.2.0`. When a remote is
-configured, publish the release tag with:
-
-```sh
-git push origin v0.2.0
-```
+The command derives the next minor version from the most recent stable release
+tag, runs the full test suite, creates and verifies an annotated release tag,
+and pushes it to `origin`. It aborts before creating a tag when the working
+tree is dirty or remote authentication fails.
 
 ## Usage
 

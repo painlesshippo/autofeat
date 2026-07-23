@@ -12,6 +12,10 @@ run = "bash ./scripts/build.sh"
 description = "Run the test suite"
 run = "go test -v ./..."
 
+[tasks.release-minor]
+description = "Create, verify, and publish the next minor release"
+run = "bash ./scripts/release-minor.sh"
+
 [tasks.setup-hooks]
 description = "Configure Git to use the repository hooks"
 run = "git config --local core.hooksPath .githooks"
