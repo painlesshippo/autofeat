@@ -66,8 +66,8 @@ Enable the repository's Git hooks after cloning:
 mise run setup-hooks
 ```
 
-The pre-commit hook runs `rumdl check .` through Mise to lint all Markdown
-files.
+The pre-commit hook verifies that staged Go files are formatted with `gofmt`
+and runs `rumdl check .` through Mise to lint all Markdown files.
 
 ## Releasing
 

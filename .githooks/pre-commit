@@ -3,12 +3,30 @@
 set -eu
 
 if command -v mise >/dev/null 2>&1; then
-	exec mise exec -- rumdl check .
+	mise="$(command -v mise)"
+elif [ -x "$HOME/.local/bin/mise" ]; then
+	mise="$HOME/.local/bin/mise"
+else
+	printf '%s\n' 'Mise is required to run the pre-commit hook but was not found.' >&2
+	exit 1
 fi
 
-if [ -x "$HOME/.local/bin/mise" ]; then
-	exec "$HOME/.local/bin/mise" exec -- rumdl check .
-fi
+check_gofmt() {
+	git diff --cached --name-only --diff-filter=ACMR -- '*.go' |
+	while IFS= read -r file; do
+		[ -n "$file" ] || continue
 
-printf '%s\n' 'Mise is required to run the pre-commit hook but was not found.' >&2
-exit 1
+		if ! diff="$(git show ":$file" | "$mise" exec -- gofmt -d)"; then
+			printf 'Unable to format staged file: %s\n' "$file" >&2
+			return 1
+		fi
+
+		if [ -n "$diff" ]; then
+			printf 'Run gofmt on %s and stage the result.\n' "$file" >&2
+			return 1
+		fi
+	done
+}
+
+check_gofmt
+exec "$mise" exec -- rumdl check .
