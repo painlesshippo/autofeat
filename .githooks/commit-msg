@@ -1,0 +1,23 @@
+#!/usr/bin/env sh
+
+set -eu
+
+commit_message_file="${1:?Usage: commit-msg <commit-message-file>}"
+subject="$(sed -n '1p' "$commit_message_file")"
+pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([[:alnum:]./_-]+\))?(!)?: .+$'
+
+if printf '%s\n' "$subject" | LC_ALL=C grep -Eq "$pattern"; then
+    exit 0
+fi
+
+cat >&2 <<'EOF'
+Commit subject must follow Conventional Commits:
+  <type>[optional scope][!]: <description>
+
+Allowed types: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test
+Examples:
+  feat: add branch synchronization
+  fix(review): handle an empty diff
+  feat!: remove legacy configuration
+EOF
+exit 1

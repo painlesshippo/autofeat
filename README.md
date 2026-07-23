@@ -66,23 +66,24 @@ The pre-commit hook verifies that staged Go, Markdown, shell, and TOML files are
 formatted with `gofmt`, `rumdl`, `shfmt`, and `taplo` through Mise.
 
 ## Releasing
-The build derives the application version from annotated Git tags using
-GitVersion. Do not edit a version constant to make a release. Choose the next
-Semantic Versioning number: increment the patch for compatible fixes, the minor
-version for compatible features, or the major version for breaking changes.
+The build uses `svu` to derive the current `MAJOR.MINOR.PATCH` version from Git
+tags. Builds outside `main`, `master`, or `trunk` append the branch name as a
+SemVer prerelease suffix, replacing characters such as `/` with `-`. Builds
+with uncommitted changes append `-dirty`.
 
-To create and publish the next minor release, first commit all intended changes,
-start from a clean working tree, and ensure `origin` is reachable with Git
+To create and publish a release, first commit all intended changes, switch to
+`main`, `master`, or `trunk`, and ensure `origin` is reachable with Git
 authentication:
 
 ```sh
-mise run release-minor
+mise run release
 ```
 
-The command derives the next minor version from the most recent stable release
-tag, runs the full test suite, creates and verifies an annotated release tag,
-and pushes it to `origin`. It aborts before creating a tag when the working
-tree is dirty or remote authentication fails.
+The command uses `svu next` to derive the next version from Conventional
+Commits, runs the full test suite, creates and verifies an annotated
+`vMAJOR.MINOR.PATCH` release tag, and pushes it to `origin`. It aborts before
+creating a tag when the working tree is dirty, the current branch is not a
+trunk branch, or remote authentication fails.
 
 ## Usage
 Run `autofeat <feature-name>` inside a Git repository to add that repository

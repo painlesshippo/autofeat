@@ -4,10 +4,9 @@ set -euo pipefail
 
 mkdir -p bin
 
-gitversion >bin/gitversion.json
+# Sets VERSION and COMMIT_SHA.
+source ./scripts/version.sh
 
-VERSION=$(jq -r '.SemVer' bin/gitversion.json)
-COMMIT_SHA=$(jq -r '.Sha' bin/gitversion.json)
 BUILD_DATETIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GO_VERSION=$(go version | awk '{print $3}')
 
