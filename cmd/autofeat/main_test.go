@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
@@ -50,6 +52,37 @@ func TestReviewCommandDispatch(t *testing.T) {
 
 	if err := run([]string{"review", "--base"}); err == nil {
 		t.Error("run(review --base) error = nil, want usage error")
+	}
+}
+
+func TestStatusCommandDispatch(t *testing.T) {
+	originalStatusCommand := statusCommand
+	t.Cleanup(func() {
+		statusCommand = originalStatusCommand
+	})
+
+	var gotSelectors []string
+	statusCommand = func(selectors []string) error {
+		gotSelectors = selectors
+		return nil
+	}
+
+	if err := run([]string{"status"}); err != nil {
+		t.Fatalf("run(status) error = %v", err)
+	}
+	if len(gotSelectors) != 1 || gotSelectors[0] != "*" {
+		t.Errorf("run(status) selectors = %q, want [*]", gotSelectors)
+	}
+
+	if err := run([]string{"status", "feature/a", "feature/b"}); err != nil {
+		t.Fatalf("run(status feature/a feature/b) error = %v", err)
+	}
+	if len(gotSelectors) != 2 || gotSelectors[0] != "feature/a" || gotSelectors[1] != "feature/b" {
+		t.Errorf("run(status feature/a feature/b) selectors = %q, want exact selectors", gotSelectors)
+	}
+
+	if err := run([]string{"status", "--json"}); err == nil {
+		t.Error("run(status --json) error = nil, want usage error")
 	}
 }
 
@@ -298,6 +331,190 @@ func TestSessionDrift(t *testing.T) {
 	if got := sessionDrift(session, "master"); got != "unknown" {
 		t.Errorf("sessionDrift() missing repository = %q, want unknown", got)
 	}
+}
+
+func TestStatusStatePrecedence(t *testing.T) {
+	tests := []struct {
+		name   string
+		status repositoryStatus
+		want   string
+	}{
+		{name: "error", status: repositoryStatus{inspectionError: true, missing: true}, want: "error"},
+		{name: "missing", status: repositoryStatus{missing: true, detached: true}, want: "missing"},
+		{name: "detached", status: repositoryStatus{detached: true, wrongBranch: true}, want: "detached"},
+		{name: "wrong branch", status: repositoryStatus{wrongBranch: true, rebasing: true}, want: "wrong-branch"},
+		{name: "rebasing", status: repositoryStatus{rebasing: true, baseKnown: true, baseBehind: 1}, want: "rebasing"},
+		{name: "behind base", status: repositoryStatus{baseKnown: true, baseBehind: 1, dirty: true}, want: "behind-base"},
+		{name: "dirty", status: repositoryStatus{dirty: true, pushKnown: true, pushAhead: 1, pushBehind: 1}, want: "dirty"},
+		{name: "remote diverged", status: repositoryStatus{pushKnown: true, pushAhead: 1, pushBehind: 1}, want: "remote-diverged"},
+		{name: "remote ahead", status: repositoryStatus{pushKnown: true, pushBehind: 1}, want: "remote-ahead"},
+		{name: "unpublished", status: repositoryStatus{pushKnown: true, pushHasOrigin: true}, want: "unpushed"},
+		{name: "unpushed commits", status: repositoryStatus{pushKnown: true, pushHasOrigin: true, pushPublished: true, pushAhead: 1}, want: "unpushed"},
+		{name: "ready without origin", status: repositoryStatus{baseKnown: true, pushKnown: true}, want: "ready"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := statusState(test.status); got != test.want {
+				t.Errorf("statusState(%+v) = %q, want %q", test.status, got, test.want)
+			}
+		})
+	}
+}
+
+func TestStatusSessionsRendersSortedRepositoryHealth(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	dirtyRepo := createMainRepository(t)
+	runMainGit(t, dirtyRepo, "branch", "-M", "main")
+	runMainGit(t, dirtyRepo, "checkout", "-qb", "feature/alpha")
+	if err := os.WriteFile(filepath.Join(dirtyRepo, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	readyRepo := createMainRepository(t)
+	runMainGit(t, readyRepo, "branch", "-M", "main")
+	runMainGit(t, readyRepo, "checkout", "-qb", "feature/beta")
+	notRepository := t.TempDir()
+	missingPath := filepath.Join(t.TempDir(), "missing")
+
+	if err := state.SaveSession("feature/beta", state.Session{Repos: []state.Repository{{
+		Name: "ready", WorktreePath: readyRepo, BaseBranch: "main",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SaveSession("feature/alpha", state.Session{Repos: []state.Repository{
+		{Name: "z-error", WorktreePath: notRepository, BaseBranch: "main"},
+		{Name: "a-missing", WorktreePath: missingPath},
+		{Name: "m-dirty", WorktreePath: dirtyRepo, BaseBranch: "main"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := statusSessionsTo(&output, []string{"*"}); err != nil {
+		t.Fatalf("statusSessionsTo() error = %v", err)
+	}
+	report := output.String()
+	for _, want := range []string{
+		"FEATURE", "REPOSITORY", "WORKTREE", "DRIFT", "PUSH", "STATE", "DETAIL",
+		"feature/alpha", "a-missing", "master", "missing",
+		"m-dirty", "feature/alpha", "dirty", "+0/-0", "n/a",
+		"z-error", "error",
+		"feature/beta", "ready", "feature/beta", "clean",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("status report does not contain %q:\n%s", want, report)
+		}
+	}
+
+	positions := []int{
+		strings.Index(report, "a-missing"),
+		strings.Index(report, "m-dirty"),
+		strings.Index(report, "z-error"),
+		strings.Index(report, "feature/beta"),
+	}
+	for index := 1; index < len(positions); index++ {
+		if positions[index-1] < 0 || positions[index] <= positions[index-1] {
+			t.Fatalf("status report is not sorted as expected: positions %v\n%s", positions, report)
+		}
+	}
+
+	output.Reset()
+	if err := statusSessionsTo(&output, []string{"feature/beta"}); err != nil {
+		t.Fatalf("statusSessionsTo(feature/beta) error = %v", err)
+	}
+	if selectedReport := output.String(); !strings.Contains(selectedReport, "feature/beta") || strings.Contains(selectedReport, "feature/alpha") {
+		t.Errorf("selected status report contains the wrong features:\n%s", selectedReport)
+	}
+	if err := statusSessionsTo(&output, []string{"feature/missing"}); err == nil {
+		t.Error("statusSessionsTo(feature/missing) error = nil, want no-match error")
+	}
+}
+
+func TestStatusSessionsEmptyState(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	var output bytes.Buffer
+	if err := statusSessionsTo(&output, []string{"*"}); err != nil {
+		t.Fatalf("statusSessionsTo() empty state error = %v", err)
+	}
+	if fields := strings.Fields(output.String()); len(fields) != 9 {
+		t.Errorf("empty status report fields = %q, want header only", fields)
+	}
+}
+
+func TestInspectRepositoryStatusGitStates(t *testing.T) {
+	requireMainGit(t)
+
+	t.Run("wrong branch and detached", func(t *testing.T) {
+		repoPath := createMainRepository(t)
+		runMainGit(t, repoPath, "branch", "-M", "main")
+		runMainGit(t, repoPath, "checkout", "-qb", "other")
+		repository := state.Repository{Name: "repository", WorktreePath: repoPath, BaseBranch: "main"}
+
+		status := inspectRepositoryStatus("feature/status", repository, "master")
+		if got := statusState(status); got != "wrong-branch" {
+			t.Errorf("wrong branch state = %q, want wrong-branch; status = %+v", got, status)
+		}
+
+		runMainGit(t, repoPath, "checkout", "--detach", "-q")
+		status = inspectRepositoryStatus("feature/status", repository, "master")
+		if got := statusState(status); got != "detached" {
+			t.Errorf("detached state = %q, want detached; status = %+v", got, status)
+		}
+	})
+
+	t.Run("behind base", func(t *testing.T) {
+		repoPath := createMainRepository(t)
+		runMainGit(t, repoPath, "branch", "-M", "main")
+		runMainGit(t, repoPath, "checkout", "-qb", "feature/status")
+		runMainGit(t, repoPath, "checkout", "main")
+		writeAndCommitMainFile(t, repoPath, "base.txt", "base\n", "base change")
+		runMainGit(t, repoPath, "checkout", "feature/status")
+
+		status := inspectRepositoryStatus("feature/status", state.Repository{
+			Name: "repository", WorktreePath: repoPath, BaseBranch: "main",
+		}, "master")
+		if got := statusState(status); got != "behind-base" || status.baseBehind != 1 {
+			t.Errorf("behind base status = %+v, state %q; want one behind and behind-base", status, got)
+		}
+	})
+
+	t.Run("rebasing", func(t *testing.T) {
+		repoPath := createMainRepository(t)
+		runMainGit(t, repoPath, "branch", "-M", "main")
+		runMainGit(t, repoPath, "checkout", "-qb", "feature/status")
+		rebasePath := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "--git-path", "rebase-merge"))
+		if !filepath.IsAbs(rebasePath) {
+			rebasePath = filepath.Join(repoPath, rebasePath)
+		}
+		if err := os.MkdirAll(rebasePath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		status := inspectRepositoryStatus("feature/status", state.Repository{
+			Name: "repository", WorktreePath: repoPath, BaseBranch: "main",
+		}, "master")
+		if got := statusState(status); got != "rebasing" {
+			t.Errorf("rebase state = %q, want rebasing; status = %+v", got, status)
+		}
+	})
+
+	t.Run("unpublished", func(t *testing.T) {
+		_, remotePath := createRemoteMainRepository(t)
+		repoPath := filepath.Join(t.TempDir(), "clone")
+		runMainGit(t, t.TempDir(), "clone", "-q", remotePath, repoPath)
+		runMainGit(t, repoPath, "checkout", "-qb", "feature/status", "origin/main")
+
+		status := inspectRepositoryStatus("feature/status", state.Repository{
+			Name: "repository", WorktreePath: repoPath, BaseBranch: "main",
+		}, "master")
+		if got := statusState(status); got != "unpushed" || formatPushStatus(status) != "unpublished" {
+			t.Errorf("unpublished status = %+v, state %q, push %q", status, got, formatPushStatus(status))
+		}
+	})
 }
 
 func requireMainGit(t *testing.T) {

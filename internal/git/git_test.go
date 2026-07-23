@@ -54,6 +54,21 @@ func TestGetRepoRoot(t *testing.T) {
 	}
 }
 
+func TestCurrentBranchReportsDetachedHead(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "checkout", "--detach", "-q")
+
+	branchName, err := CurrentBranch(repoPath)
+	if !errors.Is(err, ErrDetachedHead) {
+		t.Fatalf("CurrentBranch() error = %v, want ErrDetachedHead", err)
+	}
+	if branchName != "" {
+		t.Errorf("CurrentBranch() = %q, want empty branch", branchName)
+	}
+}
+
 func TestValidateBranchName(t *testing.T) {
 	requireGit(t)
 
@@ -337,6 +352,76 @@ func TestFetchBaseAndAheadBehind(t *testing.T) {
 	}
 	if ahead != 1 || behind != 0 {
 		t.Errorf("AheadBehind() after rebase = (%d, %d), want (1, 0)", ahead, behind)
+	}
+}
+
+func TestCachedRemoteBranchStatus(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "checkout", "-qb", "feature/status")
+
+	status, err := CachedRemoteBranchStatus(repoPath, "feature/status")
+	if err != nil {
+		t.Fatalf("CachedRemoteBranchStatus() without origin error = %v", err)
+	}
+	if status.HasOrigin || status.Published {
+		t.Errorf("CachedRemoteBranchStatus() without origin = %+v, want no origin or publication", status)
+	}
+
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, repoPath, "init", "--bare", "-q", remotePath)
+	runGit(t, repoPath, "remote", "add", "origin", remotePath)
+
+	status, err = CachedRemoteBranchStatus(repoPath, "feature/status")
+	if err != nil {
+		t.Fatalf("CachedRemoteBranchStatus() unpublished error = %v", err)
+	}
+	if !status.HasOrigin || status.Published {
+		t.Errorf("CachedRemoteBranchStatus() unpublished = %+v, want origin without publication", status)
+	}
+
+	runGit(t, repoPath, "push", "-qu", "origin", "feature/status")
+	status, err = CachedRemoteBranchStatus(repoPath, "feature/status")
+	if err != nil {
+		t.Fatalf("CachedRemoteBranchStatus() published error = %v", err)
+	}
+	if !status.Published || status.Ahead != 0 || status.Behind != 0 {
+		t.Errorf("CachedRemoteBranchStatus() published = %+v, want current publication", status)
+	}
+
+	if err := os.WriteFile(filepath.Join(repoPath, "local.txt"), []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "local.txt")
+	runGit(t, repoPath, "commit", "-qm", "local change")
+	status, err = CachedRemoteBranchStatus(repoPath, "feature/status")
+	if err != nil {
+		t.Fatalf("CachedRemoteBranchStatus() ahead error = %v", err)
+	}
+	if status.Ahead != 1 || status.Behind != 0 {
+		t.Errorf("CachedRemoteBranchStatus() ahead = (%d, %d), want (1, 0)", status.Ahead, status.Behind)
+	}
+
+	runGit(t, repoPath, "checkout", "-qb", "remote-change", "origin/feature/status")
+	if err := os.WriteFile(filepath.Join(repoPath, "remote.txt"), []byte("remote\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "remote.txt")
+	runGit(t, repoPath, "commit", "-qm", "remote change")
+	remoteCommit, err := run("-C", repoPath, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "update-ref", "refs/remotes/origin/feature/status", strings.TrimSpace(remoteCommit))
+	runGit(t, repoPath, "checkout", "-q", "feature/status")
+
+	status, err = CachedRemoteBranchStatus(repoPath, "feature/status")
+	if err != nil {
+		t.Fatalf("CachedRemoteBranchStatus() diverged error = %v", err)
+	}
+	if status.Ahead != 1 || status.Behind != 1 {
+		t.Errorf("CachedRemoteBranchStatus() diverged = (%d, %d), want (1, 1)", status.Ahead, status.Behind)
 	}
 }
 

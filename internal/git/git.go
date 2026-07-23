@@ -18,6 +18,19 @@ type BaseStatus struct {
 	Behind  int
 }
 
+// RemoteBranchStatus describes the cached relationship between HEAD and its
+// corresponding remote-tracking branch.
+type RemoteBranchStatus struct {
+	RemoteRef string
+	HasOrigin bool
+	Published bool
+	Ahead     int
+	Behind    int
+}
+
+// ErrDetachedHead indicates that a worktree is not currently on a branch.
+var ErrDetachedHead = errors.New("detached HEAD")
+
 // IsInsideWorkTree reports whether the current directory is inside a Git worktree.
 func IsInsideWorkTree() (bool, error) {
 	output, err := exec.Command("git", "rev-parse", "--is-inside-work-tree").Output()
@@ -91,7 +104,7 @@ func CurrentBranch(destPath string) (string, error) {
 
 	branchName := strings.TrimSpace(output)
 	if branchName == "" {
-		return "", fmt.Errorf("worktree %q is in a detached HEAD state", destPath)
+		return "", fmt.Errorf("worktree %q is in a detached HEAD state: %w", destPath, ErrDetachedHead)
 	}
 
 	return branchName, nil
@@ -233,6 +246,39 @@ func CachedBaseStatus(destPath, baseBranch string) (BaseStatus, error) {
 	}
 
 	return BaseStatus{BaseRef: baseRef, Ahead: ahead, Behind: behind}, nil
+}
+
+// CachedRemoteBranchStatus reports how HEAD relates to the cached remote
+// feature branch. It does not fetch and treats a missing remote branch as an
+// unpublished branch rather than an error.
+func CachedRemoteBranchStatus(destPath, branchName string) (RemoteBranchStatus, error) {
+	hasOrigin, err := HasOrigin(destPath)
+	if err != nil {
+		return RemoteBranchStatus{}, err
+	}
+
+	status := RemoteBranchStatus{HasOrigin: hasOrigin}
+	if !hasOrigin {
+		return status, nil
+	}
+
+	status.RemoteRef = "refs/remotes/origin/" + branchName
+	command := exec.Command("git", "-C", destPath, "show-ref", "--verify", "--quiet", status.RemoteRef)
+	if err := command.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return status, nil
+		}
+		return RemoteBranchStatus{}, fmt.Errorf("resolve remote branch %q in repository %q: %w", branchName, destPath, err)
+	}
+
+	status.Published = true
+	status.Ahead, status.Behind, err = AheadBehind(destPath, status.RemoteRef)
+	if err != nil {
+		return RemoteBranchStatus{}, err
+	}
+
+	return status, nil
 }
 
 // Rebase rebases the current branch in destPath onto baseRef.

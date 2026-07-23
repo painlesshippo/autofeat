@@ -204,6 +204,39 @@ The `DRIFT` column reports cached base drift across each session's repositories.
 Run `sync` to fetch current remote state and rebase; `list` itself never performs
 network access.
 
+Inspect every repository in every active session:
+
+```sh
+autofeat status
+```
+
+Pass one or more selectors to limit the report:
+
+```sh
+autofeat status feature/potato
+autofeat status "feature/*"
+```
+
+`status` reports the current branch, clean or dirty worktree state, effective
+base branch, cached base drift, cached push relationship, and an actionable
+summary state. It never fetches or modifies repositories. For example:
+
+```text
+FEATURE          REPOSITORY  BRANCH          WORKTREE  BASE  DRIFT  PUSH         STATE        DETAIL
+feature/potato   api         feature/potato  clean     main  +2/-0  unpublished  unpushed     -
+feature/potato   web         feature/potato  dirty     main  +1/-2  +1/-0        behind-base  -
+```
+
+`DRIFT` compares `HEAD` with the cached base, while `PUSH` compares the feature
+branch with its cached `origin` branch. `PUSH` is `unpublished` when `origin`
+exists without a cached feature branch and `n/a` when no `origin` exists.
+Summary states include `ready`, `dirty`, `behind-base`, `unpushed`,
+`remote-ahead`, `remote-diverged`, `rebasing`, `wrong-branch`, `detached`,
+`missing`, and `error`. The table retains repository inspection failures and
+continues with the other repositories. A completed report exits successfully
+regardless of repository health; invalid selectors and failures to load state
+or write the report still return an error.
+
 Use another branch as a one-time comparison override when needed:
 
 ```sh

@@ -4,6 +4,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -32,6 +33,7 @@ const headlessPrompt = "Please execute the objectives defined in TASK.md"
 
 var (
 	reviewCommand      = reviewSessions
+	statusCommand      = statusSessions
 	openFeatureCommand = openSession
 	runFeatureCommand  = runFeature
 	syncFeatureCommand = syncFeature
@@ -76,6 +78,12 @@ func run(args []string) error {
 		})
 	case "sync":
 		return runSelectedFeatures(args[1:], syncFeatureCommand)
+	case "status":
+		selectors, err := statusArguments(args[1:])
+		if err != nil {
+			return usageError()
+		}
+		return statusCommand(selectors)
 	case "review":
 		selectors, baseRef, err := reviewArguments(args[1:])
 		if err != nil {
@@ -153,6 +161,18 @@ func reviewArguments(args []string) ([]string, string, error) {
 		selectors = []string{"*"}
 	}
 	return selectors, baseRef, nil
+}
+
+func statusArguments(args []string) ([]string, error) {
+	for _, arg := range args {
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			return nil, errors.New("invalid status arguments")
+		}
+	}
+	if len(args) == 0 || shellExpandedWildcard(args) {
+		return []string{"*"}, nil
+	}
+	return args, nil
 }
 
 func shellExpandedWildcard(selectors []string) bool {
@@ -313,6 +333,233 @@ func sessionDrift(session state.Session, defaultBaseBranch string) string {
 	}
 
 	return fmt.Sprintf("%d behind", totalBehind)
+}
+
+type repositoryStatus struct {
+	featureName     string
+	repositoryName  string
+	branch          string
+	worktree        string
+	baseBranch      string
+	baseAhead       int
+	baseBehind      int
+	baseKnown       bool
+	pushAhead       int
+	pushBehind      int
+	pushHasOrigin   bool
+	pushPublished   bool
+	pushKnown       bool
+	missing         bool
+	detached        bool
+	wrongBranch     bool
+	rebasing        bool
+	dirty           bool
+	inspectionError bool
+	detail          string
+}
+
+func statusSessions(selectors []string) error {
+	return statusSessionsTo(os.Stdout, selectors)
+}
+
+func statusSessionsTo(output io.Writer, selectors []string) error {
+	currentState, err := state.Load()
+	if err != nil {
+		return err
+	}
+
+	featureNames := []string(nil)
+	if len(currentState.Sessions) != 0 || len(selectors) != 1 || selectors[0] != "*" {
+		featureNames, err = selectFeatureNames(currentState.Sessions, selectors)
+		if err != nil {
+			return err
+		}
+	}
+
+	statuses := make([]repositoryStatus, 0)
+	for _, featureName := range featureNames {
+		session := currentState.Sessions[featureName]
+		repositories := append([]state.Repository(nil), session.Repos...)
+		sort.Slice(repositories, func(i, j int) bool {
+			if repositories[i].Name == repositories[j].Name {
+				return repositories[i].WorktreePath < repositories[j].WorktreePath
+			}
+			return repositories[i].Name < repositories[j].Name
+		})
+		for _, repository := range repositories {
+			statuses = append(statuses, inspectRepositoryStatus(featureName, repository, currentState.DefaultBaseBranch))
+		}
+	}
+
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "FEATURE\tREPOSITORY\tBRANCH\tWORKTREE\tBASE\tDRIFT\tPUSH\tSTATE\tDETAIL")
+	for _, status := range statuses {
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			status.featureName,
+			status.repositoryName,
+			status.branch,
+			status.worktree,
+			status.baseBranch,
+			formatStatusRelation(status.baseKnown, status.baseAhead, status.baseBehind, "unknown"),
+			formatPushStatus(status),
+			statusState(status),
+			statusDetail(status),
+		)
+	}
+
+	return writer.Flush()
+}
+
+func inspectRepositoryStatus(featureName string, repository state.Repository, defaultBaseBranch string) repositoryStatus {
+	status := repositoryStatus{
+		featureName:    featureName,
+		repositoryName: repository.Name,
+		branch:         "unknown",
+		worktree:       "unknown",
+		baseBranch:     repository.BaseBranch,
+	}
+	if status.baseBranch == "" {
+		status.baseBranch = defaultBaseBranch
+	}
+
+	info, err := os.Stat(repository.WorktreePath)
+	if errors.Is(err, os.ErrNotExist) {
+		status.missing = true
+		status.worktree = "missing"
+		status.detail = repository.WorktreePath
+		return status
+	}
+	if err != nil {
+		status.inspectionError = true
+		status.detail = fmt.Sprintf("inspect worktree: %v", err)
+		return status
+	}
+	if !info.IsDir() {
+		status.inspectionError = true
+		status.detail = fmt.Sprintf("worktree is not a directory: %s", repository.WorktreePath)
+		return status
+	}
+
+	status.branch, err = gitcmd.CurrentBranch(repository.WorktreePath)
+	if errors.Is(err, gitcmd.ErrDetachedHead) {
+		status.detached = true
+		status.branch = "detached"
+	} else if err != nil {
+		status.inspectionError = true
+		status.detail = err.Error()
+		return status
+	} else {
+		status.wrongBranch = status.branch != featureBranchName(featureName)
+	}
+
+	status.rebasing, err = gitcmd.IsRebaseInProgress(repository.WorktreePath)
+	if err != nil {
+		status.inspectionError = true
+		status.detail = err.Error()
+		return status
+	}
+	status.dirty, err = gitcmd.HasUncommittedChanges(repository.WorktreePath)
+	if err != nil {
+		status.inspectionError = true
+		status.detail = err.Error()
+		return status
+	}
+	if status.dirty {
+		status.worktree = "dirty"
+	} else {
+		status.worktree = "clean"
+	}
+
+	baseStatus, err := gitcmd.CachedBaseStatus(repository.WorktreePath, status.baseBranch)
+	if err != nil {
+		status.inspectionError = true
+		status.detail = err.Error()
+		return status
+	}
+	status.baseKnown = true
+	status.baseAhead = baseStatus.Ahead
+	status.baseBehind = baseStatus.Behind
+
+	if status.detached || status.wrongBranch {
+		return status
+	}
+	pushStatus, err := gitcmd.CachedRemoteBranchStatus(repository.WorktreePath, status.branch)
+	if err != nil {
+		status.inspectionError = true
+		status.detail = err.Error()
+		return status
+	}
+	status.pushHasOrigin = pushStatus.HasOrigin
+	status.pushPublished = pushStatus.Published
+	status.pushKnown = true
+	status.pushAhead = pushStatus.Ahead
+	status.pushBehind = pushStatus.Behind
+
+	return status
+}
+
+func statusState(status repositoryStatus) string {
+	if status.inspectionError {
+		return "error"
+	}
+	if status.missing {
+		return "missing"
+	}
+	if status.detached {
+		return "detached"
+	}
+	if status.wrongBranch {
+		return "wrong-branch"
+	}
+	if status.rebasing {
+		return "rebasing"
+	}
+	if status.baseKnown && status.baseBehind > 0 {
+		return "behind-base"
+	}
+	if status.dirty {
+		return "dirty"
+	}
+	if status.pushKnown && status.pushAhead > 0 && status.pushBehind > 0 {
+		return "remote-diverged"
+	}
+	if status.pushKnown && status.pushBehind > 0 {
+		return "remote-ahead"
+	}
+	if status.pushKnown && status.pushHasOrigin && (!status.pushPublished || status.pushAhead > 0) {
+		return "unpushed"
+	}
+	return "ready"
+}
+
+func formatStatusRelation(known bool, ahead, behind int, unknown string) string {
+	if !known {
+		return unknown
+	}
+	return fmt.Sprintf("+%d/-%d", ahead, behind)
+}
+
+func formatPushStatus(status repositoryStatus) string {
+	if !status.pushKnown {
+		return "unknown"
+	}
+	if !status.pushHasOrigin {
+		return "n/a"
+	}
+	if !status.pushPublished {
+		return "unpublished"
+	}
+	return formatStatusRelation(true, status.pushAhead, status.pushBehind, "unknown")
+}
+
+func statusDetail(status repositoryStatus) string {
+	if status.detail != "" {
+		return status.detail
+	}
+	if status.wrongBranch {
+		return "expected " + status.featureName
+	}
+	return "-"
 }
 
 func addRepository(featureName string) error {
@@ -896,5 +1143,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat <new|open|run|sync|review|teardown|list|version> [feature-selector ...] [options]")
+	return errors.New("usage: autofeat <new|open|run|sync|status|review|teardown|list|version> [feature-selector ...] [options]")
 }
