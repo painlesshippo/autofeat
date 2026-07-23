@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Render returns a self-contained HTML document for report.
@@ -24,7 +25,9 @@ type diffLine struct {
 
 type diffFile struct {
 	Name     string
-	Metadata []diffLine
+	OldName  string
+	Status   string
+	Metadata string
 	Lines    []diffLine
 }
 
@@ -37,25 +40,43 @@ func diffFiles(diff string) []diffFile {
 	result := make([]diffFile, 0)
 	for _, line := range lines {
 		if strings.HasPrefix(line, "diff --git ") {
-			result = append(result, diffFile{Name: diffHeaderPath(line)})
+			result = append(result, diffFile{Name: diffHeaderPath(line), Status: "Modified"})
 		}
 		if len(result) == 0 {
-			result = append(result, diffFile{Name: "Changes"})
+			result = append(result, diffFile{Name: "Changes", Status: "Modified"})
 		}
 
 		file := &result[len(result)-1]
-		if strings.HasPrefix(line, "+++ ") {
+		switch {
+		case strings.HasPrefix(line, "new file mode "):
+			file.Status = "Added"
+		case strings.HasPrefix(line, "deleted file mode "):
+			file.Status = "Deleted"
+		case strings.HasPrefix(line, "rename from "):
+			file.Status = "Renamed"
+			file.OldName = diffMetadataPath(strings.TrimPrefix(line, "rename from "))
+		case strings.HasPrefix(line, "rename to "):
+			file.Name = diffMetadataPath(strings.TrimPrefix(line, "rename to "))
+		case strings.HasPrefix(line, "copy from "):
+			file.Status = "Copied"
+			file.OldName = diffMetadataPath(strings.TrimPrefix(line, "copy from "))
+		case strings.HasPrefix(line, "copy to "):
+			file.Name = diffMetadataPath(strings.TrimPrefix(line, "copy to "))
+		case strings.HasPrefix(line, "+++ "):
 			if path := diffPath(strings.TrimPrefix(line, "+++ ")); path != "" {
 				file.Name = path
 			}
-		} else if file.Name == "Changed file" && strings.HasPrefix(line, "--- ") {
+		case file.Name == "Changed file" && strings.HasPrefix(line, "--- "):
 			if path := diffPath(strings.TrimPrefix(line, "--- ")); path != "" {
 				file.Name = path
 			}
 		}
 		diffLine := diffLine{Class: diffLineClass(line), Text: line}
 		if len(file.Lines) == 0 && diffLine.Class != "diff-hunk" {
-			file.Metadata = append(file.Metadata, diffLine)
+			if file.Metadata != "" {
+				file.Metadata += "\n"
+			}
+			file.Metadata += line
 			continue
 		}
 		file.Lines = append(file.Lines, diffLine)
@@ -88,6 +109,15 @@ func diffPath(path string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(path, "a/"), "b/")
 }
 
+func diffMetadataPath(path string) string {
+	if strings.HasPrefix(path, `"`) {
+		if unquoted, err := strconv.Unquote(path); err == nil {
+			return unquoted
+		}
+	}
+	return path
+}
+
 func diffLineClass(line string) string {
 	switch {
 	case strings.HasPrefix(line, "diff --git "):
@@ -115,7 +145,10 @@ var pageTemplateSource = embeddedTemplate("templates/review.html.tmpl")
 var stylesheet = embeddedTemplate("templates/review.css")
 
 var pageTemplate = template.Must(template.New("review").Funcs(template.FuncMap{
-	"diffFiles": diffFiles,
+	"diffFiles":        diffFiles,
+	"localTimestamp":   func(value time.Time) string { return value.Local().Format("2006-01-02 15:04:05 MST") },
+	"utcTimestamp":     func(value time.Time) string { return value.UTC().Format("2006-01-02 15:04:05 UTC") },
+	"timestampMachine": func(value time.Time) string { return value.UTC().Format(time.RFC3339) },
 }).Parse(`{{define "stylesheet"}}` + stylesheet + `{{end}}` + pageTemplateSource))
 
 func embeddedTemplate(path string) string {

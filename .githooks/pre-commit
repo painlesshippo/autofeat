@@ -37,6 +37,17 @@ check_formatting() {
                     return 1
                 fi
                 ;;
+            *.tmpl)
+                original="$(git show ":$file")"
+                if ! formatted="$(printf '%s\n' "$original" | "$mise" exec -- gotmplfmt)"; then
+                    printf 'Unable to format staged file: %s\n' "$file" >&2
+                    return 1
+                fi
+                if [ "$original" != "$formatted" ]; then
+                    printf 'Run gotmplfmt on %s and stage the result.\n' "$file" >&2
+                    return 1
+                fi
+                ;;
             *.toml)
                 original="$(git show ":$file")"
                 if ! formatted="$(printf '%s\n' "$original" | "$mise" exec -- taplo format --stdin-filepath "$file" -)"; then

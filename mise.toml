@@ -1,5 +1,6 @@
 [tools]
 go = "1.26.5"
+"go:github.com/gohugoio/gotmplfmt" = "0.4.1"
 rumdl = "0.2.38"
 shfmt = "3.13.1"
 svu = "3.4.1"

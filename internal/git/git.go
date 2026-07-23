@@ -286,7 +286,7 @@ func Diff(destPath, baseRef string) (string, error) {
 		return "", err
 	}
 
-	diff, err := run("-C", destPath, "diff", "--binary", comparisonRef)
+	diff, err := run("-C", destPath, "diff", "--binary", "--find-renames", "--find-copies-harder", "--unified=2147483647", comparisonRef)
 	if err != nil {
 		return "", fmt.Errorf("diff worktree %q against %q: %w", destPath, baseRef, err)
 	}
@@ -311,7 +311,7 @@ func Diff(destPath, baseRef string) (string, error) {
 }
 
 func diffUntrackedFile(destPath, relativePath string) (string, error) {
-	command := exec.Command("git", "-C", destPath, "diff", "--no-index", "--binary", "--", "/dev/null", relativePath)
+	command := exec.Command("git", "-C", destPath, "diff", "--no-index", "--binary", "--unified=2147483647", "--", "/dev/null", relativePath)
 	output, err := command.CombinedOutput()
 	if err == nil {
 		return string(output), nil

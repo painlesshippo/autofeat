@@ -62,9 +62,9 @@ Enable the repository's Git hooks after cloning:
 mise run setup-hooks
 ```
 
-The pre-commit hook verifies that staged Go, Markdown, shell, and TOML files are
-formatted with `gofmt`, `rumdl`, `shfmt`, and `taplo` through Mise. The
-commit-message hook enforces Conventional Commits.
+The pre-commit hook verifies that staged Go, Markdown, shell, Go template, and
+TOML files are formatted with `gofmt`, `rumdl`, `shfmt`, `gotmplfmt`, and
+`taplo` through Mise. The commit-message hook enforces Conventional Commits.
 
 ## Releasing
 The build uses `svu` to derive the current `MAJOR.MINOR.PATCH` version from Git
@@ -170,7 +170,8 @@ Generate and open a static HTML review of the changes in every active session.
 Omitting the selector defaults to `"*"`. The review compares each worktree
 with its merge-base against the stored base branch and includes committed,
 staged, unstaged, and untracked changes. It also shows cached ahead and behind
-counts without fetching:
+counts without fetching. Each changed file is labeled as added, modified,
+deleted, renamed, or copied, and its diff includes the whole file as context:
 
 ```sh
 autofeat review

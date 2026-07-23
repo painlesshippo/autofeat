@@ -1,86 +1,65 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>autofeat review</title>
-  <style>{{template "stylesheet"}}</style>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>autofeat review</title>
+  <style>{{ template "stylesheet" }}</style>
 </head>
 <body>
-  <h1>autofeat review</h1>
-  <div class="metadata">Generated {{.GeneratedAt.Format "2006-01-02 15:04:05 MST"}} · Base branch: {{.BaseRef}}</div>
-  {{if .Sessions}}
-    <div class="feature-tabs">
-    {{range $index, $session := .Sessions}}
-      <div class="feature-tab">
-        <input class="feature-tab-input" type="radio" name="feature" id="feature-{{$index}}"{{if eq $index 0}} checked{{end}}>
-        <label class="feature-tab-label" for="feature-{{$index}}">{{$session.FeatureName}}</label>
-        <section class="feature-tab-panel">
-          <dl class="feature-metadata">
-            {{if not $session.CreatedAt.IsZero}}
-            <div>
-              <dt>Created</dt>
-              <dd><time datetime="{{$session.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{$session.CreatedAt.Format "2006-01-02 15:04 MST"}}</time></dd>
-            </div>
-            {{end}}
-            <div>
-              <dt>Repositories</dt>
-              <dd>{{len $session.Repositories}}</dd>
-            </div>
-            {{if $session.FeatureDir}}
-            <div>
-              <dt>Feature directory</dt>
-              <dd class="path">{{$session.FeatureDir}}</dd>
-            </div>
-            {{end}}
-            {{if $session.WorkspaceFile}}
-            <div>
-              <dt>Workspace</dt>
-              <dd class="path">{{$session.WorkspaceFile}}</dd>
-            </div>
-            {{end}}
-          </dl>
-        {{if .Repositories}}
-          {{range .Repositories}}
-            {{$repository := .}}
-            {{if .Error}}
-              <article class="repository-message">
-                <strong>{{.Name}}</strong>
-                {{if .BaseRef}}<p class="repository-status{{if gt .Behind 0}} drift-behind{{end}}">{{.BaseBranch}} via {{.BaseRef}} · ahead {{.Ahead}} / behind {{.Behind}}</p>{{end}}
-                <p class="error">{{.Error}}</p>
-              </article>
-            {{else if .Diff}}
-              {{range diffFiles .Diff}}
-              <article class="file-change">
-                <header class="file-header">
-                  <span class="repository-name">{{$repository.Name}}</span>
-                  <h3>{{.Name}}</h3>
-                  {{if $repository.BaseRef}}
-                  <span class="repository-status{{if gt $repository.Behind 0}} drift-behind{{end}}">{{$repository.BaseBranch}} via {{$repository.BaseRef}} · ahead {{$repository.Ahead}} / behind {{$repository.Behind}}</span>
-                  {{end}}
-                </header>
-                <pre>{{range .Lines}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</pre>
-              </article>
-              {{end}}
-            {{else}}
-              <article class="repository-message">
-                <strong>{{.Name}}</strong>
-                {{if .BaseRef}}
-                <p class="repository-status{{if gt .Behind 0}} drift-behind{{end}}">{{.BaseBranch}} via {{.BaseRef}} · ahead {{.Ahead}} / behind {{.Behind}}</p>
-                {{end}}
-                <p class="empty">No changes relative to {{.BaseBranch}}.</p>
-              </article>
-            {{end}}
-          {{end}}
-        {{else}}
-          <p class="empty">This feature session has no repositories.</p>
-        {{end}}
-        </section>
-      </div>
-    {{end}}
-    </div>
-  {{else}}
-    <p class="empty">No active feature sessions were found.</p>
-  {{end}}
+	<header class="review-heading">
+		<h1>autofeat review</h1>
+		<div class="metadata">Generated at <time datetime="{{ timestampMachine .GeneratedAt }}" title="{{ utcTimestamp .GeneratedAt }}">{{ localTimestamp .GeneratedAt }}</time></div>
+	</header>
+	{{ if .Sessions }}
+		<div class="feature-tabs">
+			{{ range $index, $session := .Sessions }}
+				<div class="feature-tab">
+					<input class="feature-tab-input" type="radio" name="feature" id="feature-{{ $index }}"{{ if eq $index 0 }} checked{{ end }}>
+					<label class="feature-tab-label" for="feature-{{ $index }}">{{ $session.FeatureName }}</label>
+					<section class="feature-tab-panel">
+						<div class="feature-metadata">{{ len $session.Repositories }} repo{{ if ne (len $session.Repositories) 1 }}s{{ end }}{{ if $session.FeatureDir }} · <span class="path">{{ $session.FeatureDir }}</span>{{ end }}</div>
+						{{ if .Repositories }}
+							{{ range .Repositories }}
+								{{ $repository := . }}
+								{{ if .Error }}
+									<article class="repository-message">
+										<strong>{{ .Name }}</strong>
+										{{ if .BaseRef }}<p class="repository-status{{ if gt .Behind 0 }} drift-behind{{ end }}">{{ .BaseBranch }} via {{ .BaseRef }} · ahead {{ .Ahead }} / behind {{ .Behind }}</p>{{ end }}
+										<p class="error">{{ .Error }}</p>
+									</article>
+								{{ else if .Diff }}
+									{{ range diffFiles .Diff }}
+										<article class="file-change">
+											<header class="file-header"{{ if .Metadata }} title="{{ .Metadata }}"{{ end }}>
+												<span class="repository-name">{{ $repository.Name }}</span>
+												<h3>{{ .Name }}</h3>
+												{{ if $repository.BaseRef }}
+													<span class="repository-status{{ if gt $repository.Behind 0 }} drift-behind{{ end }}">{{ $repository.BaseBranch }} via {{ $repository.BaseRef }} · ahead {{ $repository.Ahead }} / behind {{ $repository.Behind }}</span>
+												{{ end }}
+											</header>
+											{{ if .Lines }}<pre class="diff-content">{{ range .Lines }}<span class="{{ .Class }}">{{ .Text }}</span>{{ end }}</pre>{{ end }}
+										</article>
+									{{ end }}
+								{{ else }}
+									<article class="repository-message">
+										<strong>{{ .Name }}</strong>
+										{{ if .BaseRef }}
+											<p class="repository-status{{ if gt .Behind 0 }} drift-behind{{ end }}">{{ .BaseBranch }} via {{ .BaseRef }} · ahead {{ .Ahead }} / behind {{ .Behind }}</p>
+										{{ end }}
+										<p class="empty">No changes relative to {{ .BaseBranch }}.</p>
+									</article>
+								{{ end }}
+							{{ end }}
+						{{ else }}
+							<p class="empty">This feature session has no repositories.</p>
+						{{ end }}
+					</section>
+				</div>
+			{{ end }}
+		</div>
+	{{ else }}
+		<p class="empty">No active feature sessions were found.</p>
+	{{ end }}
 </body>
 </html>

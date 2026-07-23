@@ -120,6 +120,43 @@ func TestDiffIncludesCommittedAndWorkingTreeChanges(t *testing.T) {
 	}
 }
 
+func TestDiffIncludesFullFileContextAndDetectsRenames(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "master")
+	if err := os.WriteFile(filepath.Join(repoPath, "full.txt"), []byte("first\nsecond\nthird\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "source.txt"), []byte("copied\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "full.txt", "source.txt")
+	runGit(t, repoPath, "commit", "-qm", "add full file")
+	runGit(t, repoPath, "checkout", "-qb", "feature/review")
+
+	if err := os.WriteFile(filepath.Join(repoPath, "full.txt"), []byte("first\nchanged\nthird\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(repoPath, "README.md"), filepath.Join(repoPath, "RENAMED.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "COPIED.txt"), []byte("copied\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "-A")
+
+	diff, err := Diff(repoPath, "master")
+	if err != nil {
+		t.Fatalf("Diff() error = %v", err)
+	}
+	for _, want := range []string{" first", " third", "similarity index 100%", "rename from README.md", "rename to RENAMED.md", "copy from source.txt", "copy to COPIED.txt"} {
+		if !strings.Contains(diff, want) {
+			t.Errorf("Diff() output does not contain %q:\n%s", want, diff)
+		}
+	}
+}
+
 func TestDiffWithNoChanges(t *testing.T) {
 	requireGit(t)
 

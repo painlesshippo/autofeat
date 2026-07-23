@@ -228,26 +228,33 @@ func setMaximum(maximum *atomic.Int32, current int32) {
 }
 
 func TestDiffFilesGroupsLinesAndExtractsPaths(t *testing.T) {
-	files := diffFiles("diff --git a/old.txt b/old.txt\n--- a/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-deleted\ndiff --git a/new.txt b/new.txt\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+added\ndiff --git \"a/image file.png\" \"b/image file.png\"\nBinary files differ\n")
+	files := diffFiles("diff --git a/old.txt b/old.txt\ndeleted file mode 100644\n--- a/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-deleted\ndiff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+added\ndiff --git \"a/image file.png\" \"b/image file.png\"\nBinary files differ\ndiff --git a/old-name.txt b/new-name.txt\nsimilarity index 100%\nrename from old-name.txt\nrename to new-name.txt\ndiff --git a/source.txt b/copy.txt\nsimilarity index 100%\ncopy from source.txt\ncopy to copy.txt\n")
 
-	if len(files) != 3 {
-		t.Fatalf("diffFiles() returned %d files, want 3", len(files))
+	if len(files) != 5 {
+		t.Fatalf("diffFiles() returned %d files, want 5", len(files))
 	}
-	if files[0].Name != "old.txt" || files[1].Name != "new.txt" || files[2].Name != "image file.png" {
-		t.Errorf("diffFiles() names = %q, %q, %q, want old.txt, new.txt, image file.png", files[0].Name, files[1].Name, files[2].Name)
+	if files[0].Status != "Deleted" || files[1].Status != "Added" || files[2].Status != "Modified" || files[3].Status != "Renamed" || files[4].Status != "Copied" {
+		t.Errorf("diffFiles() statuses = %q, %q, %q, %q, %q; want Deleted, Added, Modified, Renamed, Copied", files[0].Status, files[1].Status, files[2].Status, files[3].Status, files[4].Status)
+	}
+	if files[0].Name != "old.txt" || files[1].Name != "new.txt" || files[2].Name != "image file.png" || files[3].OldName != "old-name.txt" || files[3].Name != "new-name.txt" || files[4].OldName != "source.txt" || files[4].Name != "copy.txt" {
+		t.Errorf("diffFiles() paths = %#v, want deleted, added, binary, and renamed paths", files)
 	}
 	if got := files[1].Lines[len(files[1].Lines)-1]; got.Class != "diff-addition" || got.Text != "+added" {
 		t.Errorf("last new-file line = %+v, want classified addition", got)
 	}
-	if got := files[1].Metadata[len(files[1].Metadata)-1]; got.Class != "diff-path" || got.Text != "+++ b/new.txt" {
-		t.Errorf("last new-file metadata line = %+v, want classified path", got)
+	if got := files[1].Metadata; got != "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt" {
+		t.Errorf("new-file metadata = %q, want newline-separated Git headers", got)
 	}
-	if len(files[2].Lines) != 0 || len(files[2].Metadata) != 2 {
-		t.Errorf("binary file groups = %d metadata, %d diff lines; want 2 metadata and no diff lines", len(files[2].Metadata), len(files[2].Lines))
+	if len(files[2].Lines) != 0 || files[2].Metadata != "diff --git \"a/image file.png\" \"b/image file.png\"\nBinary files differ" {
+		t.Errorf("binary file groups = %q metadata, %d diff lines; want Git headers and no diff lines", files[2].Metadata, len(files[2].Lines))
 	}
 }
 
 func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
+	localLocation := time.Local
+	time.Local = time.FixedZone("TEST", 2*60*60)
+	t.Cleanup(func() { time.Local = localLocation })
+
 	contents, err := Render(Report{
 		BaseRef:     "master<script>",
 		GeneratedAt: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC),
@@ -274,7 +281,7 @@ func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
 	}
 
 	html := string(contents)
-	for _, want := range []string{"feature/&lt;unsafe&gt;", "repo&lt;&amp;&gt;", "a.txt", "master&lt;script&gt;", "2026-07-20 09:30 UTC", "/tmp/feature&lt;&amp;&gt;", "/tmp/feature.code-workspace", "Repositories", "refs/remotes/origin/main", "ahead 2 / behind 1", "drift-behind", "file-change", "diff-metadata", "diff-content", ">Metadata<", ">Diff<", "diff-addition", "diff-deletion", "diff-hunk", "background: #2da44e33"} {
+	for _, want := range []string{"feature/&lt;unsafe&gt;", "repo&lt;&amp;&gt;", "a.txt", "2026-07-22 14:00:00 TEST", `datetime="2026-07-22T12:00:00Z"`, `title="2026-07-22 12:00:00 UTC"`, "/tmp/feature&lt;&amp;&gt;", "1 repo", "refs/remotes/origin/main", "ahead 2 / behind 1", "drift-behind", "review-heading", "file-change", `title="diff --git a/a.txt b/a.txt"`, "diff-content", "diff-addition", "diff-deletion", "diff-hunk", "background: #2da44e33"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("Render() output does not contain %q", want)
 		}
@@ -292,6 +299,11 @@ func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
 	}
 	if strings.Contains(html, "<h2") {
 		t.Errorf("Render() output repeats the feature name as a panel heading: %s", html)
+	}
+	for _, unwanted := range []string{"2026-07-20 09:30 UTC", "/tmp/feature.code-workspace", "diff-metadata", ">Metadata<", ">Diff<", "<dt>", "<dd>"} {
+		if strings.Contains(html, unwanted) {
+			t.Errorf("Render() output contains metadata heading %q", unwanted)
+		}
 	}
 }
 

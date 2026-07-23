@@ -8,6 +8,7 @@ cd "$project_root"
 mapfile -d '' go_files < <(git ls-files --cached --others --exclude-standard -z -- '*.go')
 mapfile -d '' markdown_files < <(git ls-files --cached --others --exclude-standard -z -- '*.md' '*.markdown')
 mapfile -d '' shell_files < <(git ls-files --cached --others --exclude-standard -z -- '*.sh' '.githooks/*')
+mapfile -d '' template_files < <(git ls-files --cached --others --exclude-standard -z -- '*.tmpl')
 mapfile -d '' toml_files < <(git ls-files --cached --others --exclude-standard -z -- '*.toml')
 
 if ((${#go_files[@]})); then
@@ -20,6 +21,10 @@ fi
 
 if ((${#shell_files[@]})); then
     shfmt -w -i 4 "${shell_files[@]}"
+fi
+
+if ((${#template_files[@]})); then
+    gotmplfmt -w "${template_files[@]}"
 fi
 
 if ((${#toml_files[@]})); then
