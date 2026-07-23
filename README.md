@@ -1,11 +1,9 @@
 # autofeat
-
 `autofeat` manages disposable Git worktrees for concurrent AI-agent feature
 development. A feature session can group worktrees from multiple repositories
 and open them together in one VS Code workspace.
 
 ## Requirements
-
 * Go 1.26.5 or later, to build or install the CLI.
 * Git installed and available on `PATH`.
 * VS Code's `code` command on `PATH` to use the default workspace-opening
@@ -35,7 +33,6 @@ in the state file to use a different persistent review base; a command-line
 `--base` option is a one-time override.
 
 ## Installation
-
 Install the latest released version:
 
 ```sh
@@ -59,7 +56,6 @@ the `af`, `afp`, and `afl` aliases for `autofeat`, `autofeat review`, and
 `INSTALL_DIR` and `SHELL_RC` when necessary.
 
 ## Development
-
 Enable the repository's Git hooks after cloning:
 
 ```sh
@@ -70,7 +66,6 @@ The pre-commit hook verifies that staged Go files are formatted with `gofmt`
 and runs `rumdl check .` through Mise to lint all Markdown files.
 
 ## Releasing
-
 The build derives the application version from annotated Git tags using
 GitVersion. Do not edit a version constant to make a release. Choose the next
 Semantic Versioning number: increment the patch for compatible fixes, the minor
@@ -90,7 +85,6 @@ and pushes it to `origin`. It aborts before creating a tag when the working
 tree is dirty or remote authentication fails.
 
 ## Usage
-
 Run `autofeat <feature-name>` inside a Git repository to add that repository
 to a feature session. The command creates a branch with the supplied feature
 name, adds a worktree, records the session, and regenerates its VS Code

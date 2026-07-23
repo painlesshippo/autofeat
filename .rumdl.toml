@@ -10,6 +10,13 @@ style = "asterisk"  # Unordered list style (asterisk, plus, dash, consistent)
 [MD007]
 indent = 4  # Unordered list indentation
 
+[MD022]
+lines-above = 1  # Require a blank line before headings
+lines-below = 0  # Do not require a blank line after headings
+
+[MD032]
+enabled = false  # Allow lists directly after headings
+
 [MD012]
 maximum = 1  # Allow at most one consecutive blank line
 
