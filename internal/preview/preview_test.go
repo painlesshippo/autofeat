@@ -201,30 +201,55 @@ func setMaximum(maximum *atomic.Int32, current int32) {
 	}
 }
 
+func TestDiffFilesGroupsLinesAndExtractsPaths(t *testing.T) {
+	files := diffFiles("diff --git a/old.txt b/old.txt\n--- a/old.txt\n+++ /dev/null\n-deleted\ndiff --git a/new.txt b/new.txt\n--- /dev/null\n+++ b/new.txt\n+added\ndiff --git \"a/image file.png\" \"b/image file.png\"\nBinary files differ\n")
+
+	if len(files) != 3 {
+		t.Fatalf("diffFiles() returned %d files, want 3", len(files))
+	}
+	if files[0].Name != "old.txt" || files[1].Name != "new.txt" || files[2].Name != "image file.png" {
+		t.Errorf("diffFiles() names = %q, %q, %q, want old.txt, new.txt, image file.png", files[0].Name, files[1].Name, files[2].Name)
+	}
+	if got := files[1].Lines[len(files[1].Lines)-1]; got.Class != "diff-addition" || got.Text != "+added\n" {
+		t.Errorf("last new-file line = %+v, want classified addition with newline", got)
+	}
+}
+
 func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
 	contents, err := Render(Report{
 		BaseRef:     "master<script>",
 		GeneratedAt: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC),
-		Sessions: []Session{{
-			FeatureName: "feature/<unsafe>",
-			Repositories: []Repository{{
-				Name: "repo<&>",
-				Diff: "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-old <value>\n+new <value>\n",
-			}},
-		}},
+		Sessions: []Session{
+			{
+				FeatureName: "feature/<unsafe>",
+				Repositories: []Repository{{
+					Name: "repo<&>",
+					Diff: "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-old <value>\n+new <value>\n",
+				}},
+			},
+			{FeatureName: "feature/two"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Render() error = %v", err)
 	}
 
 	html := string(contents)
-	for _, want := range []string{"feature/&lt;unsafe&gt;", "repo&lt;&amp;&gt;", "master&lt;script&gt;", "diff-addition", "diff-deletion", "diff-hunk", "background: #2da44e33"} {
+	for _, want := range []string{"feature/&lt;unsafe&gt;", "repo&lt;&amp;&gt;", "a.txt", "master&lt;script&gt;", "file-change", "diff-addition", "diff-deletion", "diff-hunk", "background: #2da44e33"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("Render() output does not contain %q", want)
 		}
 	}
 	if strings.Contains(html, "<unsafe>") || strings.Contains(html, "<value>") {
 		t.Errorf("Render() output contains unescaped text: %s", html)
+	}
+	for _, want := range []string{`id="feature-0" checked`, `for="feature-0"`, `id="feature-1"`, `for="feature-1"`, `.feature-tab-input:checked`, `type="radio"`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("Render() tab output does not contain %q", want)
+		}
+	}
+	if strings.Contains(html, "<script") {
+		t.Errorf("Render() output contains JavaScript: %s", html)
 	}
 }
 

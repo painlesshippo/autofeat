@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"html/template"
+	"strconv"
 	"strings"
 )
 
@@ -21,17 +22,64 @@ type diffLine struct {
 	Text  string
 }
 
-func diffLines(diff string) []diffLine {
+type diffFile struct {
+	Name  string
+	Lines []diffLine
+}
+
+func diffFiles(diff string) []diffFile {
 	if diff == "" {
 		return nil
 	}
 
 	lines := strings.Split(strings.TrimSuffix(diff, "\n"), "\n")
-	result := make([]diffLine, 0, len(lines))
+	result := make([]diffFile, 0)
 	for _, line := range lines {
-		result = append(result, diffLine{Class: diffLineClass(line), Text: line})
+		if strings.HasPrefix(line, "diff --git ") {
+			result = append(result, diffFile{Name: diffHeaderPath(line)})
+		}
+		if len(result) == 0 {
+			result = append(result, diffFile{Name: "Changes"})
+		}
+
+		file := &result[len(result)-1]
+		if strings.HasPrefix(line, "+++ ") {
+			if path := diffPath(strings.TrimPrefix(line, "+++ ")); path != "" {
+				file.Name = path
+			}
+		} else if file.Name == "Changed file" && strings.HasPrefix(line, "--- ") {
+			if path := diffPath(strings.TrimPrefix(line, "--- ")); path != "" {
+				file.Name = path
+			}
+		}
+		file.Lines = append(file.Lines, diffLine{Class: diffLineClass(line), Text: line + "\n"})
 	}
 	return result
+}
+
+func diffHeaderPath(line string) string {
+	header := strings.TrimPrefix(line, "diff --git ")
+	if index := strings.LastIndex(header, `"b/`); index >= 0 {
+		if path := diffPath(header[index:]); path != "" {
+			return path
+		}
+	}
+	if index := strings.LastIndex(header, " b/"); index >= 0 {
+		return diffPath(header[index+1:])
+	}
+	return "Changed file"
+}
+
+func diffPath(path string) string {
+	if path == "/dev/null" {
+		return ""
+	}
+	if strings.HasPrefix(path, `"`) {
+		if unquoted, err := strconv.Unquote(path); err == nil {
+			path = unquoted
+		}
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(path, "a/"), "b/")
 }
 
 func diffLineClass(line string) string {
@@ -61,7 +109,7 @@ var pageTemplateSource = embeddedTemplate("templates/preview.html.tmpl")
 var stylesheet = embeddedTemplate("templates/preview.css")
 
 var pageTemplate = template.Must(template.New("preview").Funcs(template.FuncMap{
-	"diffLines": diffLines,
+	"diffFiles": diffFiles,
 }).Parse(`{{define "stylesheet"}}` + stylesheet + `{{end}}` + pageTemplateSource))
 
 func embeddedTemplate(path string) string {

@@ -8,30 +8,47 @@
 </head>
 <body>
   <h1>autofeat review</h1>
-  <p class="metadata">Generated {{.GeneratedAt.Format "2006-01-02 15:04:05 MST"}} · Base branch: {{.BaseRef}}</p>
+  <div class="metadata">Generated {{.GeneratedAt.Format "2006-01-02 15:04:05 MST"}} · Base branch: {{.BaseRef}}</div>
   {{if .Sessions}}
-    {{range .Sessions}}
-      <section>
-        <h2>{{.FeatureName}}</h2>
+    <div class="feature-tabs">
+    {{range $index, $session := .Sessions}}
+      <div class="feature-tab">
+        <input class="feature-tab-input" type="radio" name="feature" id="feature-{{$index}}"{{if eq $index 0}} checked{{end}}>
+        <label class="feature-tab-label" for="feature-{{$index}}">{{$session.FeatureName}}</label>
+        <section class="feature-tab-panel">
+          <h2>{{$session.FeatureName}}</h2>
         {{if .Repositories}}
           {{range .Repositories}}
-            <article class="repository">
-              <h3>{{.Name}}</h3>
-              {{if .Error}}
+            {{$repository := .}}
+            {{if .Error}}
+              <article class="repository-message">
+                <strong>{{.Name}}</strong>
                 <p class="error">{{.Error}}</p>
-              {{else if .Diff}}
-                <pre>{{range diffLines .Diff}}<span class="{{.Class}}">{{.Text}}</span>
-{{end}}</pre>
-              {{else}}
-                <p class="empty">No changes relative to {{.BaseBranch}}.</p>
+              </article>
+            {{else if .Diff}}
+              {{range diffFiles .Diff}}
+              <article class="file-change">
+                <header class="file-header">
+                  <span class="repository-name">{{$repository.Name}}</span>
+                  <h3>{{.Name}}</h3>
+                </header>
+                <pre>{{range .Lines}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</pre>
+              </article>
               {{end}}
-            </article>
+            {{else}}
+              <article class="repository-message">
+                <strong>{{.Name}}</strong>
+                <p class="empty">No changes relative to {{.BaseBranch}}.</p>
+              </article>
+            {{end}}
           {{end}}
         {{else}}
           <p class="empty">This feature session has no repositories.</p>
         {{end}}
-      </section>
+        </section>
+      </div>
     {{end}}
+    </div>
   {{else}}
     <p class="empty">No active feature sessions were found.</p>
   {{end}}
