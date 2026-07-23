@@ -31,7 +31,7 @@ var (
 const headlessPrompt = "Please execute the objectives defined in TASK.md"
 
 var (
-	previewCommand     = previewSessions
+	reviewCommand      = reviewSessions
 	openFeatureCommand = openSession
 	runFeatureCommand  = runFeature
 	syncFeatureCommand = syncFeature
@@ -76,12 +76,12 @@ func run(args []string) error {
 		})
 	case "sync":
 		return runSelectedFeatures(args[1:], syncFeatureCommand)
-	case "preview":
-		selectors, baseRef, err := previewArguments(args[1:])
+	case "review":
+		selectors, baseRef, err := reviewArguments(args[1:])
 		if err != nil {
 			return usageError()
 		}
-		return previewCommand(selectors, baseRef)
+		return reviewCommand(selectors, baseRef)
 	case "teardown":
 		selectors, force, err := teardownArguments(args[1:])
 		if err != nil {
@@ -128,7 +128,7 @@ func runArguments(args []string) ([]string, string, error) {
 	return args, "", nil
 }
 
-func previewArguments(args []string) ([]string, string, error) {
+func reviewArguments(args []string) ([]string, string, error) {
 	selectors := make([]string, 0, len(args))
 	baseRef := ""
 	for index := 0; index < len(args); index++ {
@@ -137,14 +137,14 @@ func previewArguments(args []string) ([]string, string, error) {
 			continue
 		}
 		if baseRef != "" || index+1 >= len(args) || args[index+1] == "" {
-			return nil, "", errors.New("invalid preview arguments")
+			return nil, "", errors.New("invalid review arguments")
 		}
 		baseRef = args[index+1]
 		index++
 	}
 	if baseRef != "" {
 		if err := gitcmd.ValidateBranchName(baseRef); err != nil {
-			return nil, "", fmt.Errorf("invalid preview base %q: %w", baseRef, err)
+			return nil, "", fmt.Errorf("invalid review base %q: %w", baseRef, err)
 		}
 	}
 	if len(selectors) == 0 {
@@ -675,7 +675,7 @@ func appendTask(featureDir, task string) error {
 	return nil
 }
 
-func previewSessions(selectors []string, baseRef string) error {
+func reviewSessions(selectors []string, baseRef string) error {
 	reviewState, err := loadReviewState()
 	if err != nil {
 		return err
@@ -896,5 +896,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat <new|open|run|sync|preview|teardown|list|version> [feature-selector ...] [options]")
+	return errors.New("usage: autofeat <new|open|run|sync|review|teardown|list|version> [feature-selector ...] [options]")
 }

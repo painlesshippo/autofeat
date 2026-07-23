@@ -51,7 +51,7 @@ Ensure the installed binary directory, or the directory containing the built
 binary, is on `PATH`.
 
 `mise run install` installs the built binary into `$HOME/.local/bin` and adds
-the `af`, `afp`, and `afl` aliases for `autofeat`, `autofeat preview`, and
+the `af`, `afr`, and `afl` aliases for `autofeat`, `autofeat review`, and
 `autofeat list` to `$HOME/.bashrc` by default. Override these locations with
 `INSTALL_DIR` and `SHELL_RC` when necessary.
 
@@ -166,23 +166,23 @@ and leaves the rebase in progress so it can be continued or aborted with the
 Git commands printed by `autofeat`. Repositories without an `origin` remote
 rebase onto their local base branch without fetching.
 
-Generate and open a static HTML preview of the changes in every active session.
-Omitting the selector defaults to `"*"`. The preview compares each worktree
+Generate and open a static HTML review of the changes in every active session.
+Omitting the selector defaults to `"*"`. The review compares each worktree
 with its merge-base against the stored base branch and includes committed,
 staged, unstaged, and untracked changes. It also shows cached ahead and behind
 counts without fetching:
 
 ```sh
-autofeat preview
-autofeat preview "*"
+autofeat review
+autofeat review "*"
 ```
 
-Preview one feature session or every feature whose name starts with
+Review one feature session or every feature whose name starts with
 `feature/`:
 
 ```sh
-autofeat preview feature/potato
-autofeat preview "feature/*"
+autofeat review feature/potato
+autofeat review "feature/*"
 ```
 
 Running the feature command outside a Git repository also opens an existing
@@ -206,14 +206,14 @@ network access.
 Use another branch as a one-time comparison override when needed:
 
 ```sh
-autofeat preview --base develop
-autofeat preview feature/potato --base develop
+autofeat review --base develop
+autofeat review feature/potato --base develop
 ```
 
 The command writes `$HOME/.autofeat/review.html`, opens it in the default
 browser, and exits. It renders repository-level errors when the selected base
 branch is unavailable, while continuing to render the other repositories. The
-file is a snapshot: run `autofeat preview` again after changes to refresh it.
+file is a snapshot: run `autofeat review` again after changes to refresh it.
 Browser refresh only reloads the latest generated snapshot. Native Linux uses
 `xdg-open`; WSL opens the snapshot through Windows `explorer.exe`.
 

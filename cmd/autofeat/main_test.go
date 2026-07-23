@@ -20,40 +20,40 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
-func TestPreviewCommandDispatch(t *testing.T) {
-	originalPreviewCommand := previewCommand
+func TestReviewCommandDispatch(t *testing.T) {
+	originalReviewCommand := reviewCommand
 	t.Cleanup(func() {
-		previewCommand = originalPreviewCommand
+		reviewCommand = originalReviewCommand
 	})
 
 	var gotSelectors []string
 	var gotBase string
-	previewCommand = func(selectors []string, baseRef string) error {
+	reviewCommand = func(selectors []string, baseRef string) error {
 		gotSelectors = selectors
 		gotBase = baseRef
 		return nil
 	}
 
-	if err := run([]string{"preview"}); err != nil {
-		t.Fatalf("run(preview) error = %v", err)
+	if err := run([]string{"review"}); err != nil {
+		t.Fatalf("run(review) error = %v", err)
 	}
 	if len(gotSelectors) != 1 || gotSelectors[0] != "*" || gotBase != "" {
-		t.Errorf("run(preview) = (%q, %q), want ([*], stored base)", gotSelectors, gotBase)
+		t.Errorf("run(review) = (%q, %q), want ([*], stored base)", gotSelectors, gotBase)
 	}
 
-	if err := run([]string{"preview", "feature/*", "--base", "develop"}); err != nil {
-		t.Fatalf("run(preview feature/* --base develop) error = %v", err)
+	if err := run([]string{"review", "feature/*", "--base", "develop"}); err != nil {
+		t.Fatalf("run(review feature/* --base develop) error = %v", err)
 	}
 	if len(gotSelectors) != 1 || gotSelectors[0] != "feature/*" || gotBase != "develop" {
-		t.Errorf("preview dispatch = (%q, %q), want ([feature/*], develop)", gotSelectors, gotBase)
+		t.Errorf("review dispatch = (%q, %q), want ([feature/*], develop)", gotSelectors, gotBase)
 	}
 
-	if err := run([]string{"preview", "--base"}); err == nil {
-		t.Error("run(preview --base) error = nil, want usage error")
+	if err := run([]string{"review", "--base"}); err == nil {
+		t.Error("run(review --base) error = nil, want usage error")
 	}
 }
 
-func TestPreviewArgumentsRecognizesShellExpandedWildcard(t *testing.T) {
+func TestReviewArgumentsRecognizesShellExpandedWildcard(t *testing.T) {
 	directory := t.TempDir()
 	for _, name := range []string{"bin", "cmd", "README.md"} {
 		path := filepath.Join(directory, name)
@@ -74,12 +74,12 @@ func TestPreviewArgumentsRecognizesShellExpandedWildcard(t *testing.T) {
 		}
 	})
 
-	selectors, baseRef, err := previewArguments([]string{"README.md", "bin", "cmd"})
+	selectors, baseRef, err := reviewArguments([]string{"README.md", "bin", "cmd"})
 	if err != nil {
-		t.Fatalf("previewArguments(shell expansion) error = %v", err)
+		t.Fatalf("reviewArguments(shell expansion) error = %v", err)
 	}
 	if len(selectors) != 1 || selectors[0] != "*" || baseRef != "" {
-		t.Errorf("previewArguments(shell expansion) = (%q, %q), want ([*], empty base)", selectors, baseRef)
+		t.Errorf("reviewArguments(shell expansion) = (%q, %q), want ([*], empty base)", selectors, baseRef)
 	}
 }
 
