@@ -1,5 +1,5 @@
-// Package preview builds static HTML snapshots of autofeat worktree changes.
-package preview
+// Package review builds static HTML snapshots of autofeat worktree changes.
+package review
 
 import (
 	"sort"
@@ -12,14 +12,14 @@ import (
 
 const maxDiffWorkers = 4
 
-// Report contains the change data rendered into a preview snapshot.
+// Report contains the change data rendered into a review snapshot.
 type Report struct {
 	BaseRef     string
 	GeneratedAt time.Time
 	Sessions    []Session
 }
 
-// Session contains one feature session's repository previews.
+// Session contains one feature session's repository reviews.
 type Session struct {
 	FeatureName   string
 	CreatedAt     time.Time
@@ -28,7 +28,7 @@ type Session struct {
 	Repositories  []Repository
 }
 
-// Repository contains the preview result for one worktree.
+// Repository contains the review result for one worktree.
 type Repository struct {
 	Name       string
 	BaseBranch string
@@ -50,7 +50,7 @@ type diffJob struct {
 }
 
 // Build collects a worktree diff for every repository in sessions. A failure
-// for one repository is retained in its report so other previews remain useful.
+// for one repository is retained in its report so other reviews remain useful.
 func Build(sessions map[string]state.Session, defaultBaseBranch, overrideBaseBranch string, generatedAt time.Time) Report {
 	return buildWithRepositoryData(sessions, defaultBaseBranch, overrideBaseBranch, generatedAt, func(destPath, baseBranch string) (string, gitcmd.BaseStatus, error) {
 		status, err := gitcmd.CachedBaseStatus(destPath, baseBranch)
@@ -92,7 +92,7 @@ func buildWithRepositoryData(sessions map[string]state.Session, defaultBaseBranc
 			return repositories[i].Name < repositories[j].Name
 		})
 
-		previewSession := Session{
+		reviewSession := Session{
 			FeatureName:   featureName,
 			CreatedAt:     session.CreatedAt,
 			FeatureDir:    session.FeatureDir,
@@ -108,7 +108,7 @@ func buildWithRepositoryData(sessions map[string]state.Session, defaultBaseBranc
 			})
 		}
 
-		report.Sessions = append(report.Sessions, previewSession)
+		report.Sessions = append(report.Sessions, reviewSession)
 	}
 
 	collectRepositoryData(&report, jobs, collectData)

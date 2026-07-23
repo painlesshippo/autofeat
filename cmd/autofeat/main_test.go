@@ -85,9 +85,6 @@ func TestReviewCommandDispatch(t *testing.T) {
 		t.Error("run(review --base) error = nil, want usage error")
 	}
 
-	if err := run([]string{"preview"}); err != nil {
-		t.Fatalf("run(preview) error = %v", err)
-	}
 }
 
 func TestRunAndReviewCommandDispatch(t *testing.T) {

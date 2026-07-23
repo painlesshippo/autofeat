@@ -90,7 +90,7 @@ func TestDiffIncludesCommittedAndWorkingTreeChanges(t *testing.T) {
 
 	repoPath := createRepository(t)
 	runGit(t, repoPath, "branch", "-M", "master")
-	runGit(t, repoPath, "checkout", "-qb", "feature/preview")
+	runGit(t, repoPath, "checkout", "-qb", "feature/review")
 
 	if err := os.WriteFile(filepath.Join(repoPath, "committed.txt"), []byte("committed\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestDiffExcludesChangesAddedOnlyToBaseAfterDivergence(t *testing.T) {
 
 	repoPath := createRepository(t)
 	runGit(t, repoPath, "branch", "-M", "master")
-	runGit(t, repoPath, "checkout", "-qb", "feature/preview")
+	runGit(t, repoPath, "checkout", "-qb", "feature/review")
 	if err := os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestDiffExcludesChangesAddedOnlyToBaseAfterDivergence(t *testing.T) {
 	}
 	runGit(t, repoPath, "add", "base.txt")
 	runGit(t, repoPath, "commit", "-qm", "base change")
-	runGit(t, repoPath, "checkout", "feature/preview")
+	runGit(t, repoPath, "checkout", "feature/review")
 
 	diff, err := Diff(repoPath, "master")
 	if err != nil {

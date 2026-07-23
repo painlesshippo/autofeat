@@ -15,7 +15,7 @@ import (
 
 	"github.com/painlesshippo/autofeat/internal/config"
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
-	"github.com/painlesshippo/autofeat/internal/preview"
+	"github.com/painlesshippo/autofeat/internal/review"
 	"github.com/painlesshippo/autofeat/internal/state"
 	"github.com/painlesshippo/autofeat/internal/workspace"
 )
@@ -62,14 +62,13 @@ func run(args []string) error {
 		fmt.Printf("autofeat %s\ncommit: %s\nbuilt: %s\ngo: %s\n", version, commit, buildDatetime, goVersion)
 		return nil
 	}
-	if args[0] == "review" || args[0] == "preview" {
+	if args[0] == "review" {
 		baseRef, err := reviewBase(args[1:])
 		if err != nil {
 			return usageError()
 		}
 		return reviewCommand(baseRef)
 	}
-
 	featureName := args[0]
 	if err := validateFeatureName(featureName); err != nil {
 		return err
@@ -576,8 +575,8 @@ func reviewBase(args []string) (string, error) {
 
 func openReview(sessions map[string]state.Session, defaultBaseBranch, overrideBaseBranch string) error {
 	generationStarted := time.Now()
-	report := preview.Build(sessions, defaultBaseBranch, overrideBaseBranch, time.Now())
-	contents, err := preview.Render(report)
+	report := review.Build(sessions, defaultBaseBranch, overrideBaseBranch, time.Now())
+	contents, err := review.Render(report)
 	if err != nil {
 		return fmt.Errorf("render review: %w", err)
 	}
@@ -587,7 +586,7 @@ func openReview(sessions map[string]state.Session, defaultBaseBranch, overrideBa
 		return err
 	}
 	snapshotPath := filepath.Join(filepath.Dir(configPath), "review.html")
-	if err := preview.WriteSnapshot(snapshotPath, contents); err != nil {
+	if err := review.WriteSnapshot(snapshotPath, contents); err != nil {
 		return err
 	}
 	generationDuration := time.Since(generationStarted)
@@ -668,7 +667,7 @@ func openReviewInBrowser(snapshotPath string) error {
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	if err := command.Start(); err != nil {
-		return fmt.Errorf("open preview with %q: %w", opener, err)
+		return fmt.Errorf("open review with %q: %w", opener, err)
 	}
 	go func() {
 		_ = command.Wait()
@@ -689,7 +688,7 @@ func isWSLRelease(release string) bool {
 func wslWindowsPath(path string) (string, error) {
 	output, err := exec.Command("wslpath", "-w", path).Output()
 	if err != nil {
-		return "", fmt.Errorf("convert preview path for Windows: %w", err)
+		return "", fmt.Errorf("convert review path for Windows: %w", err)
 	}
 
 	return strings.TrimSpace(string(output)), nil

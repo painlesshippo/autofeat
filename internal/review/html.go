@@ -1,4 +1,4 @@
-package preview
+package review
 
 import (
 	"bytes"
@@ -104,11 +104,11 @@ func diffLineClass(line string) string {
 //go:embed templates/*
 var templateFiles embed.FS
 
-var pageTemplateSource = embeddedTemplate("templates/preview.html.tmpl")
+var pageTemplateSource = embeddedTemplate("templates/review.html.tmpl")
 
-var stylesheet = embeddedTemplate("templates/preview.css")
+var stylesheet = embeddedTemplate("templates/review.css")
 
-var pageTemplate = template.Must(template.New("preview").Funcs(template.FuncMap{
+var pageTemplate = template.Must(template.New("review").Funcs(template.FuncMap{
 	"diffFiles": diffFiles,
 }).Parse(`{{define "stylesheet"}}` + stylesheet + `{{end}}` + pageTemplateSource))
 

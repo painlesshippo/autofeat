@@ -1,4 +1,4 @@
-package preview
+package review
 
 import (
 	"errors"
@@ -290,7 +290,7 @@ func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
 }
 
 func TestWriteSnapshotReplacesPrivateFile(t *testing.T) {
-	snapshotPath := filepath.Join(t.TempDir(), ".autofeat", "preview.html")
+	snapshotPath := filepath.Join(t.TempDir(), ".autofeat", "review.html")
 	if err := WriteSnapshot(snapshotPath, []byte("first")); err != nil {
 		t.Fatalf("WriteSnapshot() first write error = %v", err)
 	}
