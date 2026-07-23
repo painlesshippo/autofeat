@@ -144,6 +144,38 @@ func TestDiffRejectsMissingBase(t *testing.T) {
 	}
 }
 
+func TestDiffExcludesChangesAddedOnlyToBaseAfterDivergence(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "master")
+	runGit(t, repoPath, "checkout", "-qb", "feature/preview")
+	if err := os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "feature.txt")
+	runGit(t, repoPath, "commit", "-qm", "feature change")
+
+	runGit(t, repoPath, "checkout", "master")
+	if err := os.WriteFile(filepath.Join(repoPath, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "base.txt")
+	runGit(t, repoPath, "commit", "-qm", "base change")
+	runGit(t, repoPath, "checkout", "feature/preview")
+
+	diff, err := Diff(repoPath, "master")
+	if err != nil {
+		t.Fatalf("Diff() error = %v", err)
+	}
+	if !strings.Contains(diff, "feature.txt") {
+		t.Errorf("Diff() does not contain feature change:\n%s", diff)
+	}
+	if strings.Contains(diff, "base.txt") {
+		t.Errorf("Diff() contains base-only change:\n%s", diff)
+	}
+}
+
 func TestDetectBaseBranch(t *testing.T) {
 	requireGit(t)
 
@@ -178,6 +210,131 @@ func TestDetectBaseBranch(t *testing.T) {
 	}
 }
 
+func TestResolveBaseRefPrefersOriginAndFallsBackWithoutIt(t *testing.T) {
+	requireGit(t)
+
+	localPath := createRepository(t)
+	runGit(t, localPath, "branch", "-M", "main")
+	baseRef, err := ResolveBaseRef(localPath, "main")
+	if err != nil {
+		t.Fatalf("ResolveBaseRef() local error = %v", err)
+	}
+	if baseRef != "refs/heads/main" {
+		t.Errorf("ResolveBaseRef() local = %q, want refs/heads/main", baseRef)
+	}
+
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, localPath, "init", "--bare", "-q", remotePath)
+	runGit(t, localPath, "remote", "add", "origin", remotePath)
+	runGit(t, localPath, "push", "-qu", "origin", "main")
+	baseRef, err = ResolveBaseRef(localPath, "main")
+	if err != nil {
+		t.Fatalf("ResolveBaseRef() origin error = %v", err)
+	}
+	if baseRef != "refs/remotes/origin/main" {
+		t.Errorf("ResolveBaseRef() origin = %q, want refs/remotes/origin/main", baseRef)
+	}
+}
+
+func TestFetchBaseAndAheadBehind(t *testing.T) {
+	requireGit(t)
+
+	sourcePath := createRepository(t)
+	runGit(t, sourcePath, "branch", "-M", "main")
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, sourcePath, "init", "--bare", "-q", remotePath)
+	runGit(t, sourcePath, "remote", "add", "origin", remotePath)
+	runGit(t, sourcePath, "push", "-qu", "origin", "main")
+
+	clonePath := filepath.Join(t.TempDir(), "clone")
+	if err := Clone(remotePath, clonePath); err != nil {
+		t.Fatalf("Clone() error = %v", err)
+	}
+	if err := CheckoutNewBranch(clonePath, "feature/sync", "origin/main"); err != nil {
+		t.Fatalf("CheckoutNewBranch() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(clonePath, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, clonePath, "add", "feature.txt")
+	runGit(t, clonePath, "config", "user.email", "test@example.com")
+	runGit(t, clonePath, "config", "user.name", "Test User")
+	runGit(t, clonePath, "commit", "-qm", "feature change")
+
+	if err := os.WriteFile(filepath.Join(sourcePath, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, sourcePath, "add", "base.txt")
+	runGit(t, sourcePath, "commit", "-qm", "base change")
+	runGit(t, sourcePath, "push", "-q", "origin", "main")
+
+	baseRef, err := ResolveBaseRef(clonePath, "main")
+	if err != nil {
+		t.Fatalf("ResolveBaseRef() error = %v", err)
+	}
+	ahead, behind, err := AheadBehind(clonePath, baseRef)
+	if err != nil {
+		t.Fatalf("AheadBehind() before fetch error = %v", err)
+	}
+	if ahead != 1 || behind != 0 {
+		t.Errorf("AheadBehind() before fetch = (%d, %d), want (1, 0)", ahead, behind)
+	}
+
+	if err := FetchBase(clonePath, "main"); err != nil {
+		t.Fatalf("FetchBase() error = %v", err)
+	}
+	ahead, behind, err = AheadBehind(clonePath, baseRef)
+	if err != nil {
+		t.Fatalf("AheadBehind() after fetch error = %v", err)
+	}
+	if ahead != 1 || behind != 1 {
+		t.Errorf("AheadBehind() after fetch = (%d, %d), want (1, 1)", ahead, behind)
+	}
+
+	if err := Rebase(clonePath, baseRef); err != nil {
+		t.Fatalf("Rebase() error = %v", err)
+	}
+	ahead, behind, err = AheadBehind(clonePath, baseRef)
+	if err != nil {
+		t.Fatalf("AheadBehind() after rebase error = %v", err)
+	}
+	if ahead != 1 || behind != 0 {
+		t.Errorf("AheadBehind() after rebase = (%d, %d), want (1, 0)", ahead, behind)
+	}
+}
+
+func TestRebaseConflictRemainsInProgress(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	runGit(t, repoPath, "checkout", "-qb", "feature/conflict")
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "commit", "-qam", "feature change")
+	runGit(t, repoPath, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "commit", "-qam", "base change")
+	runGit(t, repoPath, "checkout", "feature/conflict")
+	t.Cleanup(func() {
+		_, _ = run("-C", repoPath, "rebase", "--abort")
+	})
+
+	if err := Rebase(repoPath, "main"); err == nil {
+		t.Fatal("Rebase() error = nil, want conflict")
+	}
+	rebasing, err := IsRebaseInProgress(repoPath)
+	if err != nil {
+		t.Fatalf("IsRebaseInProgress() error = %v", err)
+	}
+	if !rebasing {
+		t.Error("IsRebaseInProgress() = false, want true after conflict")
+	}
+}
+
 func TestAddWorktreeAndDetectUncommittedChanges(t *testing.T) {
 	requireGit(t)
 
@@ -185,7 +342,7 @@ func TestAddWorktreeAndDetectUncommittedChanges(t *testing.T) {
 	changeDirectory(t, repoPath)
 	worktreePath := filepath.Join(t.TempDir(), "agent-worktree")
 
-	if err := AddWorktree("agent/test", worktreePath); err != nil {
+	if err := AddWorktree("agent/test", worktreePath, "master"); err != nil {
 		t.Fatalf("AddWorktree() error = %v", err)
 	}
 	t.Cleanup(func() {
@@ -223,13 +380,47 @@ func TestAddWorktreeAndDetectUncommittedChanges(t *testing.T) {
 	}
 }
 
+func TestAddWorktreeStartsFromExplicitBase(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "master")
+	runGit(t, repoPath, "checkout", "-qb", "unrelated")
+	if err := os.WriteFile(filepath.Join(repoPath, "unrelated.txt"), []byte("unrelated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "unrelated.txt")
+	runGit(t, repoPath, "commit", "-qm", "unrelated change")
+	changeDirectory(t, repoPath)
+
+	worktreePath := filepath.Join(t.TempDir(), "agent-worktree")
+	if err := AddWorktree("agent/explicit-base", worktreePath, "master"); err != nil {
+		t.Fatalf("AddWorktree() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = RemoveWorktree(worktreePath, true)
+	})
+
+	if _, err := os.Stat(filepath.Join(worktreePath, "unrelated.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("explicit-base worktree contains unrelated branch file: %v", err)
+	}
+	mergeBase, err := MergeBase(worktreePath, "master")
+	if err != nil {
+		t.Fatalf("MergeBase() error = %v", err)
+	}
+	head := strings.TrimSpace(runGitOutput(t, worktreePath, "rev-parse", "HEAD"))
+	if mergeBase != head {
+		t.Errorf("MergeBase() = %q, want feature HEAD %q", mergeBase, head)
+	}
+}
+
 func TestRemoveWorktree(t *testing.T) {
 	requireGit(t)
 
 	repoPath := createRepository(t)
 	changeDirectory(t, repoPath)
 	worktreePath := filepath.Join(t.TempDir(), "agent-worktree")
-	if err := AddWorktree("agent/remove", worktreePath); err != nil {
+	if err := AddWorktree("agent/remove", worktreePath, "master"); err != nil {
 		t.Fatalf("AddWorktree() error = %v", err)
 	}
 
@@ -257,7 +448,7 @@ func TestCloneCheckoutNewBranchAndDetectUnpushedCommits(t *testing.T) {
 	if err := Clone(remotePath, clonePath); err != nil {
 		t.Fatalf("Clone() error = %v", err)
 	}
-	if err := CheckoutNewBranch(clonePath, "agent/test"); err != nil {
+	if err := CheckoutNewBranch(clonePath, "agent/test", "origin/agent/test"); err != nil {
 		t.Fatalf("CheckoutNewBranch() error = %v", err)
 	}
 
@@ -315,6 +506,16 @@ func runGit(t *testing.T, directory string, args ...string) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, output)
 	}
+}
+
+func runGitOutput(t *testing.T, directory string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, output)
+	}
+	return string(output)
 }
 
 func changeDirectory(t *testing.T, directory string) {

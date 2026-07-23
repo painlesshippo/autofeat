@@ -91,6 +91,11 @@ name, adds a worktree, records the session, and regenerates its VS Code
 workspace. Feature names use valid Git branch syntax, so hierarchical names
 such as `feature/potato` and `bug/f321s-aaa` are supported.
 
+The feature branch starts from the repository's cached `origin/<base>` when an
+`origin` remote exists, or from the local base branch otherwise. Repository
+addition does not fetch, so it remains available offline and uses the most
+recently fetched base commit.
+
 ```sh
 cd ~/sources/repo1
 autofeat feature/potato
@@ -141,9 +146,23 @@ Append an objective to the feature's `TASK.md` before starting the agent:
 autofeat feature/potato run -task "Implement the potato feature and add tests"
 ```
 
+Fetch each repository's configured base branch and rebase the feature onto it:
+
+```sh
+autofeat feature/potato sync
+```
+
+Every worktree in the session must be on the feature branch and have no staged,
+unstaged, or untracked changes before synchronization begins. Repositories are
+then synchronized sequentially. If a rebase conflicts, synchronization stops
+and leaves the rebase in progress so it can be continued or aborted with the
+Git commands printed by `autofeat`. Repositories without an `origin` remote
+rebase onto their local base branch without fetching.
+
 Generate and open a static HTML review of the changes in every active session.
-The review compares each worktree with its stored base branch and includes
-committed, staged, unstaged, and untracked changes:
+The review compares each worktree with its merge-base against the stored base
+branch and includes committed, staged, unstaged, and untracked changes. It also
+shows cached ahead and behind counts without fetching:
 
 ```sh
 autofeat review
@@ -168,6 +187,10 @@ List active sessions:
 ```sh
 autofeat list
 ```
+
+The `DRIFT` column reports cached base drift across each session's repositories.
+Run `sync` to fetch current remote state and rebase; `list` itself never performs
+network access.
 
 Use another branch as a one-time comparison override when needed:
 

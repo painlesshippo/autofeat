@@ -2,8 +2,12 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+
+	gitcmd "github.com/painlesshippo/autofeat/internal/git"
+	"github.com/painlesshippo/autofeat/internal/state"
 )
 
 func TestVersionCommand(t *testing.T) {
@@ -141,6 +145,162 @@ func TestRunAndReviewCommandDispatch(t *testing.T) {
 	if err := run([]string{"feature/run", "run", "-task"}); err == nil {
 		t.Error("run(feature/run run -task) error = nil, want usage error")
 	}
+}
+
+func TestSyncCommandDispatch(t *testing.T) {
+	originalSyncFeatureCommand := syncFeatureCommand
+	t.Cleanup(func() {
+		syncFeatureCommand = originalSyncFeatureCommand
+	})
+
+	var gotFeatureName string
+	syncFeatureCommand = func(featureName string) error {
+		gotFeatureName = featureName
+		return nil
+	}
+
+	if err := run([]string{"feature/sync", "sync"}); err != nil {
+		t.Fatalf("run(feature/sync sync) error = %v", err)
+	}
+	if gotFeatureName != "feature/sync" {
+		t.Errorf("sync feature = %q, want feature/sync", gotFeatureName)
+	}
+}
+
+func TestSyncFeatureFetchesAndRebases(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	sourcePath, remotePath := createRemoteMainRepository(t)
+	worktreePath := filepath.Join(t.TempDir(), "clone")
+	runMainGit(t, t.TempDir(), "clone", "-q", remotePath, worktreePath)
+	runMainGit(t, worktreePath, "config", "user.email", "test@example.com")
+	runMainGit(t, worktreePath, "config", "user.name", "Test User")
+	runMainGit(t, worktreePath, "checkout", "-qb", "feature/sync", "origin/main")
+	writeAndCommitMainFile(t, worktreePath, "feature.txt", "feature\n", "feature change")
+	writeAndCommitMainFile(t, sourcePath, "base.txt", "base\n", "base change")
+	runMainGit(t, sourcePath, "push", "-q", "origin", "main")
+
+	if err := state.SaveSession("feature/sync", state.Session{Repos: []state.Repository{{
+		Name: "repository", WorktreePath: worktreePath, BaseBranch: "main",
+	}}}); err != nil {
+		t.Fatalf("SaveSession() error = %v", err)
+	}
+	if err := syncFeature("feature/sync"); err != nil {
+		t.Fatalf("syncFeature() error = %v", err)
+	}
+
+	status, err := gitcmd.CachedBaseStatus(worktreePath, "main")
+	if err != nil {
+		t.Fatalf("CachedBaseStatus() error = %v", err)
+	}
+	if status.Ahead != 1 || status.Behind != 0 {
+		t.Errorf("status after sync = (%d ahead, %d behind), want (1, 0)", status.Ahead, status.Behind)
+	}
+}
+
+func TestSyncFeatureDirtyPreflightDoesNotFetch(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	sourcePath, remotePath := createRemoteMainRepository(t)
+	worktreePath := filepath.Join(t.TempDir(), "clone")
+	runMainGit(t, t.TempDir(), "clone", "-q", remotePath, worktreePath)
+	runMainGit(t, worktreePath, "checkout", "-qb", "feature/dirty", "origin/main")
+	originalBase := mainGitOutput(t, worktreePath, "rev-parse", "origin/main")
+	writeAndCommitMainFile(t, sourcePath, "base.txt", "base\n", "base change")
+	runMainGit(t, sourcePath, "push", "-q", "origin", "main")
+	if err := os.WriteFile(filepath.Join(worktreePath, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := state.SaveSession("feature/dirty", state.Session{Repos: []state.Repository{{
+		Name: "repository", WorktreePath: worktreePath, BaseBranch: "main",
+	}}}); err != nil {
+		t.Fatalf("SaveSession() error = %v", err)
+	}
+	if err := syncFeature("feature/dirty"); err == nil {
+		t.Fatal("syncFeature() error = nil, want dirty worktree error")
+	}
+	if got := mainGitOutput(t, worktreePath, "rev-parse", "origin/main"); got != originalBase {
+		t.Errorf("origin/main changed during failed preflight: got %q, want %q", got, originalBase)
+	}
+}
+
+func TestSessionDrift(t *testing.T) {
+	requireMainGit(t)
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "checkout", "-qb", "feature/drift")
+	writeAndCommitMainFile(t, repoPath, "feature.txt", "feature\n", "feature change")
+	runMainGit(t, repoPath, "checkout", "main")
+	writeAndCommitMainFile(t, repoPath, "base.txt", "base\n", "base change")
+	runMainGit(t, repoPath, "checkout", "feature/drift")
+
+	session := state.Session{Repos: []state.Repository{{Name: "repository", WorktreePath: repoPath, BaseBranch: "main"}}}
+	if got := sessionDrift(session, "master"); got != "1 behind" {
+		t.Errorf("sessionDrift() = %q, want 1 behind", got)
+	}
+	session.Repos[0].WorktreePath = filepath.Join(t.TempDir(), "missing")
+	if got := sessionDrift(session, "master"); got != "unknown" {
+		t.Errorf("sessionDrift() missing repository = %q, want unknown", got)
+	}
+}
+
+func requireMainGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git executable is not available")
+	}
+}
+
+func createMainRepository(t *testing.T) string {
+	t.Helper()
+	repoPath := t.TempDir()
+	runMainGit(t, repoPath, "init", "-q")
+	runMainGit(t, repoPath, "config", "user.email", "test@example.com")
+	runMainGit(t, repoPath, "config", "user.name", "Test User")
+	writeAndCommitMainFile(t, repoPath, "README.md", "initial\n", "initial commit")
+	return repoPath
+}
+
+func createRemoteMainRepository(t *testing.T) (string, string) {
+	t.Helper()
+	sourcePath := createMainRepository(t)
+	runMainGit(t, sourcePath, "branch", "-M", "main")
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	runMainGit(t, sourcePath, "init", "--bare", "-q", remotePath)
+	runMainGit(t, sourcePath, "remote", "add", "origin", remotePath)
+	runMainGit(t, sourcePath, "push", "-qu", "origin", "main")
+	return sourcePath, remotePath
+}
+
+func writeAndCommitMainFile(t *testing.T, repoPath, name, contents, message string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repoPath, name), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runMainGit(t, repoPath, "add", name)
+	runMainGit(t, repoPath, "commit", "-qm", message)
+}
+
+func runMainGit(t *testing.T, directory string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, output)
+	}
+}
+
+func mainGitOutput(t *testing.T, directory string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, output)
+	}
+	return string(output)
 }
 
 func TestAppendTask(t *testing.T) {

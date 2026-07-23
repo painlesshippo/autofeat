@@ -22,8 +22,11 @@ h3 { font-size: 0.95rem; margin: 0; overflow-wrap: anywhere; }
 .file-change { background: Canvas; border: 1px solid #8886; border-left: 3px solid var(--feature-accent); border-radius: 0.35rem; margin: 0 0 1rem; overflow: hidden; }
 .file-header { align-items: baseline; background: color-mix(in srgb, var(--feature-accent) 7%, Canvas); display: flex; gap: 0.75rem; padding: 0.7rem 1rem; }
 .repository-name { color: #666; flex: 0 0 auto; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; }
+.repository-status { color: #666; font-family: ui-monospace, monospace; font-size: 0.72rem; margin-left: auto; overflow-wrap: anywhere; text-align: right; }
+.repository-status.drift-behind { color: #98651d; font-weight: 700; }
 .repository-message { background: Canvas; border-left: 3px solid var(--feature-accent); margin: 0 0 1rem; padding: 0.75rem 1rem; }
 .repository-message p { margin-bottom: 0; }
+.repository-message .repository-status { margin-left: 0; text-align: left; }
 .error { color: #b42318; white-space: pre-wrap; }
 pre { margin: 0; overflow-x: auto; padding: 1rem; tab-size: 4; }
 .diff-file { color: var(--feature-accent); font-weight: 700; }

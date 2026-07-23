@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/painlesshippo/autofeat/internal/state"
 )
 
@@ -199,6 +200,24 @@ func TestBuildUsesRepositoryBaseBranchesAndOverrides(t *testing.T) {
 	}
 }
 
+func TestBuildCollectsCachedBaseStatus(t *testing.T) {
+	report := buildWithRepositoryData(map[string]state.Session{
+		"feature": {
+			Repos: []state.Repository{{Name: "repository", WorktreePath: "path", BaseBranch: "main"}},
+		},
+	}, "master", "", time.Now(), func(path, baseBranch string) (string, gitcmd.BaseStatus, error) {
+		if path != "path" || baseBranch != "main" {
+			t.Errorf("collector arguments = (%q, %q), want (path, main)", path, baseBranch)
+		}
+		return "diff", gitcmd.BaseStatus{BaseRef: "refs/remotes/origin/main", Ahead: 3, Behind: 2}, nil
+	})
+
+	repository := report.Sessions[0].Repositories[0]
+	if repository.BaseRef != "refs/remotes/origin/main" || repository.Ahead != 3 || repository.Behind != 2 {
+		t.Errorf("repository status = %+v, want origin/main ahead 3 behind 2", repository)
+	}
+}
+
 func setMaximum(maximum *atomic.Int32, current int32) {
 	for {
 		previous := maximum.Load()
@@ -233,8 +252,12 @@ func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
 				FeatureDir:    "/tmp/feature<&>",
 				WorkspaceFile: "/tmp/feature.code-workspace",
 				Repositories: []Repository{{
-					Name: "repo<&>",
-					Diff: "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-old <value>\n+new <value>\n",
+					Name:       "repo<&>",
+					BaseBranch: "main",
+					BaseRef:    "refs/remotes/origin/main",
+					Ahead:      2,
+					Behind:     1,
+					Diff:       "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-old <value>\n+new <value>\n",
 				}},
 			},
 			{FeatureName: "feature/two"},
@@ -245,7 +268,7 @@ func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
 	}
 
 	html := string(contents)
-	for _, want := range []string{"feature/&lt;unsafe&gt;", "repo&lt;&amp;&gt;", "a.txt", "master&lt;script&gt;", "2026-07-20 09:30 UTC", "/tmp/feature&lt;&amp;&gt;", "/tmp/feature.code-workspace", "Repositories", "file-change", "diff-addition", "diff-deletion", "diff-hunk", "background: #2da44e33"} {
+	for _, want := range []string{"feature/&lt;unsafe&gt;", "repo&lt;&amp;&gt;", "a.txt", "master&lt;script&gt;", "2026-07-20 09:30 UTC", "/tmp/feature&lt;&amp;&gt;", "/tmp/feature.code-workspace", "Repositories", "refs/remotes/origin/main", "ahead 2 / behind 1", "drift-behind", "file-change", "diff-addition", "diff-deletion", "diff-hunk", "background: #2da44e33"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("Render() output does not contain %q", want)
 		}

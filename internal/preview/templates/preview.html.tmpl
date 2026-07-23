@@ -46,6 +46,7 @@
             {{if .Error}}
               <article class="repository-message">
                 <strong>{{.Name}}</strong>
+                {{if .BaseRef}}<p class="repository-status{{if gt .Behind 0}} drift-behind{{end}}">{{.BaseBranch}} via {{.BaseRef}} · ahead {{.Ahead}} / behind {{.Behind}}</p>{{end}}
                 <p class="error">{{.Error}}</p>
               </article>
             {{else if .Diff}}
@@ -54,6 +55,9 @@
                 <header class="file-header">
                   <span class="repository-name">{{$repository.Name}}</span>
                   <h3>{{.Name}}</h3>
+                  {{if $repository.BaseRef}}
+                  <span class="repository-status{{if gt $repository.Behind 0}} drift-behind{{end}}">{{$repository.BaseBranch}} via {{$repository.BaseRef}} · ahead {{$repository.Ahead}} / behind {{$repository.Behind}}</span>
+                  {{end}}
                 </header>
                 <pre>{{range .Lines}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</pre>
               </article>
@@ -61,6 +65,9 @@
             {{else}}
               <article class="repository-message">
                 <strong>{{.Name}}</strong>
+                {{if .BaseRef}}
+                <p class="repository-status{{if gt .Behind 0}} drift-behind{{end}}">{{.BaseBranch}} via {{.BaseRef}} · ahead {{.Ahead}} / behind {{.Behind}}</p>
+                {{end}}
                 <p class="empty">No changes relative to {{.BaseBranch}}.</p>
               </article>
             {{end}}

@@ -34,6 +34,7 @@ var (
 	reviewCommand        = reviewAllSessions
 	runFeatureCommand    = runFeature
 	reviewFeatureCommand = reviewFeatureSession
+	syncFeatureCommand   = syncFeature
 )
 
 func main() {
@@ -95,6 +96,8 @@ func run(args []string) error {
 			return runFeatureCommand(featureName, "")
 		case "review":
 			return reviewFeatureCommand(featureName, "")
+		case "sync":
+			return syncFeatureCommand(featureName)
 		case "teardown":
 			return teardownSession(featureName, false)
 		default:
@@ -129,10 +132,15 @@ func isRemoteURL(value string) bool {
 }
 
 func listSessions() error {
-	sessions, err := state.ListSessions()
+	return listSessionsTo(os.Stdout)
+}
+
+func listSessionsTo(output *os.File) error {
+	currentState, err := state.Load()
 	if err != nil {
 		return err
 	}
+	sessions := currentState.Sessions
 
 	names := make([]string, 0, len(sessions))
 	for name := range sessions {
@@ -140,14 +148,34 @@ func listSessions() error {
 	}
 	sort.Strings(names)
 
-	writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "FEATURE\tCREATED\tREPOSITORIES")
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "FEATURE\tCREATED\tREPOSITORIES\tDRIFT")
 	for _, name := range names {
 		session := sessions[name]
-		fmt.Fprintf(writer, "%s\t%s\t%d\n", name, session.CreatedAt.Format(time.RFC3339), len(session.Repos))
+		fmt.Fprintf(writer, "%s\t%s\t%d\t%s\n", name, session.CreatedAt.Format(time.RFC3339), len(session.Repos), sessionDrift(session, currentState.DefaultBaseBranch))
 	}
 
 	return writer.Flush()
+}
+
+func sessionDrift(session state.Session, defaultBaseBranch string) string {
+	totalBehind := 0
+	for _, repository := range session.Repos {
+		baseBranch := repository.BaseBranch
+		if baseBranch == "" {
+			baseBranch = defaultBaseBranch
+		}
+		status, err := gitcmd.CachedBaseStatus(repository.WorktreePath, baseBranch)
+		if err != nil {
+			return "unknown"
+		}
+		totalBehind += status.Behind
+	}
+	if totalBehind == 0 {
+		return "current"
+	}
+
+	return fmt.Sprintf("%d behind", totalBehind)
 }
 
 func addRepository(featureName string) error {
@@ -164,6 +192,10 @@ func addRepository(featureName string) error {
 	if err != nil {
 		return err
 	}
+	baseRef, err := gitcmd.ResolveBaseRef(repoRoot, baseBranch)
+	if err != nil {
+		return err
+	}
 	repoName := filepath.Base(filepath.Clean(repoRoot))
 	featureDirName := featureDirectoryName(featureName)
 	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
@@ -173,7 +205,7 @@ func addRepository(featureName string) error {
 	if err := os.MkdirAll(featureDir, 0o755); err != nil {
 		return fmt.Errorf("create feature directory: %w", err)
 	}
-	if err := gitcmd.AddWorktree(featureBranchName(featureName), worktreePath); err != nil {
+	if err := gitcmd.AddWorktree(featureBranchName(featureName), worktreePath, baseRef); err != nil {
 		return err
 	}
 
@@ -265,8 +297,12 @@ func addRemoteRepository(featureName, remoteURL string) error {
 	if err != nil {
 		return err
 	}
+	baseRef, err := gitcmd.ResolveBaseRef(worktreePath, baseBranch)
+	if err != nil {
+		return err
+	}
 
-	if err := gitcmd.CheckoutNewBranch(worktreePath, featureBranchName(featureName)); err != nil {
+	if err := gitcmd.CheckoutNewBranch(worktreePath, featureBranchName(featureName), baseRef); err != nil {
 		return err
 	}
 
@@ -385,6 +421,97 @@ func runHeadless(featureName, task string) error {
 	command.Stderr = os.Stderr
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("run feature %q with %q: %w", featureName, configuration.HeadlessCmd, err)
+	}
+
+	return nil
+}
+
+type syncRepository struct {
+	repository state.Repository
+	hasOrigin  bool
+}
+
+func syncFeature(featureName string) error {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return err
+	}
+
+	repositories := make([]syncRepository, 0, len(session.Repos))
+	for _, repository := range session.Repos {
+		info, err := os.Stat(repository.WorktreePath)
+		if err != nil {
+			return fmt.Errorf("inspect worktree for repository %q: %w", repository.Name, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("worktree for repository %q is not a directory: %s", repository.Name, repository.WorktreePath)
+		}
+
+		branchName, err := gitcmd.CurrentBranch(repository.WorktreePath)
+		if err != nil {
+			return err
+		}
+		if branchName != featureBranchName(featureName) {
+			return fmt.Errorf("repository %q is on branch %q, expected %q", repository.Name, branchName, featureBranchName(featureName))
+		}
+		dirty, err := gitcmd.HasUncommittedChanges(repository.WorktreePath)
+		if err != nil {
+			return err
+		}
+		if dirty {
+			return fmt.Errorf("repository %q has uncommitted changes; commit or discard them before syncing", repository.Name)
+		}
+		rebasing, err := gitcmd.IsRebaseInProgress(repository.WorktreePath)
+		if err != nil {
+			return err
+		}
+		if rebasing {
+			return fmt.Errorf("repository %q already has a rebase in progress", repository.Name)
+		}
+		if repository.BaseBranch == "" {
+			repository.BaseBranch, err = detectBaseBranch(repository.WorktreePath)
+			if err != nil {
+				return err
+			}
+		}
+		if _, err := gitcmd.ResolveBaseRef(repository.WorktreePath, repository.BaseBranch); err != nil {
+			return err
+		}
+		hasOrigin, err := gitcmd.HasOrigin(repository.WorktreePath)
+		if err != nil {
+			return err
+		}
+		repositories = append(repositories, syncRepository{repository: repository, hasOrigin: hasOrigin})
+	}
+
+	for _, syncRepo := range repositories {
+		repository := syncRepo.repository
+		if syncRepo.hasOrigin {
+			if err := gitcmd.FetchBase(repository.WorktreePath, repository.BaseBranch); err != nil {
+				return err
+			}
+		}
+		baseRef, err := gitcmd.ResolveBaseRef(repository.WorktreePath, repository.BaseBranch)
+		if err != nil {
+			return err
+		}
+		ahead, behind, err := gitcmd.AheadBehind(repository.WorktreePath, baseRef)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s: %d ahead, %d behind %s\n", repository.Name, ahead, behind, baseRef)
+		if behind == 0 {
+			continue
+		}
+		if err := gitcmd.Rebase(repository.WorktreePath, baseRef); err != nil {
+			fmt.Fprintf(os.Stderr, "Resolve conflicts in %s, then run `git -C %s rebase --continue`, or abort with `git -C %s rebase --abort`.\n", repository.Name, repository.WorktreePath, repository.WorktreePath)
+			return err
+		}
+		ahead, behind, err = gitcmd.AheadBehind(repository.WorktreePath, baseRef)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s: synchronized (%d ahead, %d behind)\n", repository.Name, ahead, behind)
 	}
 
 	return nil
@@ -651,5 +778,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat list | autofeat version | autofeat review [--base <branch>] | autofeat <feature-name> [<remote-url>|open|run [-task <prompt>]|review [--base <branch>]|teardown [--force]]")
+	return errors.New("usage: autofeat list | autofeat version | autofeat review [--base <branch>] | autofeat <feature-name> [<remote-url>|open|run [-task <prompt>]|review [--base <branch>]|sync|teardown [--force]]")
 }

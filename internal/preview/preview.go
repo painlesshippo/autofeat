@@ -32,11 +32,15 @@ type Session struct {
 type Repository struct {
 	Name       string
 	BaseBranch string
+	BaseRef    string
+	Ahead      int
+	Behind     int
 	Diff       string
 	Error      string
 }
 
 type diffFunc func(destPath, baseRef string) (string, error)
+type repositoryDataFunc func(destPath, baseBranch string) (string, gitcmd.BaseStatus, error)
 
 type diffJob struct {
 	sessionIndex    int
@@ -48,10 +52,24 @@ type diffJob struct {
 // Build collects a worktree diff for every repository in sessions. A failure
 // for one repository is retained in its report so other previews remain useful.
 func Build(sessions map[string]state.Session, defaultBaseBranch, overrideBaseBranch string, generatedAt time.Time) Report {
-	return buildWithDiff(sessions, defaultBaseBranch, overrideBaseBranch, generatedAt, gitcmd.Diff)
+	return buildWithRepositoryData(sessions, defaultBaseBranch, overrideBaseBranch, generatedAt, func(destPath, baseBranch string) (string, gitcmd.BaseStatus, error) {
+		status, err := gitcmd.CachedBaseStatus(destPath, baseBranch)
+		if err != nil {
+			return "", gitcmd.BaseStatus{}, err
+		}
+		diff, err := gitcmd.Diff(destPath, status.BaseRef)
+		return diff, status, err
+	})
 }
 
 func buildWithDiff(sessions map[string]state.Session, defaultBaseBranch, overrideBaseBranch string, generatedAt time.Time, collectDiff diffFunc) Report {
+	return buildWithRepositoryData(sessions, defaultBaseBranch, overrideBaseBranch, generatedAt, func(destPath, baseBranch string) (string, gitcmd.BaseStatus, error) {
+		diff, err := collectDiff(destPath, baseBranch)
+		return diff, gitcmd.BaseStatus{}, err
+	})
+}
+
+func buildWithRepositoryData(sessions map[string]state.Session, defaultBaseBranch, overrideBaseBranch string, generatedAt time.Time, collectData repositoryDataFunc) Report {
 	featureNames := make([]string, 0, len(sessions))
 	for featureName := range sessions {
 		featureNames = append(featureNames, featureName)
@@ -93,12 +111,12 @@ func buildWithDiff(sessions map[string]state.Session, defaultBaseBranch, overrid
 		report.Sessions = append(report.Sessions, previewSession)
 	}
 
-	collectDiffs(&report, jobs, collectDiff)
+	collectRepositoryData(&report, jobs, collectData)
 
 	return report
 }
 
-func collectDiffs(report *Report, jobs []diffJob, collectDiff diffFunc) {
+func collectRepositoryData(report *Report, jobs []diffJob, collectData repositoryDataFunc) {
 	workerCount := min(maxDiffWorkers, len(jobs))
 	if workerCount == 0 {
 		return
@@ -111,8 +129,15 @@ func collectDiffs(report *Report, jobs []diffJob, collectDiff diffFunc) {
 		go func() {
 			defer workers.Done()
 			for job := range jobQueue {
-				diff, err := collectDiff(job.repository.WorktreePath, job.baseBranch)
-				result := Repository{Name: job.repository.Name, BaseBranch: job.baseBranch, Diff: diff}
+				diff, status, err := collectData(job.repository.WorktreePath, job.baseBranch)
+				result := Repository{
+					Name:       job.repository.Name,
+					BaseBranch: job.baseBranch,
+					BaseRef:    status.BaseRef,
+					Ahead:      status.Ahead,
+					Behind:     status.Behind,
+					Diff:       diff,
+				}
 				if err != nil {
 					result.Error = err.Error()
 				}
