@@ -195,6 +195,13 @@ func TestAddWorktreeAndDetectUncommittedChanges(t *testing.T) {
 	if _, err := os.Stat(worktreePath); err != nil {
 		t.Fatalf("worktree path does not exist: %v", err)
 	}
+	branchName, err := CurrentBranch(worktreePath)
+	if err != nil {
+		t.Fatalf("CurrentBranch() error = %v", err)
+	}
+	if branchName != "agent/test" {
+		t.Errorf("CurrentBranch() = %q, want agent/test", branchName)
+	}
 
 	dirty, err := HasUncommittedChanges(worktreePath)
 	if err != nil {

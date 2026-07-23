@@ -589,7 +589,11 @@ func teardownSession(featureName string, force bool) error {
 
 	for _, repo := range session.Repos {
 		if repo.IsRemoteClone {
-			unpushed, err := gitcmd.HasUnpushedCommits(repo.WorktreePath, featureBranchName(featureName))
+			branchName, err := gitcmd.CurrentBranch(repo.WorktreePath)
+			if err != nil {
+				return err
+			}
+			unpushed, err := gitcmd.HasUnpushedCommits(repo.WorktreePath, branchName)
 			if err != nil {
 				return err
 			}
@@ -629,7 +633,7 @@ func validateFeatureName(name string) error {
 }
 
 func featureBranchName(featureName string) string {
-	return "agent/" + featureName
+	return featureName
 }
 
 func featureDirectoryName(featureName string) string {

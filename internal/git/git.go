@@ -71,6 +71,21 @@ func CheckoutNewBranch(destPath, branchName string) error {
 	return nil
 }
 
+// CurrentBranch returns the checked-out branch name in the worktree at destPath.
+func CurrentBranch(destPath string) (string, error) {
+	output, err := run("-C", destPath, "branch", "--show-current")
+	if err != nil {
+		return "", fmt.Errorf("get current branch in worktree %q: %w", destPath, err)
+	}
+
+	branchName := strings.TrimSpace(output)
+	if branchName == "" {
+		return "", fmt.Errorf("worktree %q is in a detached HEAD state", destPath)
+	}
+
+	return branchName, nil
+}
+
 // RemoveWorktree removes the worktree at destPath. When force is true, Git is
 // instructed to remove the worktree even if it contains modified files.
 func RemoveWorktree(destPath string, force bool) error {

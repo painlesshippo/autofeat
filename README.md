@@ -96,10 +96,10 @@ git push origin v0.2.0
 ## Usage
 
 Run `autofeat <feature-name>` inside a Git repository to add that repository
-to a feature session. The command creates an `agent/<feature-name>` branch,
-adds a worktree, records the session, and regenerates its VS Code workspace.
-Feature names use valid Git branch syntax, so hierarchical names such as
-`feature/potato` and `bug/f321s-aaa` are supported.
+to a feature session. The command creates a branch with the supplied feature
+name, adds a worktree, records the session, and regenerates its VS Code
+workspace. Feature names use valid Git branch syntax, so hierarchical names
+such as `feature/potato` and `bug/f321s-aaa` are supported.
 
 ```sh
 cd ~/sources/repo1

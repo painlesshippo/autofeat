@@ -162,8 +162,8 @@ func TestAppendTask(t *testing.T) {
 }
 
 func TestFeatureBranchName(t *testing.T) {
-	if got, want := featureBranchName("feature/potato"), "agent/feature/potato"; got != want {
-		t.Errorf("featureBranchName() = %q, want %q", got, want)
+	if got, want := featureBranchName("feature/potato"), "feature/potato"; got != want {
+		t.Errorf("featureBranchName() = %q, want feature name", got)
 	}
 }
 
