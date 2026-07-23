@@ -23,8 +23,9 @@ type diffLine struct {
 }
 
 type diffFile struct {
-	Name  string
-	Lines []diffLine
+	Name     string
+	Metadata []diffLine
+	Lines    []diffLine
 }
 
 func diffFiles(diff string) []diffFile {
@@ -52,7 +53,12 @@ func diffFiles(diff string) []diffFile {
 				file.Name = path
 			}
 		}
-		file.Lines = append(file.Lines, diffLine{Class: diffLineClass(line), Text: line + "\n"})
+		diffLine := diffLine{Class: diffLineClass(line), Text: line}
+		if len(file.Lines) == 0 && diffLine.Class != "diff-hunk" {
+			file.Metadata = append(file.Metadata, diffLine)
+			continue
+		}
+		file.Lines = append(file.Lines, diffLine)
 	}
 	return result
 }

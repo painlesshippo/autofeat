@@ -228,7 +228,7 @@ func setMaximum(maximum *atomic.Int32, current int32) {
 }
 
 func TestDiffFilesGroupsLinesAndExtractsPaths(t *testing.T) {
-	files := diffFiles("diff --git a/old.txt b/old.txt\n--- a/old.txt\n+++ /dev/null\n-deleted\ndiff --git a/new.txt b/new.txt\n--- /dev/null\n+++ b/new.txt\n+added\ndiff --git \"a/image file.png\" \"b/image file.png\"\nBinary files differ\n")
+	files := diffFiles("diff --git a/old.txt b/old.txt\n--- a/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-deleted\ndiff --git a/new.txt b/new.txt\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+added\ndiff --git \"a/image file.png\" \"b/image file.png\"\nBinary files differ\n")
 
 	if len(files) != 3 {
 		t.Fatalf("diffFiles() returned %d files, want 3", len(files))
@@ -236,8 +236,14 @@ func TestDiffFilesGroupsLinesAndExtractsPaths(t *testing.T) {
 	if files[0].Name != "old.txt" || files[1].Name != "new.txt" || files[2].Name != "image file.png" {
 		t.Errorf("diffFiles() names = %q, %q, %q, want old.txt, new.txt, image file.png", files[0].Name, files[1].Name, files[2].Name)
 	}
-	if got := files[1].Lines[len(files[1].Lines)-1]; got.Class != "diff-addition" || got.Text != "+added\n" {
-		t.Errorf("last new-file line = %+v, want classified addition with newline", got)
+	if got := files[1].Lines[len(files[1].Lines)-1]; got.Class != "diff-addition" || got.Text != "+added" {
+		t.Errorf("last new-file line = %+v, want classified addition", got)
+	}
+	if got := files[1].Metadata[len(files[1].Metadata)-1]; got.Class != "diff-path" || got.Text != "+++ b/new.txt" {
+		t.Errorf("last new-file metadata line = %+v, want classified path", got)
+	}
+	if len(files[2].Lines) != 0 || len(files[2].Metadata) != 2 {
+		t.Errorf("binary file groups = %d metadata, %d diff lines; want 2 metadata and no diff lines", len(files[2].Metadata), len(files[2].Lines))
 	}
 }
 
@@ -268,7 +274,7 @@ func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
 	}
 
 	html := string(contents)
-	for _, want := range []string{"feature/&lt;unsafe&gt;", "repo&lt;&amp;&gt;", "a.txt", "master&lt;script&gt;", "2026-07-20 09:30 UTC", "/tmp/feature&lt;&amp;&gt;", "/tmp/feature.code-workspace", "Repositories", "refs/remotes/origin/main", "ahead 2 / behind 1", "drift-behind", "file-change", "diff-addition", "diff-deletion", "diff-hunk", "background: #2da44e33"} {
+	for _, want := range []string{"feature/&lt;unsafe&gt;", "repo&lt;&amp;&gt;", "a.txt", "master&lt;script&gt;", "2026-07-20 09:30 UTC", "/tmp/feature&lt;&amp;&gt;", "/tmp/feature.code-workspace", "Repositories", "refs/remotes/origin/main", "ahead 2 / behind 1", "drift-behind", "file-change", "diff-metadata", "diff-content", ">Metadata<", ">Diff<", "diff-addition", "diff-deletion", "diff-hunk", "background: #2da44e33"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("Render() output does not contain %q", want)
 		}
