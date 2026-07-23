@@ -20,131 +20,113 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
-func TestReviewBase(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{name: "stored base", want: ""},
-		{name: "custom branch", args: []string{"--base", "develop"}, want: "develop"},
-		{name: "hierarchical branch", args: []string{"--base", "release/next"}, want: "release/next"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := reviewBase(test.args)
-			if err != nil {
-				t.Fatalf("reviewBase(%v) error = %v", test.args, err)
-			}
-			if got != test.want {
-				t.Errorf("reviewBase(%v) = %q, want %q", test.args, got, test.want)
-			}
-		})
-	}
-
-	for _, args := range [][]string{
-		{"--base"},
-		{"--other", "develop"},
-		{"--base", ""},
-		{"--base", "bad branch"},
-		{"--base", "develop", "extra"},
-	} {
-		if _, err := reviewBase(args); err == nil {
-			t.Errorf("reviewBase(%v) error = nil, want error", args)
-		}
-	}
-}
-
-func TestReviewCommandDispatch(t *testing.T) {
-	originalReviewCommand := reviewCommand
+func TestPreviewCommandDispatch(t *testing.T) {
+	originalPreviewCommand := previewCommand
 	t.Cleanup(func() {
-		reviewCommand = originalReviewCommand
+		previewCommand = originalPreviewCommand
 	})
 
+	var gotSelectors []string
 	var gotBase string
-	reviewCommand = func(baseRef string) error {
+	previewCommand = func(selectors []string, baseRef string) error {
+		gotSelectors = selectors
 		gotBase = baseRef
 		return nil
 	}
 
-	if err := run([]string{"review"}); err != nil {
-		t.Fatalf("run(review) error = %v", err)
+	if err := run([]string{"preview"}); err != nil {
+		t.Fatalf("run(preview) error = %v", err)
 	}
-	if gotBase != "" {
-		t.Errorf("run(review) base = %q, want stored base", gotBase)
-	}
-
-	if err := run([]string{"review", "--base", "develop"}); err != nil {
-		t.Fatalf("run(review --base develop) error = %v", err)
-	}
-	if gotBase != "develop" {
-		t.Errorf("run(review --base develop) base = %q, want develop", gotBase)
+	if len(gotSelectors) != 1 || gotSelectors[0] != "*" || gotBase != "" {
+		t.Errorf("run(preview) = (%q, %q), want ([*], stored base)", gotSelectors, gotBase)
 	}
 
-	if err := run([]string{"review", "--base"}); err == nil {
-		t.Error("run(review --base) error = nil, want usage error")
+	if err := run([]string{"preview", "feature/*", "--base", "develop"}); err != nil {
+		t.Fatalf("run(preview feature/* --base develop) error = %v", err)
+	}
+	if len(gotSelectors) != 1 || gotSelectors[0] != "feature/*" || gotBase != "develop" {
+		t.Errorf("preview dispatch = (%q, %q), want ([feature/*], develop)", gotSelectors, gotBase)
 	}
 
+	if err := run([]string{"preview", "--base"}); err == nil {
+		t.Error("run(preview --base) error = nil, want usage error")
+	}
 }
 
-func TestRunAndReviewCommandDispatch(t *testing.T) {
-	originalRunFeatureCommand := runFeatureCommand
-	originalReviewFeatureCommand := reviewFeatureCommand
+func TestPreviewArgumentsRecognizesShellExpandedWildcard(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"bin", "cmd", "README.md"} {
+		path := filepath.Join(directory, name)
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originalDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		runFeatureCommand = originalRunFeatureCommand
-		reviewFeatureCommand = originalReviewFeatureCommand
+		if err := os.Chdir(originalDirectory); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
 	})
 
-	var gotFeatureName string
+	selectors, baseRef, err := previewArguments([]string{"README.md", "bin", "cmd"})
+	if err != nil {
+		t.Fatalf("previewArguments(shell expansion) error = %v", err)
+	}
+	if len(selectors) != 1 || selectors[0] != "*" || baseRef != "" {
+		t.Errorf("previewArguments(shell expansion) = (%q, %q), want ([*], empty base)", selectors, baseRef)
+	}
+}
+
+func TestRunCommandDispatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"feature/a", "feature/b"} {
+		if err := state.SaveSession(name, state.Session{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originalRunFeatureCommand := runFeatureCommand
+	t.Cleanup(func() {
+		runFeatureCommand = originalRunFeatureCommand
+	})
+
+	var gotFeatureNames []string
 	var gotTask string
-	var gotBase string
 	runFeatureCommand = func(featureName, task string) error {
-		gotFeatureName = featureName
+		gotFeatureNames = append(gotFeatureNames, featureName)
 		gotTask = task
 		return nil
 	}
-	if err := run([]string{"feature/run", "run"}); err != nil {
-		t.Fatalf("run(feature/run run) error = %v", err)
+	if err := run([]string{"run", "feature/a"}); err != nil {
+		t.Fatalf("run(run feature/a) error = %v", err)
 	}
-	if gotFeatureName != "feature/run" || gotTask != "" {
-		t.Errorf("run command = (%q, %q), want feature and empty task", gotFeatureName, gotTask)
-	}
-
-	if err := run([]string{"feature/run", "run", "-task", "write tests"}); err != nil {
-		t.Fatalf("run(feature/run run -task) error = %v", err)
-	}
-	if gotTask != "write tests" {
-		t.Errorf("run task = %q, want write tests", gotTask)
+	if len(gotFeatureNames) != 1 || gotFeatureNames[0] != "feature/a" || gotTask != "" {
+		t.Errorf("run command = (%q, %q), want ([feature/a], empty task)", gotFeatureNames, gotTask)
 	}
 
-	reviewFeatureCommand = func(featureName, baseRef string) error {
-		gotFeatureName = featureName
-		gotBase = baseRef
-		return nil
+	gotFeatureNames = nil
+	if err := run([]string{"run", "feature/*", "-task", "write tests"}); err != nil {
+		t.Fatalf("run(run feature/* -task) error = %v", err)
 	}
-	if err := run([]string{"feature/review", "review"}); err != nil {
-		t.Fatalf("run(feature/review review) error = %v", err)
-	}
-	if gotFeatureName != "feature/review" {
-		t.Errorf("review feature = %q, want feature/review", gotFeatureName)
-	}
-	if gotBase != "" {
-		t.Errorf("review base = %q, want stored base", gotBase)
+	if len(gotFeatureNames) != 2 || gotFeatureNames[0] != "feature/a" || gotFeatureNames[1] != "feature/b" || gotTask != "write tests" {
+		t.Errorf("run wildcard = (%q, %q), want sorted features and task", gotFeatureNames, gotTask)
 	}
 
-	if err := run([]string{"feature/review", "review", "--base", "main"}); err != nil {
-		t.Fatalf("run(feature/review review --base main) error = %v", err)
-	}
-	if gotBase != "main" {
-		t.Errorf("feature review base = %q, want main", gotBase)
-	}
-
-	if err := run([]string{"feature/run", "run", "-task"}); err == nil {
-		t.Error("run(feature/run run -task) error = nil, want usage error")
+	if err := run([]string{"run", "feature/a", "-task"}); err == nil {
+		t.Error("run(run feature/a -task) error = nil, want usage error")
 	}
 }
 
 func TestSyncCommandDispatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := state.SaveSession("feature/sync", state.Session{}); err != nil {
+		t.Fatal(err)
+	}
 	originalSyncFeatureCommand := syncFeatureCommand
 	t.Cleanup(func() {
 		syncFeatureCommand = originalSyncFeatureCommand
@@ -156,11 +138,84 @@ func TestSyncCommandDispatch(t *testing.T) {
 		return nil
 	}
 
-	if err := run([]string{"feature/sync", "sync"}); err != nil {
-		t.Fatalf("run(feature/sync sync) error = %v", err)
+	if err := run([]string{"sync", "feature/sync"}); err != nil {
+		t.Fatalf("run(sync feature/sync) error = %v", err)
 	}
 	if gotFeatureName != "feature/sync" {
 		t.Errorf("sync feature = %q, want feature/sync", gotFeatureName)
+	}
+}
+
+func TestTeardownCommandDispatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"feature/x", "feature/y"} {
+		if err := state.SaveSession(name, state.Session{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originalTeardownCommand := teardownCommand
+	t.Cleanup(func() {
+		teardownCommand = originalTeardownCommand
+	})
+
+	var gotFeatureNames []string
+	var gotForce bool
+	teardownCommand = func(featureName string, force bool) error {
+		gotFeatureNames = append(gotFeatureNames, featureName)
+		gotForce = force
+		return nil
+	}
+
+	if err := run([]string{"teardown", "feature/y", "feature/x", "--force"}); err != nil {
+		t.Fatalf("run(teardown feature/y feature/x --force) error = %v", err)
+	}
+	if len(gotFeatureNames) != 2 || gotFeatureNames[0] != "feature/x" || gotFeatureNames[1] != "feature/y" || !gotForce {
+		t.Errorf("teardown dispatch = (%q, %t), want sorted features and force", gotFeatureNames, gotForce)
+	}
+	if err := run([]string{"feature/x", "teardown"}); err == nil {
+		t.Error("run(feature/x teardown) error = nil, want command-first usage error")
+	}
+}
+
+func TestSelectFeatureNames(t *testing.T) {
+	sessions := map[string]state.Session{
+		"bug/fix":             {},
+		"feature/a21":         {},
+		"feature/beta":        {},
+		"feature/team/nested": {},
+	}
+	tests := []struct {
+		name      string
+		selectors []string
+		want      []string
+	}{
+		{name: "exact", selectors: []string{"feature/a21"}, want: []string{"feature/a21"}},
+		{name: "all", selectors: []string{"*"}, want: []string{"bug/fix", "feature/a21", "feature/beta", "feature/team/nested"}},
+		{name: "prefix pattern", selectors: []string{"feature/*"}, want: []string{"feature/a21", "feature/beta", "feature/team/nested"}},
+		{name: "overlapping selectors", selectors: []string{"feature/*", "feature/a21"}, want: []string{"feature/a21", "feature/beta", "feature/team/nested"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := selectFeatureNames(sessions, test.selectors)
+			if err != nil {
+				t.Fatalf("selectFeatureNames(%q) error = %v", test.selectors, err)
+			}
+			if len(got) != len(test.want) {
+				t.Fatalf("selectFeatureNames(%q) = %q, want %q", test.selectors, got, test.want)
+			}
+			for index := range got {
+				if got[index] != test.want[index] {
+					t.Errorf("selectFeatureNames(%q) = %q, want %q", test.selectors, got, test.want)
+					break
+				}
+			}
+		})
+	}
+
+	for _, selectors := range [][]string{nil, {"feature/missing"}, {"feature/["}} {
+		if _, err := selectFeatureNames(sessions, selectors); err == nil {
+			t.Errorf("selectFeatureNames(%q) error = nil, want error", selectors)
+		}
 	}
 }
 

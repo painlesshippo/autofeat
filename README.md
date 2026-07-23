@@ -51,7 +51,7 @@ Ensure the installed binary directory, or the directory containing the built
 binary, is on `PATH`.
 
 `mise run install` installs the built binary into `$HOME/.local/bin` and adds
-the `af`, `afp`, and `afl` aliases for `autofeat`, `autofeat review`, and
+the `af`, `afp`, and `afl` aliases for `autofeat`, `autofeat preview`, and
 `autofeat list` to `$HOME/.bashrc` by default. Override these locations with
 `INSTALL_DIR` and `SHELL_RC` when necessary.
 
@@ -63,7 +63,8 @@ mise run setup-hooks
 ```
 
 The pre-commit hook verifies that staged Go, Markdown, shell, and TOML files are
-formatted with `gofmt`, `rumdl`, `shfmt`, and `taplo` through Mise.
+formatted with `gofmt`, `rumdl`, `shfmt`, and `taplo` through Mise. The
+commit-message hook enforces Conventional Commits.
 
 ## Releasing
 The build uses `svu` to derive the current `MAJOR.MINOR.PATCH` version from Git
@@ -86,11 +87,16 @@ creating a tag when the working tree is dirty, the current branch is not a
 trunk branch, or remote authentication fails.
 
 ## Usage
-Run `autofeat <feature-name>` inside a Git repository to add that repository
-to a feature session. The command creates a branch with the supplied feature
-name, adds a worktree, records the session, and regenerates its VS Code
-workspace. Feature names use valid Git branch syntax, so hierarchical names
-such as `feature/potato` and `bug/f321s-aaa` are supported.
+Commands use `autofeat <command> [feature-selector ...]`. Existing-session
+commands accept exact feature names, multiple selectors, `"*"` for every
+feature, and patterns such as `"feature/*"`. Quote wildcard selectors so the
+shell passes them to `autofeat` instead of expanding them as file names.
+
+Create a feature session from inside a Git repository. The command creates a
+branch with the supplied feature name, adds a worktree, records the session,
+and regenerates its VS Code workspace. Feature names use valid Git branch
+syntax, so hierarchical names such as `feature/potato` and `bug/f321s-aaa` are
+supported.
 
 The feature branch starts from the repository's cached `origin/<base>` when an
 `origin` remote exists, or from the local base branch otherwise. Repository
@@ -99,10 +105,10 @@ recently fetched base commit.
 
 ```sh
 cd ~/sources/repo1
-autofeat feature/potato
+autofeat new feature/potato
 
 cd ~/sources/repo2
-autofeat feature/potato
+autofeat new feature/potato
 ```
 
 Add a remote repository to a feature from any directory by passing its HTTP(S)
@@ -110,7 +116,7 @@ or Git SSH URL. `autofeat` clones it into the feature directory and creates
 the supplied feature branch:
 
 ```sh
-autofeat feature/potato https://github.com/example/repo3.git
+autofeat new feature/potato https://github.com/example/repo3.git
 ```
 
 Workspace directory names are flattened so they remain a directory.
@@ -129,7 +135,7 @@ the default configuration, this produces:
 Open a session explicitly from any directory:
 
 ```sh
-autofeat feature/potato open
+autofeat open feature/potato
 ```
 
 Run the configured headless agent from a feature directory. When started from
@@ -138,19 +144,19 @@ not already been added. The agent inherits the terminal's standard input,
 output, and error streams:
 
 ```sh
-autofeat feature/potato run
+autofeat run feature/potato
 ```
 
 Append an objective to the feature's `TASK.md` before starting the agent:
 
 ```sh
-autofeat feature/potato run -task "Implement the potato feature and add tests"
+autofeat run feature/potato -task "Implement the potato feature and add tests"
 ```
 
 Fetch each repository's configured base branch and rebase the feature onto it:
 
 ```sh
-autofeat feature/potato sync
+autofeat sync feature/potato
 ```
 
 Every worktree in the session must be on the feature branch and have no staged,
@@ -160,19 +166,23 @@ and leaves the rebase in progress so it can be continued or aborted with the
 Git commands printed by `autofeat`. Repositories without an `origin` remote
 rebase onto their local base branch without fetching.
 
-Generate and open a static HTML review of the changes in every active session.
-The review compares each worktree with its merge-base against the stored base
-branch and includes committed, staged, unstaged, and untracked changes. It also
-shows cached ahead and behind counts without fetching:
+Generate and open a static HTML preview of the changes in every active session.
+Omitting the selector defaults to `"*"`. The preview compares each worktree
+with its merge-base against the stored base branch and includes committed,
+staged, unstaged, and untracked changes. It also shows cached ahead and behind
+counts without fetching:
 
 ```sh
-autofeat review
+autofeat preview
+autofeat preview "*"
 ```
 
-Review only one feature session:
+Preview one feature session or every feature whose name starts with
+`feature/`:
 
 ```sh
-autofeat feature/potato review
+autofeat preview feature/potato
+autofeat preview "feature/*"
 ```
 
 Running the feature command outside a Git repository also opens an existing
@@ -180,7 +190,7 @@ session:
 
 ```sh
 cd ~
-autofeat feature/potato
+autofeat open feature/potato
 ```
 
 List active sessions:
@@ -196,14 +206,14 @@ network access.
 Use another branch as a one-time comparison override when needed:
 
 ```sh
-autofeat review --base develop
-autofeat feature/potato review --base develop
+autofeat preview --base develop
+autofeat preview feature/potato --base develop
 ```
 
 The command writes `$HOME/.autofeat/review.html`, opens it in the default
 browser, and exits. It renders repository-level errors when the selected base
 branch is unavailable, while continuing to render the other repositories. The
-file is a snapshot: run `autofeat review` again after changes to refresh it.
+file is a snapshot: run `autofeat preview` again after changes to refresh it.
 Browser refresh only reloads the latest generated snapshot. Native Linux uses
 `xdg-open`; WSL opens the snapshot through Windows `explorer.exe`.
 
@@ -216,7 +226,7 @@ autofeat version
 Tear down a session after confirming all worktrees are clean:
 
 ```sh
-autofeat feature/potato teardown
+autofeat teardown feature/potato
 ```
 
 If a worktree or cloned remote repository has uncommitted changes, teardown
@@ -224,7 +234,14 @@ stops without removing anything. To intentionally discard those changes while
 removing the worktrees, use:
 
 ```sh
-autofeat feature/potato teardown --force
+autofeat teardown feature/potato --force
+```
+
+Commands can target multiple features or a pattern. For example:
+
+```sh
+autofeat teardown feature/x feature/y
+autofeat sync "feature/*"
 ```
 
 Before deleting a cloned remote repository, `autofeat` warns when its feature

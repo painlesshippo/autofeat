@@ -31,10 +31,11 @@ var (
 const headlessPrompt = "Please execute the objectives defined in TASK.md"
 
 var (
-	reviewCommand        = reviewAllSessions
-	runFeatureCommand    = runFeature
-	reviewFeatureCommand = reviewFeatureSession
-	syncFeatureCommand   = syncFeature
+	previewCommand     = previewSessions
+	openFeatureCommand = openSession
+	runFeatureCommand  = runFeature
+	syncFeatureCommand = syncFeature
+	teardownCommand    = teardownSession
 )
 
 func main() {
@@ -49,79 +50,216 @@ func run(args []string) error {
 		return usageError()
 	}
 
-	if args[0] == "list" {
+	switch args[0] {
+	case "list":
 		if len(args) != 1 {
 			return usageError()
 		}
 		return listSessions()
-	}
-	if args[0] == "version" {
+	case "version":
 		if len(args) != 1 {
 			return usageError()
 		}
 		fmt.Printf("autofeat %s\ncommit: %s\nbuilt: %s\ngo: %s\n", version, commit, buildDatetime, goVersion)
 		return nil
-	}
-	if args[0] == "review" {
-		baseRef, err := reviewBase(args[1:])
+	case "new":
+		return runNewCommand(args[1:])
+	case "open":
+		return runSelectedFeatures(args[1:], openFeatureCommand)
+	case "run":
+		selectors, task, err := runArguments(args[1:])
 		if err != nil {
 			return usageError()
 		}
-		return reviewCommand(baseRef)
+		return runSelectedFeatures(selectors, func(featureName string) error {
+			return runFeatureCommand(featureName, task)
+		})
+	case "sync":
+		return runSelectedFeatures(args[1:], syncFeatureCommand)
+	case "preview":
+		selectors, baseRef, err := previewArguments(args[1:])
+		if err != nil {
+			return usageError()
+		}
+		return previewCommand(selectors, baseRef)
+	case "teardown":
+		selectors, force, err := teardownArguments(args[1:])
+		if err != nil {
+			return usageError()
+		}
+		return runSelectedFeatures(selectors, func(featureName string) error {
+			return teardownCommand(featureName, force)
+		})
+	default:
+		return usageError()
+	}
+}
+
+func runNewCommand(args []string) error {
+	if len(args) < 1 || len(args) > 2 {
+		return usageError()
 	}
 	featureName := args[0]
 	if err := validateFeatureName(featureName); err != nil {
 		return err
 	}
-
-	switch len(args) {
-	case 1:
-		insideWorkTree, err := gitcmd.IsInsideWorkTree()
-		if err != nil {
-			return err
-		}
-		if insideWorkTree {
-			return addRepository(featureName)
-		}
-		return openSession(featureName)
-	case 2:
-		if isRemoteURL(args[1]) {
-			return addRemoteRepository(featureName, args[1])
-		}
-		switch args[1] {
-		case "open":
-			return openSession(featureName)
-		case "run":
-			return runFeatureCommand(featureName, "")
-		case "review":
-			return reviewFeatureCommand(featureName, "")
-		case "sync":
-			return syncFeatureCommand(featureName)
-		case "teardown":
-			return teardownSession(featureName, false)
-		default:
+	if len(args) == 2 {
+		if !isRemoteURL(args[1]) {
 			return usageError()
 		}
-	case 3:
-		if args[1] == "teardown" && args[2] == "--force" {
-			return teardownSession(featureName, true)
-		}
-		return usageError()
-	case 4:
-		if args[1] == "run" && args[2] == "-task" {
-			return runFeatureCommand(featureName, args[3])
-		}
-		if args[1] == "review" {
-			baseRef, err := reviewBase(args[2:])
-			if err != nil {
-				return usageError()
-			}
-			return reviewFeatureCommand(featureName, baseRef)
-		}
-		return usageError()
-	default:
-		return usageError()
+		return addRemoteRepository(featureName, args[1])
 	}
+	return addRepository(featureName)
+}
+
+func runArguments(args []string) ([]string, string, error) {
+	if len(args) == 0 {
+		return nil, "", errors.New("feature selector is required")
+	}
+	for index, arg := range args {
+		if arg != "-task" {
+			continue
+		}
+		if index == 0 || index != len(args)-2 || args[index+1] == "" {
+			return nil, "", errors.New("invalid run arguments")
+		}
+		return args[:index], args[index+1], nil
+	}
+	return args, "", nil
+}
+
+func previewArguments(args []string) ([]string, string, error) {
+	selectors := make([]string, 0, len(args))
+	baseRef := ""
+	for index := 0; index < len(args); index++ {
+		if args[index] != "--base" {
+			selectors = append(selectors, args[index])
+			continue
+		}
+		if baseRef != "" || index+1 >= len(args) || args[index+1] == "" {
+			return nil, "", errors.New("invalid preview arguments")
+		}
+		baseRef = args[index+1]
+		index++
+	}
+	if baseRef != "" {
+		if err := gitcmd.ValidateBranchName(baseRef); err != nil {
+			return nil, "", fmt.Errorf("invalid preview base %q: %w", baseRef, err)
+		}
+	}
+	if len(selectors) == 0 {
+		selectors = []string{"*"}
+	} else if shellExpandedWildcard(selectors) {
+		selectors = []string{"*"}
+	}
+	return selectors, baseRef, nil
+}
+
+func shellExpandedWildcard(selectors []string) bool {
+	if len(selectors) < 2 {
+		return false
+	}
+	for _, selector := range selectors {
+		if strings.Contains(selector, "*") {
+			return false
+		}
+		if _, err := os.Lstat(selector); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func teardownArguments(args []string) ([]string, bool, error) {
+	selectors := make([]string, 0, len(args))
+	force := false
+	for _, arg := range args {
+		if arg != "--force" {
+			selectors = append(selectors, arg)
+			continue
+		}
+		if force {
+			return nil, false, errors.New("duplicate --force")
+		}
+		force = true
+	}
+	if len(selectors) == 0 {
+		return nil, false, errors.New("feature selector is required")
+	}
+	return selectors, force, nil
+}
+
+func runSelectedFeatures(selectors []string, command func(string) error) error {
+	sessions, err := state.ListSessions()
+	if err != nil {
+		return err
+	}
+	featureNames, err := selectFeatureNames(sessions, selectors)
+	if err != nil {
+		return err
+	}
+	for _, featureName := range featureNames {
+		if err := command(featureName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func selectFeatureNames(sessions map[string]state.Session, selectors []string) ([]string, error) {
+	if len(selectors) == 0 {
+		return nil, errors.New("feature selector is required")
+	}
+	selected := make(map[string]struct{})
+	for _, selector := range selectors {
+		if selector == "" {
+			return nil, errors.New("feature selector is required")
+		}
+		matched := false
+		for featureName := range sessions {
+			if matchFeatureSelector(selector, featureName) {
+				selected[featureName] = struct{}{}
+				matched = true
+			}
+		}
+		if !matched {
+			return nil, fmt.Errorf("no features match %q", selector)
+		}
+	}
+	featureNames := make([]string, 0, len(selected))
+	for featureName := range selected {
+		featureNames = append(featureNames, featureName)
+	}
+	sort.Strings(featureNames)
+	return featureNames, nil
+}
+
+func matchFeatureSelector(selector, featureName string) bool {
+	parts := strings.Split(selector, "*")
+	if len(parts) == 1 {
+		return selector == featureName
+	}
+
+	position := 0
+	if parts[0] != "" {
+		if !strings.HasPrefix(featureName, parts[0]) {
+			return false
+		}
+		position = len(parts[0])
+	}
+	for _, part := range parts[1 : len(parts)-1] {
+		if part == "" {
+			continue
+		}
+		index := strings.Index(featureName[position:], part)
+		if index < 0 {
+			return false
+		}
+		position += index + len(part)
+	}
+
+	suffix := parts[len(parts)-1]
+	return suffix == "" || strings.HasSuffix(featureName[position:], suffix)
 }
 
 func isRemoteURL(value string) bool {
@@ -537,40 +675,21 @@ func appendTask(featureDir, task string) error {
 	return nil
 }
 
-func reviewAllSessions(baseRef string) error {
+func previewSessions(selectors []string, baseRef string) error {
 	reviewState, err := loadReviewState()
 	if err != nil {
 		return err
 	}
-
-	return openReview(reviewState.Sessions, reviewState.DefaultBaseBranch, baseRef)
-}
-
-func reviewFeatureSession(featureName, baseRef string) error {
-	reviewState, err := loadReviewState()
+	featureNames, err := selectFeatureNames(reviewState.Sessions, selectors)
 	if err != nil {
 		return err
 	}
-	session, ok := reviewState.Sessions[featureName]
-	if !ok {
-		return fmt.Errorf("%w: %s", state.ErrSessionNotFound, featureName)
+	sessions := make(map[string]state.Session, len(featureNames))
+	for _, featureName := range featureNames {
+		sessions[featureName] = reviewState.Sessions[featureName]
 	}
 
-	return openReview(map[string]state.Session{featureName: session}, reviewState.DefaultBaseBranch, baseRef)
-}
-
-func reviewBase(args []string) (string, error) {
-	if len(args) == 0 {
-		return "", nil
-	}
-	if len(args) != 2 || args[0] != "--base" || args[1] == "" {
-		return "", errors.New("invalid review arguments")
-	}
-	if err := gitcmd.ValidateBranchName(args[1]); err != nil {
-		return "", fmt.Errorf("invalid review base %q: %w", args[1], err)
-	}
-
-	return args[1], nil
+	return openReview(sessions, reviewState.DefaultBaseBranch, baseRef)
 }
 
 func openReview(sessions map[string]state.Session, defaultBaseBranch, overrideBaseBranch string) error {
@@ -777,5 +896,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat list | autofeat version | autofeat review [--base <branch>] | autofeat <feature-name> [<remote-url>|open|run [-task <prompt>]|review [--base <branch>]|sync|teardown [--force]]")
+	return errors.New("usage: autofeat <new|open|run|sync|preview|teardown|list|version> [feature-selector ...] [options]")
 }
