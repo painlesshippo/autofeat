@@ -13,12 +13,16 @@ import (
 )
 
 func TestBuildSortsSessionsAndRetainsRepositoryErrors(t *testing.T) {
+	createdAt := time.Date(2026, time.July, 20, 9, 30, 0, 0, time.UTC)
 	report := Build(map[string]state.Session{
 		"z-feature": {
 			Repos: []state.Repository{{Name: "z-repository", WorktreePath: "/does/not/exist"}},
 		},
 		"a-feature": {
-			Repos: []state.Repository{{Name: "a-repository", WorktreePath: "/also/does/not/exist"}},
+			CreatedAt:     createdAt,
+			FeatureDir:    "/features/a-feature",
+			WorkspaceFile: "/features/a-feature/a.code-workspace",
+			Repos:         []state.Repository{{Name: "a-repository", WorktreePath: "/also/does/not/exist"}},
 		},
 	}, "master", "", time.Date(2026, time.July, 22, 0, 0, 0, 0, time.UTC))
 
@@ -30,6 +34,9 @@ func TestBuildSortsSessionsAndRetainsRepositoryErrors(t *testing.T) {
 	}
 	if report.Sessions[0].Repositories[0].Error == "" {
 		t.Error("Build() missing repository error, want retained Git failure")
+	}
+	if session := report.Sessions[0]; !session.CreatedAt.Equal(createdAt) || session.FeatureDir != "/features/a-feature" || session.WorkspaceFile != "/features/a-feature/a.code-workspace" {
+		t.Errorf("Build() session metadata = %+v, want state metadata retained", session)
 	}
 }
 
@@ -221,7 +228,10 @@ func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
 		GeneratedAt: time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC),
 		Sessions: []Session{
 			{
-				FeatureName: "feature/<unsafe>",
+				FeatureName:   "feature/<unsafe>",
+				CreatedAt:     time.Date(2026, time.July, 20, 9, 30, 0, 0, time.UTC),
+				FeatureDir:    "/tmp/feature<&>",
+				WorkspaceFile: "/tmp/feature.code-workspace",
 				Repositories: []Repository{{
 					Name: "repo<&>",
 					Diff: "diff --git a/a.txt b/a.txt\n@@ -1 +1 @@\n-old <value>\n+new <value>\n",
@@ -235,7 +245,7 @@ func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
 	}
 
 	html := string(contents)
-	for _, want := range []string{"feature/&lt;unsafe&gt;", "repo&lt;&amp;&gt;", "a.txt", "master&lt;script&gt;", "file-change", "diff-addition", "diff-deletion", "diff-hunk", "background: #2da44e33"} {
+	for _, want := range []string{"feature/&lt;unsafe&gt;", "repo&lt;&amp;&gt;", "a.txt", "master&lt;script&gt;", "2026-07-20 09:30 UTC", "/tmp/feature&lt;&amp;&gt;", "/tmp/feature.code-workspace", "Repositories", "file-change", "diff-addition", "diff-deletion", "diff-hunk", "background: #2da44e33"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("Render() output does not contain %q", want)
 		}
@@ -250,6 +260,9 @@ func TestRenderEscapesContentAndClassifiesDiffLines(t *testing.T) {
 	}
 	if strings.Contains(html, "<script") {
 		t.Errorf("Render() output contains JavaScript: %s", html)
+	}
+	if strings.Contains(html, "<h2") {
+		t.Errorf("Render() output repeats the feature name as a panel heading: %s", html)
 	}
 }
 

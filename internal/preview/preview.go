@@ -21,8 +21,11 @@ type Report struct {
 
 // Session contains one feature session's repository previews.
 type Session struct {
-	FeatureName  string
-	Repositories []Repository
+	FeatureName   string
+	CreatedAt     time.Time
+	FeatureDir    string
+	WorkspaceFile string
+	Repositories  []Repository
 }
 
 // Repository contains the preview result for one worktree.
@@ -72,8 +75,11 @@ func buildWithDiff(sessions map[string]state.Session, defaultBaseBranch, overrid
 		})
 
 		previewSession := Session{
-			FeatureName:  featureName,
-			Repositories: make([]Repository, len(repositories)),
+			FeatureName:   featureName,
+			CreatedAt:     session.CreatedAt,
+			FeatureDir:    session.FeatureDir,
+			WorkspaceFile: session.WorkspaceFile,
+			Repositories:  make([]Repository, len(repositories)),
 		}
 		for repositoryIndex, repository := range repositories {
 			jobs = append(jobs, diffJob{

@@ -16,7 +16,30 @@
         <input class="feature-tab-input" type="radio" name="feature" id="feature-{{$index}}"{{if eq $index 0}} checked{{end}}>
         <label class="feature-tab-label" for="feature-{{$index}}">{{$session.FeatureName}}</label>
         <section class="feature-tab-panel">
-          <h2>{{$session.FeatureName}}</h2>
+          <dl class="feature-metadata">
+            {{if not $session.CreatedAt.IsZero}}
+            <div>
+              <dt>Created</dt>
+              <dd><time datetime="{{$session.CreatedAt.Format "2006-01-02T15:04:05Z07:00"}}">{{$session.CreatedAt.Format "2006-01-02 15:04 MST"}}</time></dd>
+            </div>
+            {{end}}
+            <div>
+              <dt>Repositories</dt>
+              <dd>{{len $session.Repositories}}</dd>
+            </div>
+            {{if $session.FeatureDir}}
+            <div>
+              <dt>Feature directory</dt>
+              <dd class="path">{{$session.FeatureDir}}</dd>
+            </div>
+            {{end}}
+            {{if $session.WorkspaceFile}}
+            <div>
+              <dt>Workspace</dt>
+              <dd class="path">{{$session.WorkspaceFile}}</dd>
+            </div>
+            {{end}}
+          </dl>
         {{if .Repositories}}
           {{range .Repositories}}
             {{$repository := .}}
