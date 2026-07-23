@@ -111,9 +111,6 @@ the supplied feature branch:
 
 ```sh
 autofeat feature/potato https://github.com/example/repo3.git
-
-
-
 ```
 
 Workspace directory names are flattened so they remain a directory.
