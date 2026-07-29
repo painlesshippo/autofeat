@@ -2,8 +2,8 @@
 
 The feature is split into two parts:
 
-- Go provides the completion script and authoritative feature names.
-- Bash examines the partially typed command and decides which candidates to show.
+* Go provides the completion script and authoritative feature names.
+* Bash examines the partially typed command and decides which candidates to show.
 
 ```mermaid
 sequenceDiagram
@@ -72,9 +72,9 @@ When Tab is pressed, Bash calls `_autofeat_completion` from completion.bash.
 
 The important Bash variables are:
 
-- `COMP_WORDS`: all words currently on the command line.
-- `COMP_CWORD`: index of the word being completed.
-- `COMPREPLY`: array that the function fills with suggestions.
+* `COMP_WORDS`: all words currently on the command line.
+* `COMP_CWORD`: index of the word being completed.
+* `COMPREPLY`: array that the function fills with suggestions.
 
 For example:
 
@@ -116,18 +116,18 @@ This completion path performs no Git commands, fetching, drift calculation, or w
 
 The Bash function understands these contexts:
 
-- Top-level command names.
-- Feature names for `open`, `run`, `sync`, `status`, `review`, and `teardown`.
-- `--force` for `teardown`.
-- `--base` for `review`.
-- `-task` for `run`.
-- `bash` after `autofeat completion`.
+* Top-level command names.
+* Feature names for `open`, `run`, `sync`, `status`, `review`, and `teardown`.
+* `--force` for `teardown`.
+* `--base` for `review`.
+* `-task` for `run`.
+* `bash` after `autofeat completion`.
 
 It also handles aliases specially:
 
-- `af` behaves like `autofeat`.
-- `afr` starts in `review` context.
-- `afl` starts in `list` context.
+* `af` behaves like `autofeat`.
+* `afr` starts in `review` context.
+* `afl` starts in `list` context.
 
 Already-selected feature names are removed. Thus:
 
@@ -149,9 +149,9 @@ command autofeat __complete features 2>/dev/null
 
 Therefore:
 
-- Missing state produces no feature candidates.
-- Malformed or unreadable state also produces no candidates or terminal noise.
-- Command-specific options may still be offered independently.
+* Missing state produces no feature candidates.
+* Malformed or unreadable state also produces no candidates or terminal noise.
+* Command-specific options may still be offered independently.
 
 Completion is advisory only. When Enter is pressed, the normal command path reloads state and validates selectors through `runSelectedFeatures` and `selectFeatureNames` in main.go. Wildcard selectors such as `"feature/*"` are resolved there, not by the completion script.
 
@@ -159,12 +159,12 @@ Completion is advisory only. When Enter is pressed, the normal command path relo
 
 Coverage in main_test.go verifies:
 
-- Sorted feature output.
-- Empty and malformed state.
-- Generated Bash syntax using `bash -n`.
-- Prefix completion.
-- Slash-containing feature names.
-- Multiple selectors and duplicate filtering.
-- Contextual options.
-- Aliases.
-- Silent endpoint failures.
+* Sorted feature output.
+* Empty and malformed state.
+* Generated Bash syntax using `bash -n`.
+* Prefix completion.
+* Slash-containing feature names.
+* Multiple selectors and duplicate filtering.
+* Contextual options.
+* Aliases.
+* Silent endpoint failures.
