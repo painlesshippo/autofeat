@@ -32,12 +32,13 @@ var (
 const headlessPrompt = "Please execute the objectives defined in TASK.md"
 
 var (
-	reviewCommand      = reviewSessions
-	statusCommand      = statusSessions
-	openFeatureCommand = openSession
-	runFeatureCommand  = runFeature
-	syncFeatureCommand = syncFeature
-	teardownCommand    = teardownSession
+	reviewCommand       = reviewSessions
+	statusCommand       = statusSessions
+	openFeatureCommand  = openSession
+	runFeatureCommand   = runFeature
+	syncFeatureCommand  = syncFeature
+	teardownCommand     = teardownSession
+	openSnapshotCommand = openReviewInBrowser
 )
 
 func main() {
@@ -292,7 +293,7 @@ func listSessions() error {
 	return listSessionsTo(os.Stdout)
 }
 
-func listSessionsTo(output *os.File) error {
+func listSessionsTo(output io.Writer) error {
 	currentState, err := state.Load()
 	if err != nil {
 		return err
@@ -957,7 +958,7 @@ func openReview(sessions map[string]state.Session, defaultBaseBranch, overrideBa
 	}
 	generationDuration := time.Since(generationStarted)
 
-	if err := openReviewInBrowser(snapshotPath); err != nil {
+	if err := openSnapshotCommand(snapshotPath); err != nil {
 		return err
 	}
 

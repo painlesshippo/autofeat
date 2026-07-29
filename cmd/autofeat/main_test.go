@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/painlesshippo/autofeat/internal/config"
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/painlesshippo/autofeat/internal/state"
 )
@@ -252,6 +254,34 @@ func TestSelectFeatureNames(t *testing.T) {
 	}
 }
 
+func TestMatchFeatureSelector(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		selector    string
+		featureName string
+		want        bool
+	}{
+		{selector: "feature/a", featureName: "feature/a", want: true},
+		{selector: "feature/a", featureName: "feature/ab", want: false},
+		{selector: "feature/*", featureName: "feature/a", want: true},
+		{selector: "feature/*", featureName: "bug/a", want: false},
+		{selector: "*suffix", featureName: "feature/with-suffix", want: true},
+		{selector: "*suffix", featureName: "feature/with-suffix-not", want: false},
+		{selector: "*middle*", featureName: "feature/middle/nested", want: true},
+		{selector: "*middle*", featureName: "feature/other", want: false},
+		{selector: "a*b*c", featureName: "a1b2c", want: true},
+		{selector: "a*b*c", featureName: "a1c2b", want: false},
+		{selector: "a**c", featureName: "abc", want: true},
+		{selector: "*", featureName: "anything", want: true},
+	}
+	for _, test := range tests {
+		if got := matchFeatureSelector(test.selector, test.featureName); got != test.want {
+			t.Errorf("matchFeatureSelector(%q, %q) = %t, want %t", test.selector, test.featureName, got, test.want)
+		}
+	}
+}
+
 func TestSyncFeatureFetchesAndRebases(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
@@ -309,6 +339,95 @@ func TestSyncFeatureDirtyPreflightDoesNotFetch(t *testing.T) {
 	}
 	if got := mainGitOutput(t, worktreePath, "rev-parse", "origin/main"); got != originalBase {
 		t.Errorf("origin/main changed during failed preflight: got %q, want %q", got, originalBase)
+	}
+}
+
+func TestSyncFeaturePreflightRejections(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	t.Run("wrong branch", func(t *testing.T) {
+		repoPath := createMainRepository(t)
+		runMainGit(t, repoPath, "branch", "-M", "main")
+		runMainGit(t, repoPath, "checkout", "-qb", "other")
+		if err := state.SaveSession("feature/wrong", state.Session{Repos: []state.Repository{{
+			Name: "repository", WorktreePath: repoPath, BaseBranch: "main",
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+
+		err := syncFeature("feature/wrong")
+		if err == nil || !strings.Contains(err.Error(), "is on branch") {
+			t.Errorf("syncFeature() error = %v, want wrong-branch error", err)
+		}
+	})
+
+	t.Run("rebase in progress", func(t *testing.T) {
+		repoPath := createMainRepository(t)
+		runMainGit(t, repoPath, "branch", "-M", "main")
+		runMainGit(t, repoPath, "checkout", "-qb", "feature/rebasing")
+		rebasePath := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "--git-path", "rebase-merge"))
+		if !filepath.IsAbs(rebasePath) {
+			rebasePath = filepath.Join(repoPath, rebasePath)
+		}
+		if err := os.MkdirAll(rebasePath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.SaveSession("feature/rebasing", state.Session{Repos: []state.Repository{{
+			Name: "repository", WorktreePath: repoPath, BaseBranch: "main",
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+
+		err := syncFeature("feature/rebasing")
+		if err == nil || !strings.Contains(err.Error(), "rebase in progress") {
+			t.Errorf("syncFeature() error = %v, want rebase-in-progress error", err)
+		}
+	})
+
+	t.Run("missing worktree", func(t *testing.T) {
+		if err := state.SaveSession("feature/missing", state.Session{Repos: []state.Repository{{
+			Name: "repository", WorktreePath: filepath.Join(t.TempDir(), "missing"),
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := syncFeature("feature/missing"); err == nil {
+			t.Error("syncFeature() error = nil, want missing worktree error")
+		}
+	})
+}
+
+func TestSyncFeatureConflictLeavesRebaseResumable(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "checkout", "-qb", "feature/conflict")
+	writeAndCommitMainFile(t, repoPath, "README.md", "feature\n", "feature change")
+	runMainGit(t, repoPath, "checkout", "main")
+	writeAndCommitMainFile(t, repoPath, "README.md", "base\n", "base change")
+	runMainGit(t, repoPath, "checkout", "feature/conflict")
+	t.Cleanup(func() {
+		_ = exec.Command("git", "-C", repoPath, "rebase", "--abort").Run()
+	})
+
+	if err := state.SaveSession("feature/conflict", state.Session{Repos: []state.Repository{{
+		Name: "repository", WorktreePath: repoPath, BaseBranch: "main",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := syncFeature("feature/conflict"); err == nil {
+		t.Fatal("syncFeature() error = nil, want rebase conflict")
+	}
+	rebasing, err := gitcmd.IsRebaseInProgress(repoPath)
+	if err != nil {
+		t.Fatalf("IsRebaseInProgress() error = %v", err)
+	}
+	if !rebasing {
+		t.Error("rebase is not in progress after conflict, want resumable rebase")
 	}
 }
 
@@ -540,6 +659,7 @@ func createRemoteMainRepository(t *testing.T) (string, string) {
 	runMainGit(t, sourcePath, "branch", "-M", "main")
 	remotePath := filepath.Join(t.TempDir(), "remote.git")
 	runMainGit(t, sourcePath, "init", "--bare", "-q", remotePath)
+	runMainGit(t, remotePath, "symbolic-ref", "HEAD", "refs/heads/main")
 	runMainGit(t, sourcePath, "remote", "add", "origin", remotePath)
 	runMainGit(t, sourcePath, "push", "-qu", "origin", "main")
 	return sourcePath, remotePath
@@ -570,6 +690,472 @@ func mainGitOutput(t *testing.T, directory string, args ...string) string {
 		t.Fatalf("git %v failed: %v\n%s", args, err, output)
 	}
 	return string(output)
+}
+
+func mainWorkspaceDir(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(home, ".autofeat-workspaces")
+}
+
+func writeMainConfig(t *testing.T, editorCmd, headlessCmd string) {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := config.Config{
+		WorkspaceBaseDir: filepath.Join(home, ".autofeat-workspaces"),
+		EditorCmd:        editorCmd,
+		HeadlessCmd:      headlessCmd,
+	}
+	if err := config.SaveToPath(filepath.Join(home, ".autofeat", "config.json"), configuration); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeStubCommand(t *testing.T) (scriptPath, logPath string) {
+	t.Helper()
+	directory := t.TempDir()
+	logPath = filepath.Join(directory, "invocation.log")
+	scriptPath = filepath.Join(directory, "stub")
+	contents := "#!/bin/sh\n{ pwd; printf '%s\\n' \"$@\"; } > \"" + logPath + "\"\n"
+	if err := os.WriteFile(scriptPath, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return scriptPath, logPath
+}
+
+func TestAddRepositoryCreatesSessionWorktreeAndWorkspace(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	firstRepo := createMainRepository(t)
+	runMainGit(t, firstRepo, "branch", "-M", "main")
+	t.Chdir(firstRepo)
+	if err := addRepository("feature/potato"); err != nil {
+		t.Fatalf("addRepository() error = %v", err)
+	}
+
+	session, err := state.GetSession("feature/potato")
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if len(session.Repos) != 1 {
+		t.Fatalf("session repos = %+v, want one repository", session.Repos)
+	}
+	repository := session.Repos[0]
+	if repository.BaseBranch != "main" || repository.IsRemoteClone {
+		t.Errorf("repository = %+v, want main base local worktree", repository)
+	}
+	wantWorktree := filepath.Join(mainWorkspaceDir(t), "feature%2Fpotato", filepath.Base(firstRepo))
+	if repository.WorktreePath != wantWorktree {
+		t.Errorf("WorktreePath = %q, want %q", repository.WorktreePath, wantWorktree)
+	}
+	branch, err := gitcmd.CurrentBranch(repository.WorktreePath)
+	if err != nil {
+		t.Fatalf("CurrentBranch() error = %v", err)
+	}
+	if branch != "feature/potato" {
+		t.Errorf("worktree branch = %q, want feature/potato", branch)
+	}
+	if _, err := os.Stat(session.WorkspaceFile); err != nil {
+		t.Errorf("workspace file missing: %v", err)
+	}
+
+	secondRepo := createMainRepository(t)
+	runMainGit(t, secondRepo, "branch", "-M", "main")
+	t.Chdir(secondRepo)
+	if err := addRepository("feature/potato"); err != nil {
+		t.Fatalf("addRepository() second repository error = %v", err)
+	}
+	session, err = state.GetSession("feature/potato")
+	if err != nil {
+		t.Fatalf("GetSession() after second add error = %v", err)
+	}
+	if len(session.Repos) != 2 {
+		t.Fatalf("session repos after second add = %+v, want two repositories", session.Repos)
+	}
+	workspaceContents, err := os.ReadFile(session.WorkspaceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, repository := range session.Repos {
+		if !strings.Contains(string(workspaceContents), repository.Name) {
+			t.Errorf("workspace file does not reference %q:\n%s", repository.Name, workspaceContents)
+		}
+	}
+}
+
+func TestAddRemoteRepositoryClonesAndRecordsSession(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	_, remotePath := createRemoteMainRepository(t)
+	if err := addRemoteRepository("feature/remote", remotePath); err != nil {
+		t.Fatalf("addRemoteRepository() error = %v", err)
+	}
+
+	session, err := state.GetSession("feature/remote")
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if len(session.Repos) != 1 {
+		t.Fatalf("session repos = %+v, want one repository", session.Repos)
+	}
+	repository := session.Repos[0]
+	if !repository.IsRemoteClone || repository.Name != "remote" || repository.BaseBranch != "main" {
+		t.Errorf("repository = %+v, want remote clone named remote on main", repository)
+	}
+	branch, err := gitcmd.CurrentBranch(repository.WorktreePath)
+	if err != nil {
+		t.Fatalf("CurrentBranch() error = %v", err)
+	}
+	if branch != "feature/remote" {
+		t.Errorf("clone branch = %q, want feature/remote", branch)
+	}
+}
+
+func TestAddRemoteRepositoryRemovesCloneOnFailure(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	sourcePath := createMainRepository(t)
+	runMainGit(t, sourcePath, "branch", "-M", "trunk")
+	remotePath := filepath.Join(t.TempDir(), "trunk-only.git")
+	runMainGit(t, sourcePath, "init", "--bare", "-q", remotePath)
+	runMainGit(t, sourcePath, "remote", "add", "origin", remotePath)
+	runMainGit(t, sourcePath, "push", "-qu", "origin", "trunk")
+
+	if err := addRemoteRepository("feature/remote", remotePath); err == nil {
+		t.Fatal("addRemoteRepository() error = nil, want base resolution error")
+	}
+	worktreePath := filepath.Join(mainWorkspaceDir(t), "feature%2Fremote", "trunk-only")
+	if _, err := os.Stat(worktreePath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("failed clone was not removed: Stat() error = %v", err)
+	}
+	if _, err := state.GetSession("feature/remote"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() after failed clone error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestTeardownSessionRemovesWorktreesAndState(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	t.Chdir(repoPath)
+	if err := addRepository("feature/clean"); err != nil {
+		t.Fatalf("addRepository() error = %v", err)
+	}
+	session, err := state.GetSession("feature/clean")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := teardownSession("feature/clean", false); err != nil {
+		t.Fatalf("teardownSession() error = %v", err)
+	}
+	if _, err := os.Stat(session.FeatureDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("feature directory still exists: Stat() error = %v", err)
+	}
+	if _, err := state.GetSession("feature/clean"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() after teardown error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestTeardownSessionDirtyWorktree(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	t.Chdir(repoPath)
+	if err := addRepository("feature/dirty"); err != nil {
+		t.Fatalf("addRepository() error = %v", err)
+	}
+	session, err := state.GetSession("feature/dirty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := session.Repos[0].WorktreePath
+	if err := os.WriteFile(filepath.Join(worktreePath, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := teardownSession("feature/dirty", false); err == nil {
+		t.Fatal("teardownSession() error = nil, want dirty worktree error")
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("dirty worktree was removed without --force: %v", err)
+	}
+
+	if err := teardownSession("feature/dirty", true); err != nil {
+		t.Fatalf("teardownSession(force) error = %v", err)
+	}
+	if _, err := os.Stat(session.FeatureDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("feature directory still exists after forced teardown: Stat() error = %v", err)
+	}
+	if _, err := state.GetSession("feature/dirty"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() after forced teardown error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestTeardownSessionRemovesRemoteClone(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	_, remotePath := createRemoteMainRepository(t)
+	if err := addRemoteRepository("feature/remote", remotePath); err != nil {
+		t.Fatalf("addRemoteRepository() error = %v", err)
+	}
+	session, err := state.GetSession("feature/remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := session.Repos[0].WorktreePath
+	runMainGit(t, worktreePath, "push", "-qu", "origin", "feature/remote")
+	runMainGit(t, worktreePath, "config", "user.email", "test@example.com")
+	runMainGit(t, worktreePath, "config", "user.name", "Test User")
+	writeAndCommitMainFile(t, worktreePath, "feature.txt", "feature\n", "unpushed feature change")
+
+	if err := teardownSession("feature/remote", false); err != nil {
+		t.Fatalf("teardownSession() error = %v", err)
+	}
+	if _, err := os.Stat(session.FeatureDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("feature directory still exists: Stat() error = %v", err)
+	}
+	if _, err := state.GetSession("feature/remote"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() after teardown error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestEnsureRepositoryAdded(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	t.Chdir(repoPath)
+
+	if err := ensureRepositoryAdded("feature/ensure"); err != nil {
+		t.Fatalf("ensureRepositoryAdded() error = %v", err)
+	}
+	session, err := state.GetSession("feature/ensure")
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if len(session.Repos) != 1 {
+		t.Fatalf("session repos = %+v, want one repository", session.Repos)
+	}
+
+	if err := ensureRepositoryAdded("feature/ensure"); err != nil {
+		t.Fatalf("ensureRepositoryAdded() second call error = %v", err)
+	}
+	session, err = state.GetSession("feature/ensure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.Repos) != 1 {
+		t.Errorf("session repos after repeated ensure = %+v, want one repository", session.Repos)
+	}
+}
+
+func TestOpenSessionInvokesEditorWithWorkspaceFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	scriptPath, logPath := writeStubCommand(t)
+	writeMainConfig(t, scriptPath, "copilot")
+	workspaceFile := filepath.Join(t.TempDir(), "feature.code-workspace")
+	if err := state.SaveSession("feature/open", state.Session{WorkspaceFile: workspaceFile}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := openSession("feature/open"); err != nil {
+		t.Fatalf("openSession() error = %v", err)
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), workspaceFile) {
+		t.Errorf("editor invocation = %q, want workspace file %q", contents, workspaceFile)
+	}
+}
+
+func TestRunFeatureStartsHeadlessAgentInFeatureDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	scriptPath, logPath := writeStubCommand(t)
+	writeMainConfig(t, "code", scriptPath)
+	featureDir := t.TempDir()
+	if err := state.SaveSession("feature/agent", state.Session{FeatureDir: featureDir}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+
+	if err := runFeature("feature/agent", "write tests"); err != nil {
+		t.Fatalf("runFeature() error = %v", err)
+	}
+
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(contents)), "\n")
+	if len(lines) != 3 || lines[1] != "-i" || lines[2] != headlessPrompt {
+		t.Errorf("headless invocation = %q, want [cwd -i prompt]", lines)
+	}
+	if resolved, err := filepath.EvalSymlinks(featureDir); err != nil || lines[0] != resolved {
+		t.Errorf("headless cwd = %q, want feature directory %q", lines[0], resolved)
+	}
+	task, err := os.ReadFile(filepath.Join(featureDir, "TASK.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(task) != "write tests\n" {
+		t.Errorf("TASK.md = %q, want appended task", task)
+	}
+}
+
+func TestRunHeadlessMissingCommand(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	writeMainConfig(t, "code", filepath.Join(t.TempDir(), "does-not-exist"))
+	if err := state.SaveSession("feature/agent", state.Session{FeatureDir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runHeadless("feature/agent", ""); err == nil {
+		t.Fatal("runHeadless() error = nil, want missing command error")
+	}
+}
+
+func TestListSessionsToRendersDrift(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "checkout", "-qb", "feature/list")
+	runMainGit(t, repoPath, "checkout", "main")
+	writeAndCommitMainFile(t, repoPath, "base.txt", "base\n", "base change")
+	runMainGit(t, repoPath, "checkout", "feature/list")
+
+	if err := state.SaveSession("feature/list", state.Session{Repos: []state.Repository{{
+		Name: "repository", WorktreePath: repoPath, BaseBranch: "main",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SaveSession("feature/current", state.Session{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := listSessionsTo(&output); err != nil {
+		t.Fatalf("listSessionsTo() error = %v", err)
+	}
+	report := output.String()
+	for _, want := range []string{"FEATURE", "CREATED", "REPOSITORIES", "DRIFT", "feature/list", "1 behind", "feature/current", "current"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("list report does not contain %q:\n%s", want, report)
+		}
+	}
+	if strings.Index(report, "feature/current") > strings.Index(report, "feature/list") {
+		t.Errorf("list report is not sorted by feature name:\n%s", report)
+	}
+}
+
+func TestReviewSessionsWritesSnapshot(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "checkout", "-qb", "feature/review")
+	writeAndCommitMainFile(t, repoPath, "feature.txt", "feature\n", "feature change")
+
+	if err := state.SaveSession("feature/review", state.Session{Repos: []state.Repository{{
+		Name: "repository", WorktreePath: repoPath,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	originalOpenSnapshotCommand := openSnapshotCommand
+	t.Cleanup(func() {
+		openSnapshotCommand = originalOpenSnapshotCommand
+	})
+	var openedPath string
+	openSnapshotCommand = func(snapshotPath string) error {
+		openedPath = snapshotPath
+		return nil
+	}
+
+	if err := reviewSessions([]string{"feature/review"}, ""); err != nil {
+		t.Fatalf("reviewSessions() error = %v", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(home, ".autofeat", "review.html")
+	if openedPath != wantPath {
+		t.Errorf("opened snapshot = %q, want %q", openedPath, wantPath)
+	}
+	contents, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	for _, want := range []string{"feature/review", "feature.txt"} {
+		if !strings.Contains(string(contents), want) {
+			t.Errorf("review snapshot does not contain %q", want)
+		}
+	}
+
+	session, err := state.GetSession("feature/review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Repos[0].BaseBranch != "main" {
+		t.Errorf("backfilled BaseBranch = %q, want main", session.Repos[0].BaseBranch)
+	}
+
+	if err := reviewSessions([]string{"feature/missing"}, ""); err == nil {
+		t.Error("reviewSessions(feature/missing) error = nil, want no-match error")
+	}
+}
+
+func TestDetectBaseBranchFallsBackToStateDefault(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "trunk")
+
+	if err := state.Save(state.State{DefaultBaseBranch: "develop"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := detectBaseBranch(repoPath)
+	if err != nil {
+		t.Fatalf("detectBaseBranch() error = %v", err)
+	}
+	if got != "develop" {
+		t.Errorf("detectBaseBranch() = %q, want state default develop", got)
+	}
+
+	runMainGit(t, repoPath, "branch", "main", "trunk")
+	got, err = detectBaseBranch(repoPath)
+	if err != nil {
+		t.Fatalf("detectBaseBranch() with main error = %v", err)
+	}
+	if got != "main" {
+		t.Errorf("detectBaseBranch() = %q, want detected main", got)
+	}
 }
 
 func TestAppendTask(t *testing.T) {

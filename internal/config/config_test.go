@@ -67,3 +67,73 @@ func TestLoadFromPathDefaultsMissingHeadlessCommand(t *testing.T) {
 		t.Errorf("HeadlessCmd = %q, want %q", config.HeadlessCmd, defaultHeadlessCommand)
 	}
 }
+
+func TestLoadFromPathRejectsCorruptConfig(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"editor_cmd":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadFromPath(configPath); err == nil {
+		t.Fatal("LoadFromPath() error = nil, want parse error")
+	}
+}
+
+func TestLoadCreatesDefaultConfigOnFirstUse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	config, err := Load()
+	if err != nil {
+		t.Fatalf("Load() first use error = %v", err)
+	}
+	want := Config{
+		WorkspaceBaseDir: filepath.Join(home, ".autofeat-workspaces"),
+		EditorCmd:        defaultEditorCommand,
+		HeadlessCmd:      defaultHeadlessCommand,
+	}
+	if config != want {
+		t.Errorf("Load() first use = %+v, want %+v", config, want)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".autofeat", "config.json")); err != nil {
+		t.Errorf("default config file was not created: %v", err)
+	}
+
+	config.EditorCmd = "custom-editor"
+	if err := Save(config); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load() second use error = %v", err)
+	}
+	if got != config {
+		t.Errorf("Load() second use = %+v, want persisted %+v", got, config)
+	}
+}
+
+func TestValidate(t *testing.T) {
+	t.Parallel()
+
+	valid := Config{WorkspaceBaseDir: "/tmp/workspaces", EditorCmd: "code", HeadlessCmd: "copilot"}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("Validate() error = %v", err)
+	}
+
+	tests := map[string]Config{
+		"missing workspace base dir": {EditorCmd: "code", HeadlessCmd: "copilot"},
+		"missing editor cmd":         {WorkspaceBaseDir: "/tmp/workspaces", HeadlessCmd: "copilot"},
+		"missing headless cmd":       {WorkspaceBaseDir: "/tmp/workspaces", EditorCmd: "code"},
+		"blank values":               {WorkspaceBaseDir: " ", EditorCmd: " ", HeadlessCmd: " "},
+	}
+	for name, config := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := config.Validate(); err == nil {
+				t.Errorf("Validate(%+v) error = nil, want error", config)
+			}
+		})
+	}
+}

@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,5 +90,84 @@ func TestLoadFromPathDefaultsMissingGlobalBaseBranch(t *testing.T) {
 	}
 	if state.DefaultBaseBranch != DefaultBaseBranch {
 		t.Errorf("DefaultBaseBranch = %q, want %q", state.DefaultBaseBranch, DefaultBaseBranch)
+	}
+}
+
+func TestLoadFromPathRejectsCorruptState(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"sessions":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadFromPath(path); err == nil {
+		t.Fatal("LoadFromPath() error = nil, want parse error")
+	}
+}
+
+func TestSessionLifecycle(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	session := Session{FeatureDir: "/tmp/workspaces/feature1"}
+	if err := SaveSession("feature1", session); err != nil {
+		t.Fatalf("SaveSession() error = %v", err)
+	}
+
+	got, err := GetSession("feature1")
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if got.FeatureDir != session.FeatureDir {
+		t.Errorf("FeatureDir = %q, want %q", got.FeatureDir, session.FeatureDir)
+	}
+
+	session.FeatureDir = "/tmp/workspaces/feature1-moved"
+	if err := UpdateSession("feature1", session); err != nil {
+		t.Fatalf("UpdateSession() error = %v", err)
+	}
+	got, err = GetSession("feature1")
+	if err != nil {
+		t.Fatalf("GetSession() after update error = %v", err)
+	}
+	if got.FeatureDir != "/tmp/workspaces/feature1-moved" {
+		t.Errorf("FeatureDir after update = %q, want updated value", got.FeatureDir)
+	}
+
+	sessions, err := ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Errorf("ListSessions() = %v, want one session", sessions)
+	}
+
+	if err := DeleteSession("feature1"); err != nil {
+		t.Fatalf("DeleteSession() error = %v", err)
+	}
+	if _, err := GetSession("feature1"); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("GetSession() after delete error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestSessionOperationsOnMissingSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if _, err := GetSession("missing"); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("GetSession(missing) error = %v, want ErrSessionNotFound", err)
+	}
+	if err := UpdateSession("missing", Session{}); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("UpdateSession(missing) error = %v, want ErrSessionNotFound", err)
+	}
+	if err := DeleteSession("missing"); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("DeleteSession(missing) error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestSaveSessionRejectsEmptyName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if err := SaveSession("", Session{}); err == nil {
+		t.Fatal("SaveSession(\"\") error = nil, want error")
 	}
 }

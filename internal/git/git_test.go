@@ -606,6 +606,38 @@ func requireGit(t *testing.T) {
 	}
 }
 
+func TestCachedBaseStatus(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	runGit(t, repoPath, "checkout", "-qb", "feature/status")
+	if err := os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "feature.txt")
+	runGit(t, repoPath, "commit", "-qm", "feature change")
+	runGit(t, repoPath, "checkout", "-q", "main")
+	if err := os.WriteFile(filepath.Join(repoPath, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "base.txt")
+	runGit(t, repoPath, "commit", "-qm", "base change")
+	runGit(t, repoPath, "checkout", "-q", "feature/status")
+
+	status, err := CachedBaseStatus(repoPath, "main")
+	if err != nil {
+		t.Fatalf("CachedBaseStatus() error = %v", err)
+	}
+	if status.BaseRef != "refs/heads/main" || status.Ahead != 1 || status.Behind != 1 {
+		t.Errorf("CachedBaseStatus() = %+v, want local main one ahead one behind", status)
+	}
+
+	if _, err := CachedBaseStatus(repoPath, "missing-base"); err == nil {
+		t.Error("CachedBaseStatus(missing-base) error = nil, want resolution error")
+	}
+}
+
 func createRepository(t *testing.T) string {
 	t.Helper()
 
