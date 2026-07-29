@@ -139,7 +139,17 @@ func HasUncommittedChanges(destPath string) (bool, error) {
 // HasUnpushedCommits reports whether branchName has commits that are not on its
 // corresponding origin branch in the repository at destPath.
 func HasUnpushedCommits(destPath, branchName string) (bool, error) {
-	output, err := run("-C", destPath, "log", "origin/"+branchName+".."+branchName)
+	remoteRef := "refs/remotes/origin/" + branchName
+	command := exec.Command("git", "-C", destPath, "show-ref", "--verify", "--quiet", remoteRef)
+	if err := command.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return true, nil
+		}
+		return false, fmt.Errorf("resolve origin branch %q in repository %q: %w", branchName, destPath, err)
+	}
+
+	output, err := run("-C", destPath, "log", remoteRef+"..refs/heads/"+branchName)
 	if err != nil {
 		return false, fmt.Errorf("check unpushed commits for branch %q in %q: %w", branchName, destPath, err)
 	}

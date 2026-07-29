@@ -1075,6 +1075,30 @@ func TestTeardownSessionRemovesRemoteClone(t *testing.T) {
 	}
 }
 
+func TestTeardownSessionRemovesRemoteCloneWithUnpublishedBranch(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	_, remotePath := createRemoteMainRepository(t)
+	if err := addRemoteRepository("feature/unpublished", remotePath); err != nil {
+		t.Fatalf("addRemoteRepository() error = %v", err)
+	}
+	session, err := state.GetSession("feature/unpublished")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := teardownSession("feature/unpublished", false); err != nil {
+		t.Fatalf("teardownSession() unpublished branch error = %v", err)
+	}
+	if _, err := os.Stat(session.FeatureDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("feature directory still exists: Stat() error = %v", err)
+	}
+	if _, err := state.GetSession("feature/unpublished"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() after teardown error = %v, want ErrSessionNotFound", err)
+	}
+}
+
 func TestEnsureRepositoryAdded(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())

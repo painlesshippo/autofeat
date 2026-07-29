@@ -599,6 +599,25 @@ func TestCloneCheckoutNewBranchAndDetectUnpushedCommits(t *testing.T) {
 	}
 }
 
+func TestHasUnpushedCommitsTreatsUnpublishedBranchAsUnpushed(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, repoPath, "init", "--bare", "-q", remotePath)
+	runGit(t, repoPath, "remote", "add", "origin", remotePath)
+	runGit(t, repoPath, "push", "-qu", "origin", "HEAD")
+	runGit(t, repoPath, "checkout", "-qb", "feature/unpublished")
+
+	unpushed, err := HasUnpushedCommits(repoPath, "feature/unpublished")
+	if err != nil {
+		t.Fatalf("HasUnpushedCommits() unpublished branch error = %v", err)
+	}
+	if !unpushed {
+		t.Error("HasUnpushedCommits() unpublished branch = false, want true")
+	}
+}
+
 func requireGit(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
