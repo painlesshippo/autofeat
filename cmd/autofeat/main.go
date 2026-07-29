@@ -2,6 +2,7 @@
 package main
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,9 @@ var (
 
 const headlessPrompt = "Please execute the objectives defined in TASK.md"
 
+//go:embed completion.bash
+var bashCompletion string
+
 var (
 	reviewCommand       = reviewSessions
 	statusCommand       = statusSessions
@@ -54,6 +58,16 @@ func run(args []string) error {
 	}
 
 	switch args[0] {
+	case "completion":
+		if len(args) != 2 || args[1] != "bash" {
+			return usageError()
+		}
+		return writeBashCompletion(os.Stdout)
+	case "__complete":
+		if len(args) != 2 || args[1] != "features" {
+			return usageError()
+		}
+		return writeFeatureCompletions(os.Stdout)
 	case "list":
 		if len(args) != 1 {
 			return usageError()
@@ -291,6 +305,31 @@ func isRemoteURL(value string) bool {
 
 func listSessions() error {
 	return listSessionsTo(os.Stdout)
+}
+
+func writeBashCompletion(output io.Writer) error {
+	_, err := io.WriteString(output, bashCompletion)
+	return err
+}
+
+func writeFeatureCompletions(output io.Writer) error {
+	sessions, err := state.ListSessions()
+	if err != nil {
+		return err
+	}
+
+	names := make([]string, 0, len(sessions))
+	for name := range sessions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if _, err := fmt.Fprintln(output, name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func listSessionsTo(output io.Writer) error {
@@ -1144,5 +1183,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat <new|open|run|sync|status|review|teardown|list|version> [feature-selector ...] [options]")
+	return errors.New("usage: autofeat <new|open|run|sync|status|review|teardown|list|version|completion> [feature-selector ...] [options]")
 }

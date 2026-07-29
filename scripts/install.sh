@@ -7,6 +7,7 @@ binary_path="$project_root/bin/autofeat"
 install_dir="${INSTALL_DIR:-$HOME/.local/bin}"
 shell_rc="${SHELL_RC:-$HOME/.bashrc}"
 path_export="export PATH=\"$install_dir:\$PATH\""
+completion_source="source <(autofeat completion bash)"
 alias_definitions=(
     "alias af='autofeat'"
     "alias afr='autofeat review'"
@@ -30,7 +31,12 @@ for alias_definition in "${alias_definitions[@]}"; do
     fi
 done
 
-if [[ "$add_path" == true || ${#aliases_to_add[@]} -gt 0 ]]; then
+add_completion=false
+if ! grep -Fqx "$completion_source" "$shell_rc" 2>/dev/null; then
+    add_completion=true
+fi
+
+if [[ "$add_path" == true || ${#aliases_to_add[@]} -gt 0 || "$add_completion" == true ]]; then
     mkdir -p "$(dirname "$shell_rc")"
     {
         echo
@@ -41,6 +47,9 @@ if [[ "$add_path" == true || ${#aliases_to_add[@]} -gt 0 ]]; then
         for alias_definition in "${aliases_to_add[@]}"; do
             echo "$alias_definition"
         done
+        if [[ "$add_completion" == true ]]; then
+            echo "$completion_source"
+        fi
     } >>"$shell_rc"
 fi
 
@@ -50,7 +59,10 @@ fi
 if [[ ${#aliases_to_add[@]} -gt 0 ]]; then
     echo "Added autofeat aliases in $shell_rc"
 fi
-if [[ "$add_path" == true || ${#aliases_to_add[@]} -gt 0 ]]; then
+if [[ "$add_completion" == true ]]; then
+    echo "Added autofeat Bash completion in $shell_rc"
+fi
+if [[ "$add_path" == true || ${#aliases_to_add[@]} -gt 0 || "$add_completion" == true ]]; then
     echo "Run: source $shell_rc"
 fi
 

@@ -5,22 +5,33 @@ set -euo pipefail
 install_dir="${INSTALL_DIR:-$HOME/.local/bin}"
 shell_rc="${SHELL_RC:-$HOME/.bashrc}"
 path_export="export PATH=\"$install_dir:\$PATH\""
+completion_source="source <(autofeat completion bash)"
+alias_af="alias af='autofeat'"
+alias_afr="alias afr='autofeat review'"
+alias_afl="alias afl='autofeat list'"
 
 rm -f "$install_dir/autofeat"
 
 if [[ -f "$shell_rc" ]] && grep -Fqx "# Added by autofeat install" "$shell_rc"; then
     temporary_rc="$(mktemp "${shell_rc}.XXXXXX")"
-    awk -v marker="# Added by autofeat install" -v path_export="$path_export" '
+    awk \
+        -v marker="# Added by autofeat install" \
+        -v path_export="$path_export" \
+        -v completion_source="$completion_source" \
+        -v alias_af="$alias_af" \
+        -v alias_afr="$alias_afr" \
+        -v alias_afl="$alias_afl" '
         $0 == marker {
-            remove_next = 1
+            managed_block = 1
             next
         }
-        remove_next && $0 == path_export {
-            remove_next = 0
+        managed_block && ($0 == path_export || $0 == completion_source || $0 == alias_af || $0 == alias_afr || $0 == alias_afl) {
             next
+        }
+        managed_block {
+            managed_block = 0
         }
         {
-            remove_next = 0
             print
         }
     ' "$shell_rc" >"$temporary_rc"

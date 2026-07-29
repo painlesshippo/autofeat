@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,146 @@ func TestVersionCommand(t *testing.T) {
 
 	if err := run([]string{"version", "extra"}); err == nil {
 		t.Error("run(version, extra) error = nil, want usage error")
+	}
+}
+
+func TestFeatureCompletions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"feature/zulu", "bug/fix", "feature/team/nested"} {
+		if err := state.SaveSession(name, state.Session{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var output bytes.Buffer
+	if err := writeFeatureCompletions(&output); err != nil {
+		t.Fatalf("writeFeatureCompletions() error = %v", err)
+	}
+	if got, want := output.String(), "bug/fix\nfeature/team/nested\nfeature/zulu\n"; got != want {
+		t.Errorf("writeFeatureCompletions() = %q, want %q", got, want)
+	}
+}
+
+func TestFeatureCompletionsEmptyAndMalformedState(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		t.Setenv("HOME", t.TempDir())
+
+		var output bytes.Buffer
+		if err := writeFeatureCompletions(&output); err != nil {
+			t.Fatalf("writeFeatureCompletions() error = %v", err)
+		}
+		if output.Len() != 0 {
+			t.Errorf("writeFeatureCompletions() = %q, want empty output", output.String())
+		}
+	})
+
+	t.Run("malformed", func(t *testing.T) {
+		homeDir := t.TempDir()
+		t.Setenv("HOME", homeDir)
+		stateDir := filepath.Join(homeDir, ".autofeat")
+		if err := os.MkdirAll(stateDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := writeFeatureCompletions(&bytes.Buffer{}); err == nil {
+			t.Fatal("writeFeatureCompletions() error = nil, want malformed state error")
+		}
+	})
+}
+
+func TestCompletionCommandArguments(t *testing.T) {
+	for _, args := range [][]string{{"completion"}, {"completion", "zsh"}, {"completion", "bash", "extra"}, {"__complete"}, {"__complete", "unknown"}} {
+		if err := run(args); err == nil {
+			t.Errorf("run(%q) error = nil, want usage error", args)
+		}
+	}
+}
+
+func TestBashCompletionSyntax(t *testing.T) {
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not available")
+	}
+
+	command := exec.Command(bashPath, "-n")
+	command.Stdin = strings.NewReader(bashCompletion)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("bash -n completion error = %v\n%s", err, output)
+	}
+}
+
+func TestBashCompletionBehavior(t *testing.T) {
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not available")
+	}
+
+	tests := []struct {
+		name           string
+		words          []string
+		completionWord int
+		failEndpoint   bool
+		want           string
+	}{
+		{name: "command", words: []string{"autofeat", "te"}, completionWord: 1, want: "teardown\n"},
+		{name: "teardown features and option", words: []string{"autofeat", "teardown", ""}, completionWord: 2, want: "bug/fix\nfeature/alpha\nfeature/team/nested\n--force\n"},
+		{name: "slash prefix", words: []string{"autofeat", "open", "feature/t"}, completionWord: 2, want: "feature/team/nested\n"},
+		{name: "selected feature filtered", words: []string{"autofeat", "sync", "feature/alpha", ""}, completionWord: 3, want: "bug/fix\nfeature/team/nested\n"},
+		{name: "run option requires selector", words: []string{"autofeat", "run", "-"}, completionWord: 2, want: ""},
+		{name: "run option", words: []string{"autofeat", "run", "feature/alpha", "-"}, completionWord: 3, want: "-task\n"},
+		{name: "run task value", words: []string{"autofeat", "run", "feature/alpha", "-task", ""}, completionWord: 4, want: ""},
+		{name: "run task terminates command", words: []string{"autofeat", "run", "feature/alpha", "-task", "write tests", ""}, completionWord: 5, want: ""},
+		{name: "review base value", words: []string{"autofeat", "review", "--base", ""}, completionWord: 3, want: ""},
+		{name: "af alias", words: []string{"af", "st"}, completionWord: 1, want: "status\n"},
+		{name: "afr alias", words: []string{"afr", "feature/t"}, completionWord: 1, want: "feature/team/nested\n"},
+		{name: "afl alias", words: []string{"afl", ""}, completionWord: 1, want: ""},
+		{name: "endpoint failure", words: []string{"autofeat", "status", ""}, completionWord: 2, failEndpoint: true, want: ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stubDir := t.TempDir()
+			stubPath := filepath.Join(stubDir, "autofeat")
+			stub := `#!/usr/bin/env bash
+if [[ "${FAIL_ENDPOINT:-false}" == true ]]; then
+    exit 1
+fi
+if [[ "$1" == "__complete" && "$2" == "features" ]]; then
+    printf '%s\n' 'bug/fix' 'feature/alpha' 'feature/team/nested'
+    exit
+fi
+exit 1
+`
+			if err := os.WriteFile(stubPath, []byte(stub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			script := bashCompletion + `
+COMP_WORDS=("$@")
+COMP_CWORD="$COMPLETION_WORD"
+_autofeat_completion
+if (( ${#COMPREPLY[@]} > 0 )); then
+    printf '%s\n' "${COMPREPLY[@]}"
+fi
+`
+			command := exec.Command(bashPath, "-c", script, "completion-test")
+			command.Args = append(command.Args, test.words...)
+			command.Env = append(os.Environ(),
+				fmt.Sprintf("COMPLETION_WORD=%d", test.completionWord),
+				fmt.Sprintf("FAIL_ENDPOINT=%t", test.failEndpoint),
+				fmt.Sprintf("PATH=%s%c%s", stubDir, os.PathListSeparator, os.Getenv("PATH")),
+			)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("bash completion error = %v\n%s", err, output)
+			}
+			if got := string(output); got != test.want {
+				t.Errorf("completion output = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

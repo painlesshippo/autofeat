@@ -52,8 +52,16 @@ binary, is on `PATH`.
 
 `mise run install` installs the built binary into `$HOME/.local/bin` and adds
 the `af`, `afr`, and `afl` aliases for `autofeat`, `autofeat review`, and
-`autofeat list` to `$HOME/.bashrc` by default. Override these locations with
-`INSTALL_DIR` and `SHELL_RC` when necessary.
+`autofeat list` to `$HOME/.bashrc` by default. It also enables Bash completion
+for the command and aliases. Override these locations with `INSTALL_DIR` and
+`SHELL_RC` when necessary, then reload the configured shell file.
+
+When installing with `go install` or copying the binary manually, add the
+following line to `$HOME/.bashrc` and reload the shell:
+
+```bash
+source <(autofeat completion bash)
+```
 
 ## Development
 Enable the repository's Git hooks after cloning:
@@ -91,6 +99,10 @@ Commands use `autofeat <command> [feature-selector ...]`. Existing-session
 commands accept exact feature names, multiple selectors, `"*"` for every
 feature, and patterns such as `"feature/*"`. Quote wildcard selectors so the
 shell passes them to `autofeat` instead of expanding them as file names.
+
+Bash completion suggests active feature names for `open`, `run`, `sync`,
+`status`, `review`, and `teardown`, including subsequent selector positions.
+It omits names already selected and includes each command's supported options.
 
 Create a feature session from inside a Git repository. The command creates a
 branch with the supplied feature name, adds a worktree, records the session,
