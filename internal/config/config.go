@@ -18,9 +18,10 @@ const (
 
 // Config is the global autofeat configuration stored in ~/.autofeat/config.json.
 type Config struct {
-	WorkspaceBaseDir string `json:"workspace_base_dir"`
-	EditorCmd        string `json:"editor_cmd"`
-	HeadlessCmd      string `json:"headless_cmd"`
+	WorkspaceBaseDir string   `json:"workspace_base_dir"`
+	EditorCmd        string   `json:"editor_cmd"`
+	HeadlessCmd      string   `json:"headless_cmd"`
+	PostAddCommands  []string `json:"post_add_commands"`
 }
 
 // Default returns the default configuration for the current user.
@@ -34,6 +35,7 @@ func Default() (Config, error) {
 		WorkspaceBaseDir: filepath.Join(homeDir, ".autofeat-workspaces"),
 		EditorCmd:        defaultEditorCommand,
 		HeadlessCmd:      defaultHeadlessCommand,
+		PostAddCommands:  []string{"mise install"},
 	}, nil
 }
 
@@ -98,6 +100,9 @@ func LoadFromPath(path string) (Config, error) {
 	if strings.TrimSpace(config.HeadlessCmd) == "" {
 		config.HeadlessCmd = defaultHeadlessCommand
 	}
+	if config.PostAddCommands == nil {
+		config.PostAddCommands = []string{"mise install"}
+	}
 	if err := config.Validate(); err != nil {
 		return Config{}, fmt.Errorf("validate config %q: %w", path, err)
 	}
@@ -137,6 +142,11 @@ func (config Config) Validate() error {
 	}
 	if strings.TrimSpace(config.HeadlessCmd) == "" {
 		return errors.New("headless_cmd is required")
+	}
+	for index, command := range config.PostAddCommands {
+		if strings.TrimSpace(command) == "" {
+			return fmt.Errorf("post_add_commands[%d] is required", index)
+		}
 	}
 
 	return nil

@@ -126,6 +126,15 @@ func RemoveWorktree(destPath string, force bool) error {
 	return nil
 }
 
+// DeleteBranch force-deletes branchName from the repository at repoPath.
+func DeleteBranch(repoPath, branchName string) error {
+	if _, err := run("-C", repoPath, "branch", "-D", branchName); err != nil {
+		return fmt.Errorf("delete branch %q in %q: %w", branchName, repoPath, err)
+	}
+
+	return nil
+}
+
 // HasUncommittedChanges reports whether the worktree at destPath is dirty.
 func HasUncommittedChanges(destPath string) (bool, error) {
 	output, err := run("-C", destPath, "status", "--porcelain")

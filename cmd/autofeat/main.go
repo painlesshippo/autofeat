@@ -632,6 +632,13 @@ func addRepository(featureName string) error {
 	if err := gitcmd.AddWorktree(featureBranchName(featureName), worktreePath, baseRef); err != nil {
 		return err
 	}
+	if err := runPostAddCommands(configuration.PostAddCommands, worktreePath); err != nil {
+		removeErr := gitcmd.RemoveWorktree(worktreePath, true)
+		if removeErr == nil {
+			removeErr = gitcmd.DeleteBranch(repoRoot, featureBranchName(featureName))
+		}
+		return errors.Join(err, removeErr)
+	}
 
 	session, err := state.GetSession(featureName)
 	newSession := errors.Is(err, state.ErrSessionNotFound)
@@ -729,6 +736,9 @@ func addRemoteRepository(featureName, remoteURL string) error {
 	if err := gitcmd.CheckoutNewBranch(worktreePath, featureBranchName(featureName), baseRef); err != nil {
 		return err
 	}
+	if err := runPostAddCommands(configuration.PostAddCommands, worktreePath); err != nil {
+		return err
+	}
 
 	session.Repos = append(session.Repos, state.Repository{
 		Name:          repoName,
@@ -757,6 +767,22 @@ func addRemoteRepository(featureName, remoteURL string) error {
 	cloneSucceeded = true
 
 	fmt.Printf("Cloned remote repo '%s' to feature '%s'\n", repoName, featureName)
+	return nil
+}
+
+func runPostAddCommands(commands []string, worktreePath string) error {
+	for _, commandText := range commands {
+		fmt.Printf("Running post-add command in %s: %s\n", worktreePath, commandText)
+		command := exec.Command("sh", "-c", commandText)
+		command.Dir = worktreePath
+		command.Stdin = os.Stdin
+		command.Stdout = os.Stdout
+		command.Stderr = os.Stderr
+		if err := command.Run(); err != nil {
+			return fmt.Errorf("run post-add command %q in %q: %w", commandText, worktreePath, err)
+		}
+	}
+
 	return nil
 }
 

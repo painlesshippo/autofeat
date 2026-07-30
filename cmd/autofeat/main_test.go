@@ -786,6 +786,15 @@ func requireMainGit(t *testing.T) {
 
 func createMainRepository(t *testing.T) string {
 	t.Helper()
+	configPath, err := config.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+		writeMainConfig(t, "code", "copilot")
+	} else if err != nil {
+		t.Fatal(err)
+	}
 	repoPath := t.TempDir()
 	runMainGit(t, repoPath, "init", "-q")
 	runMainGit(t, repoPath, "config", "user.email", "test@example.com")
@@ -844,6 +853,11 @@ func mainWorkspaceDir(t *testing.T) string {
 
 func writeMainConfig(t *testing.T, editorCmd, headlessCmd string) {
 	t.Helper()
+	writeMainConfigWithPostAddCommands(t, editorCmd, headlessCmd, []string{})
+}
+
+func writeMainConfigWithPostAddCommands(t *testing.T, editorCmd, headlessCmd string, postAddCommands []string) {
+	t.Helper()
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
@@ -852,6 +866,7 @@ func writeMainConfig(t *testing.T, editorCmd, headlessCmd string) {
 		WorkspaceBaseDir: filepath.Join(home, ".autofeat-workspaces"),
 		EditorCmd:        editorCmd,
 		HeadlessCmd:      headlessCmd,
+		PostAddCommands:  postAddCommands,
 	}
 	if err := config.SaveToPath(filepath.Join(home, ".autofeat", "config.json"), configuration); err != nil {
 		t.Fatal(err)
@@ -931,6 +946,61 @@ func TestAddRepositoryCreatesSessionWorktreeAndWorkspace(t *testing.T) {
 	}
 }
 
+func TestAddRepositoryRunsPostAddCommandsInWorktree(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	writeMainConfigWithPostAddCommands(t, "code", "copilot", []string{
+		"printf 'first' > first-hook.txt",
+		"printf 'second' > second-hook.txt",
+	})
+	t.Chdir(repoPath)
+
+	if err := addRepository("feature/hooks"); err != nil {
+		t.Fatalf("addRepository() error = %v", err)
+	}
+	session, err := state.GetSession("feature/hooks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"first-hook.txt": "first", "second-hook.txt": "second"} {
+		contents, err := os.ReadFile(filepath.Join(session.Repos[0].WorktreePath, name))
+		if err != nil {
+			t.Errorf("read post-add output %q: %v", name, err)
+			continue
+		}
+		if string(contents) != want {
+			t.Errorf("post-add output %q = %q, want %q", name, contents, want)
+		}
+	}
+}
+
+func TestAddRepositoryCleansUpAfterPostAddCommandFailure(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	writeMainConfigWithPostAddCommands(t, "code", "copilot", []string{"exit 23"})
+	t.Chdir(repoPath)
+
+	if err := addRepository("feature/hook-failure"); err == nil {
+		t.Fatal("addRepository() error = nil, want post-add command error")
+	}
+	if _, err := state.GetSession("feature/hook-failure"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() after failed command error = %v, want ErrSessionNotFound", err)
+	}
+	worktreePath := filepath.Join(mainWorkspaceDir(t), "feature%2Fhook-failure", filepath.Base(repoPath))
+	if _, err := os.Stat(worktreePath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("failed worktree was not removed: Stat() error = %v", err)
+	}
+	if branches := mainGitOutput(t, repoPath, "branch", "--list", "feature/hook-failure"); strings.TrimSpace(branches) != "" {
+		t.Errorf("failed feature branch still exists: %q", branches)
+	}
+}
+
 func TestAddRemoteRepositoryClonesAndRecordsSession(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
@@ -957,6 +1027,31 @@ func TestAddRemoteRepositoryClonesAndRecordsSession(t *testing.T) {
 	}
 	if branch != "feature/remote" {
 		t.Errorf("clone branch = %q, want feature/remote", branch)
+	}
+}
+
+func TestAddRemoteRepositoryRunsPostAddCommandsInClone(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	_, remotePath := createRemoteMainRepository(t)
+	writeMainConfigWithPostAddCommands(t, "code", "copilot", []string{
+		"test \"$(git branch --show-current)\" = feature/remote-hook && printf 'remote' > remote-hook.txt",
+	})
+	if err := addRemoteRepository("feature/remote-hook", remotePath); err != nil {
+		t.Fatalf("addRemoteRepository() error = %v", err)
+	}
+
+	session, err := state.GetSession("feature/remote-hook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(session.Repos[0].WorktreePath, "remote-hook.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "remote" {
+		t.Errorf("remote post-add output = %q, want remote", contents)
 	}
 }
 

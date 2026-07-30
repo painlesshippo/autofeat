@@ -17,14 +17,22 @@ On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
 {
   "workspace_base_dir": "/home/your-user/.autofeat-workspaces",
   "editor_cmd": "code",
-  "headless_cmd": "copilot"
+  "headless_cmd": "copilot",
+  "post_add_commands": [
+    "mise install"
+  ]
 }
 ```
 
 Set `workspace_base_dir` to choose where feature worktrees and
 `.code-workspace` files are created. Set `editor_cmd` to the executable that
 should receive a workspace-file path. Set `headless_cmd` to the interactive
-agent command used by `run`.
+agent command used by `run`. Set `post_add_commands` to shell commands that
+should run after each local worktree or remote clone is created. Commands run
+sequentially through `sh` with the new repository as their working directory.
+The default is `["mise install"]`; set it to `[]` to disable post-add commands.
+If a command fails, subsequent commands do not run and the new repository is
+removed so the operation can be retried.
 
 `$HOME/.autofeat/state.json` stores `default_base_branch`, which defaults to
 `master`. When a repository is added, `autofeat` detects `master` or `main`

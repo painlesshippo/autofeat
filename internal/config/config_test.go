@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -14,6 +15,7 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 		WorkspaceBaseDir: "/tmp/autofeat-workspaces",
 		EditorCmd:        "code",
 		HeadlessCmd:      "copilot",
+		PostAddCommands:  []string{"mise install", "go generate ./..."},
 	}
 
 	if err := SaveToPath(configPath, want); err != nil {
@@ -24,7 +26,7 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromPath() error = %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("LoadFromPath() = %+v, want %+v", got, want)
 	}
 
@@ -68,6 +70,42 @@ func TestLoadFromPathDefaultsMissingHeadlessCommand(t *testing.T) {
 	}
 }
 
+func TestLoadFromPathDefaultsMissingPostAddCommands(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	contents := []byte(`{"workspace_base_dir":"/tmp/autofeat-workspaces","editor_cmd":"code","headless_cmd":"copilot"}`)
+	if err := os.WriteFile(configPath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := LoadFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadFromPath() error = %v", err)
+	}
+	if !reflect.DeepEqual(config.PostAddCommands, []string{"mise install"}) {
+		t.Errorf("PostAddCommands = %q, want [mise install]", config.PostAddCommands)
+	}
+}
+
+func TestLoadFromPathPreservesEmptyPostAddCommands(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	contents := []byte(`{"workspace_base_dir":"/tmp/autofeat-workspaces","editor_cmd":"code","headless_cmd":"copilot","post_add_commands":[]}`)
+	if err := os.WriteFile(configPath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := LoadFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadFromPath() error = %v", err)
+	}
+	if config.PostAddCommands == nil || len(config.PostAddCommands) != 0 {
+		t.Errorf("PostAddCommands = %#v, want empty non-nil slice", config.PostAddCommands)
+	}
+}
+
 func TestLoadFromPathRejectsCorruptConfig(t *testing.T) {
 	t.Parallel()
 
@@ -93,8 +131,9 @@ func TestLoadCreatesDefaultConfigOnFirstUse(t *testing.T) {
 		WorkspaceBaseDir: filepath.Join(home, ".autofeat-workspaces"),
 		EditorCmd:        defaultEditorCommand,
 		HeadlessCmd:      defaultHeadlessCommand,
+		PostAddCommands:  []string{"mise install"},
 	}
-	if config != want {
+	if !reflect.DeepEqual(config, want) {
 		t.Errorf("Load() first use = %+v, want %+v", config, want)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".autofeat", "config.json")); err != nil {
@@ -109,7 +148,7 @@ func TestLoadCreatesDefaultConfigOnFirstUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() second use error = %v", err)
 	}
-	if got != config {
+	if !reflect.DeepEqual(got, config) {
 		t.Errorf("Load() second use = %+v, want persisted %+v", got, config)
 	}
 }
@@ -127,6 +166,7 @@ func TestValidate(t *testing.T) {
 		"missing editor cmd":         {WorkspaceBaseDir: "/tmp/workspaces", HeadlessCmd: "copilot"},
 		"missing headless cmd":       {WorkspaceBaseDir: "/tmp/workspaces", EditorCmd: "code"},
 		"blank values":               {WorkspaceBaseDir: " ", EditorCmd: " ", HeadlessCmd: " "},
+		"blank post-add command":     {WorkspaceBaseDir: "/tmp/workspaces", EditorCmd: "code", HeadlessCmd: "copilot", PostAddCommands: []string{" "}},
 	}
 	for name, config := range tests {
 		t.Run(name, func(t *testing.T) {
