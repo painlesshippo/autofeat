@@ -17,7 +17,7 @@ Commit subject must follow Conventional Commits:
 Allowed types: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test
 Examples:
   feat: add branch synchronization
-  fix(review): handle an empty diff
+  fix(sync): handle an empty diff
   feat!: remove legacy configuration
 EOF
 exit 1

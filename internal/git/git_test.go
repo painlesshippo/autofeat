@@ -100,134 +100,6 @@ func TestValidateBranchName(t *testing.T) {
 	}
 }
 
-func TestDiffIncludesCommittedAndWorkingTreeChanges(t *testing.T) {
-	requireGit(t)
-
-	repoPath := createRepository(t)
-	runGit(t, repoPath, "branch", "-M", "master")
-	runGit(t, repoPath, "checkout", "-qb", "feature/review")
-
-	if err := os.WriteFile(filepath.Join(repoPath, "committed.txt"), []byte("committed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, repoPath, "add", "committed.txt")
-	runGit(t, repoPath, "commit", "-qm", "add committed file")
-
-	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("modified\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repoPath, "staged.txt"), []byte("staged\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, repoPath, "add", "staged.txt")
-	if err := os.WriteFile(filepath.Join(repoPath, "untracked.txt"), []byte("untracked\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	diff, err := Diff(repoPath, "master")
-	if err != nil {
-		t.Fatalf("Diff() error = %v", err)
-	}
-	for _, want := range []string{"committed.txt", "staged.txt", "README.md", "untracked.txt", "+untracked"} {
-		if !strings.Contains(diff, want) {
-			t.Errorf("Diff() output does not contain %q:\n%s", want, diff)
-		}
-	}
-}
-
-func TestDiffIncludesFullFileContextAndDetectsRenames(t *testing.T) {
-	requireGit(t)
-
-	repoPath := createRepository(t)
-	runGit(t, repoPath, "branch", "-M", "master")
-	if err := os.WriteFile(filepath.Join(repoPath, "full.txt"), []byte("first\nsecond\nthird\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repoPath, "source.txt"), []byte("copied\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, repoPath, "add", "full.txt", "source.txt")
-	runGit(t, repoPath, "commit", "-qm", "add full file")
-	runGit(t, repoPath, "checkout", "-qb", "feature/review")
-
-	if err := os.WriteFile(filepath.Join(repoPath, "full.txt"), []byte("first\nchanged\nthird\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(filepath.Join(repoPath, "README.md"), filepath.Join(repoPath, "RENAMED.md")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repoPath, "COPIED.txt"), []byte("copied\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, repoPath, "add", "-A")
-
-	diff, err := Diff(repoPath, "master")
-	if err != nil {
-		t.Fatalf("Diff() error = %v", err)
-	}
-	for _, want := range []string{" first", " third", "similarity index 100%", "rename from README.md", "rename to RENAMED.md", "copy from source.txt", "copy to COPIED.txt"} {
-		if !strings.Contains(diff, want) {
-			t.Errorf("Diff() output does not contain %q:\n%s", want, diff)
-		}
-	}
-}
-
-func TestDiffWithNoChanges(t *testing.T) {
-	requireGit(t)
-
-	repoPath := createRepository(t)
-	runGit(t, repoPath, "branch", "-M", "master")
-
-	diff, err := Diff(repoPath, "master")
-	if err != nil {
-		t.Fatalf("Diff() error = %v", err)
-	}
-	if diff != "" {
-		t.Errorf("Diff() = %q, want empty output", diff)
-	}
-}
-
-func TestDiffRejectsMissingBase(t *testing.T) {
-	requireGit(t)
-
-	repoPath := createRepository(t)
-	if _, err := Diff(repoPath, "does-not-exist"); err == nil {
-		t.Fatal("Diff() error = nil, want missing base error")
-	}
-}
-
-func TestDiffExcludesChangesAddedOnlyToBaseAfterDivergence(t *testing.T) {
-	requireGit(t)
-
-	repoPath := createRepository(t)
-	runGit(t, repoPath, "branch", "-M", "master")
-	runGit(t, repoPath, "checkout", "-qb", "feature/review")
-	if err := os.WriteFile(filepath.Join(repoPath, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, repoPath, "add", "feature.txt")
-	runGit(t, repoPath, "commit", "-qm", "feature change")
-
-	runGit(t, repoPath, "checkout", "master")
-	if err := os.WriteFile(filepath.Join(repoPath, "base.txt"), []byte("base\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, repoPath, "add", "base.txt")
-	runGit(t, repoPath, "commit", "-qm", "base change")
-	runGit(t, repoPath, "checkout", "feature/review")
-
-	diff, err := Diff(repoPath, "master")
-	if err != nil {
-		t.Fatalf("Diff() error = %v", err)
-	}
-	if !strings.Contains(diff, "feature.txt") {
-		t.Errorf("Diff() does not contain feature change:\n%s", diff)
-	}
-	if strings.Contains(diff, "base.txt") {
-		t.Errorf("Diff() contains base-only change:\n%s", diff)
-	}
-}
-
 func TestDetectBaseBranch(t *testing.T) {
 	requireGit(t)
 
@@ -526,13 +398,10 @@ func TestAddWorktreeStartsFromExplicitBase(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(worktreePath, "unrelated.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("explicit-base worktree contains unrelated branch file: %v", err)
 	}
-	mergeBase, err := MergeBase(worktreePath, "master")
-	if err != nil {
-		t.Fatalf("MergeBase() error = %v", err)
-	}
+	baseHead := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "master"))
 	head := strings.TrimSpace(runGitOutput(t, worktreePath, "rev-parse", "HEAD"))
-	if mergeBase != head {
-		t.Errorf("MergeBase() = %q, want feature HEAD %q", mergeBase, head)
+	if head != baseHead {
+		t.Errorf("worktree HEAD = %q, want master HEAD %q", head, baseHead)
 	}
 }
 
@@ -648,7 +517,7 @@ func TestCachedBaseStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CachedBaseStatus() error = %v", err)
 	}
-	if status.BaseRef != "refs/heads/main" || status.Ahead != 1 || status.Behind != 1 {
+	if status.Ahead != 1 || status.Behind != 1 {
 		t.Errorf("CachedBaseStatus() = %+v, want local main one ahead one behind", status)
 	}
 

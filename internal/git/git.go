@@ -13,9 +13,8 @@ import (
 
 // BaseStatus describes the cached relationship between HEAD and a base branch.
 type BaseStatus struct {
-	BaseRef string
-	Ahead   int
-	Behind  int
+	Ahead  int
+	Behind int
 }
 
 // RemoteBranchStatus describes the cached relationship between HEAD and its
@@ -264,7 +263,7 @@ func CachedBaseStatus(destPath, baseBranch string) (BaseStatus, error) {
 		return BaseStatus{}, err
 	}
 
-	return BaseStatus{BaseRef: baseRef, Ahead: ahead, Behind: behind}, nil
+	return BaseStatus{Ahead: ahead, Behind: behind}, nil
 }
 
 // CachedRemoteBranchStatus reports how HEAD relates to the cached remote
@@ -328,66 +327,6 @@ func IsRebaseInProgress(destPath string) (bool, error) {
 	}
 
 	return false, nil
-}
-
-// MergeBase returns the common ancestor of HEAD and baseRef in destPath.
-func MergeBase(destPath, baseRef string) (string, error) {
-	output, err := run("-C", destPath, "merge-base", "HEAD", baseRef)
-	if err != nil {
-		return "", fmt.Errorf("find merge base of HEAD and %q in worktree %q: %w", baseRef, destPath, err)
-	}
-
-	return strings.TrimSpace(output), nil
-}
-
-// Diff returns the complete worktree diff against baseRef, including
-// untracked files. The base reference must resolve to a commit in destPath.
-func Diff(destPath, baseRef string) (string, error) {
-	if _, err := run("-C", destPath, "rev-parse", "--verify", "--quiet", baseRef+"^{commit}"); err != nil {
-		return "", fmt.Errorf("verify base reference %q in worktree %q: %w", baseRef, destPath, err)
-	}
-	comparisonRef, err := MergeBase(destPath, baseRef)
-	if err != nil {
-		return "", err
-	}
-
-	diff, err := run("-C", destPath, "diff", "--binary", "--find-renames", "--find-copies-harder", "--unified=2147483647", comparisonRef)
-	if err != nil {
-		return "", fmt.Errorf("diff worktree %q against %q: %w", destPath, baseRef, err)
-	}
-
-	untracked, err := run("-C", destPath, "ls-files", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return "", fmt.Errorf("list untracked files in worktree %q: %w", destPath, err)
-	}
-	for _, relativePath := range strings.Split(strings.TrimSuffix(untracked, "\x00"), "\x00") {
-		if relativePath == "" {
-			continue
-		}
-
-		fileDiff, err := diffUntrackedFile(destPath, relativePath)
-		if err != nil {
-			return "", err
-		}
-		diff += fileDiff
-	}
-
-	return diff, nil
-}
-
-func diffUntrackedFile(destPath, relativePath string) (string, error) {
-	command := exec.Command("git", "-C", destPath, "diff", "--no-index", "--binary", "--unified=2147483647", "--", "/dev/null", relativePath)
-	output, err := command.CombinedOutput()
-	if err == nil {
-		return string(output), nil
-	}
-
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		return string(output), nil
-	}
-
-	return "", fmt.Errorf("diff untracked file %q in worktree %q: %w: %s", filepath.Clean(relativePath), destPath, err, strings.TrimSpace(string(output)))
 }
 
 func run(args ...string) (string, error) {

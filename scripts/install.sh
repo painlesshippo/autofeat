@@ -8,11 +8,43 @@ install_dir="${INSTALL_DIR:-$HOME/.local/bin}"
 shell_rc="${SHELL_RC:-$HOME/.bashrc}"
 path_export="export PATH=\"$install_dir:\$PATH\""
 completion_source="source <(autofeat completion bash)"
+legacy_alias_afr="alias afr='autofeat review'"
 alias_definitions=(
     "alias af='autofeat'"
-    "alias afr='autofeat review'"
     "alias afl='autofeat list'"
 )
+
+if [[ -f "$shell_rc" ]] && grep -Fqx "$legacy_alias_afr" "$shell_rc"; then
+    temporary_rc="$(mktemp "${shell_rc}.XXXXXX")"
+    awk \
+        -v marker="# Added by autofeat install" \
+        -v path_export="$path_export" \
+        -v completion_source="$completion_source" \
+        -v alias_af="${alias_definitions[0]}" \
+        -v legacy_alias_afr="$legacy_alias_afr" \
+        -v alias_afl="${alias_definitions[1]}" '
+        $0 == marker {
+            managed_block = 1
+            print
+            next
+        }
+        managed_block && ($0 == path_export || $0 == completion_source || $0 == alias_af || $0 == legacy_alias_afr || $0 == alias_afl) {
+            if ($0 != legacy_alias_afr) {
+                print
+            }
+            next
+        }
+        managed_block {
+            managed_block = 0
+        }
+        {
+            print
+        }
+    ' "$shell_rc" >"$temporary_rc"
+    mv "$temporary_rc" "$shell_rc"
+fi
+
+rm -f "$HOME/.autofeat/review.html"
 
 mkdir -p "$install_dir"
 cp "$binary_path" "$install_dir/autofeat"

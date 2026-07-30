@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/painlesshippo/autofeat/internal/config"
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
-	"github.com/painlesshippo/autofeat/internal/review"
 	"github.com/painlesshippo/autofeat/internal/state"
 	"github.com/painlesshippo/autofeat/internal/workspace"
 )
@@ -36,13 +34,11 @@ const headlessPrompt = "Please execute the objectives defined in TASK.md"
 var bashCompletion string
 
 var (
-	reviewCommand       = reviewSessions
-	statusCommand       = statusSessions
-	openFeatureCommand  = openSession
-	runFeatureCommand   = runFeature
-	syncFeatureCommand  = syncFeature
-	teardownCommand     = teardownSession
-	openSnapshotCommand = openReviewInBrowser
+	statusCommand      = statusSessions
+	openFeatureCommand = openSession
+	runFeatureCommand  = runFeature
+	syncFeatureCommand = syncFeature
+	teardownCommand    = teardownSession
 )
 
 func main() {
@@ -99,12 +95,6 @@ func run(args []string) error {
 			return usageError()
 		}
 		return statusCommand(selectors)
-	case "review":
-		selectors, baseRef, err := reviewArguments(args[1:])
-		if err != nil {
-			return usageError()
-		}
-		return reviewCommand(selectors, baseRef)
 	case "teardown":
 		selectors, force, err := teardownArguments(args[1:])
 		if err != nil {
@@ -149,33 +139,6 @@ func runArguments(args []string) ([]string, string, error) {
 		return args[:index], args[index+1], nil
 	}
 	return args, "", nil
-}
-
-func reviewArguments(args []string) ([]string, string, error) {
-	selectors := make([]string, 0, len(args))
-	baseRef := ""
-	for index := 0; index < len(args); index++ {
-		if args[index] != "--base" {
-			selectors = append(selectors, args[index])
-			continue
-		}
-		if baseRef != "" || index+1 >= len(args) || args[index+1] == "" {
-			return nil, "", errors.New("invalid review arguments")
-		}
-		baseRef = args[index+1]
-		index++
-	}
-	if baseRef != "" {
-		if err := gitcmd.ValidateBranchName(baseRef); err != nil {
-			return nil, "", fmt.Errorf("invalid review base %q: %w", baseRef, err)
-		}
-	}
-	if len(selectors) == 0 {
-		selectors = []string{"*"}
-	} else if shellExpandedWildcard(selectors) {
-		selectors = []string{"*"}
-	}
-	return selectors, baseRef, nil
 }
 
 func statusArguments(args []string) ([]string, error) {
@@ -988,80 +951,6 @@ func appendTask(featureDir, task string) error {
 	return nil
 }
 
-func reviewSessions(selectors []string, baseRef string) error {
-	reviewState, err := loadReviewState()
-	if err != nil {
-		return err
-	}
-	featureNames, err := selectFeatureNames(reviewState.Sessions, selectors)
-	if err != nil {
-		return err
-	}
-	sessions := make(map[string]state.Session, len(featureNames))
-	for _, featureName := range featureNames {
-		sessions[featureName] = reviewState.Sessions[featureName]
-	}
-
-	return openReview(sessions, reviewState.DefaultBaseBranch, baseRef)
-}
-
-func openReview(sessions map[string]state.Session, defaultBaseBranch, overrideBaseBranch string) error {
-	generationStarted := time.Now()
-	report := review.Build(sessions, defaultBaseBranch, overrideBaseBranch, time.Now())
-	contents, err := review.Render(report)
-	if err != nil {
-		return fmt.Errorf("render review: %w", err)
-	}
-
-	configPath, err := config.Path()
-	if err != nil {
-		return err
-	}
-	snapshotPath := filepath.Join(filepath.Dir(configPath), "review.html")
-	if err := review.WriteSnapshot(snapshotPath, contents); err != nil {
-		return err
-	}
-	generationDuration := time.Since(generationStarted)
-
-	if err := openSnapshotCommand(snapshotPath); err != nil {
-		return err
-	}
-
-	fmt.Printf("Opened review snapshot %s (generated in %s)\n", snapshotPath, generationDuration)
-	return nil
-}
-
-func loadReviewState() (state.State, error) {
-	reviewState, err := state.Load()
-	if err != nil {
-		return state.State{}, err
-	}
-
-	changed := false
-	for featureName, session := range reviewState.Sessions {
-		for index := range session.Repos {
-			if session.Repos[index].BaseBranch != "" {
-				continue
-			}
-
-			baseBranch, err := gitcmd.DetectBaseBranch(session.Repos[index].WorktreePath)
-			if err != nil || baseBranch == "" {
-				baseBranch = reviewState.DefaultBaseBranch
-			}
-			session.Repos[index].BaseBranch = baseBranch
-			changed = true
-		}
-		reviewState.Sessions[featureName] = session
-	}
-	if changed {
-		if err := state.Save(reviewState); err != nil {
-			return state.State{}, err
-		}
-	}
-
-	return reviewState, nil
-}
-
 func detectBaseBranch(repositoryPath string) (string, error) {
 	baseBranch, err := gitcmd.DetectBaseBranch(repositoryPath)
 	if err != nil {
@@ -1076,54 +965,6 @@ func detectBaseBranch(repositoryPath string) (string, error) {
 		return "", err
 	}
 	return currentState.DefaultBaseBranch, nil
-}
-
-func openReviewInBrowser(snapshotPath string) error {
-	opener := "xdg-open"
-	target := (&url.URL{Scheme: "file", Path: snapshotPath}).String()
-	if isWSL() {
-		windowsPath, err := wslWindowsPath(snapshotPath)
-		if err != nil {
-			return err
-		}
-		opener = "explorer.exe"
-		target = windowsPath
-	}
-
-	if _, err := exec.LookPath(opener); err != nil {
-		return fmt.Errorf("find browser opener %q: %w", opener, err)
-	}
-
-	command := exec.Command(opener, target)
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	if err := command.Start(); err != nil {
-		return fmt.Errorf("open review with %q: %w", opener, err)
-	}
-	go func() {
-		_ = command.Wait()
-	}()
-
-	return nil
-}
-
-func isWSL() bool {
-	release, err := os.ReadFile("/proc/sys/kernel/osrelease")
-	return err == nil && isWSLRelease(string(release))
-}
-
-func isWSLRelease(release string) bool {
-	return strings.Contains(strings.ToLower(release), "microsoft")
-}
-
-func wslWindowsPath(path string) (string, error) {
-	output, err := exec.Command("wslpath", "-w", path).Output()
-	if err != nil {
-		return "", fmt.Errorf("convert review path for Windows: %w", err)
-	}
-
-	return strings.TrimSpace(string(output)), nil
 }
 
 func teardownSession(featureName string, force bool) error {
@@ -1209,5 +1050,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat <new|open|run|sync|status|review|teardown|list|version|completion> [feature-selector ...] [options]")
+	return errors.New("usage: autofeat <new|open|run|sync|status|teardown|list|version|completion> [feature-selector ...] [options]")
 }

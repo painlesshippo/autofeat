@@ -61,7 +61,7 @@ When Bash starts:
 4. The script registers `_autofeat_completion` for four commands:
 
 ```bash
-complete -F _autofeat_completion autofeat af afr afl
+complete -F _autofeat_completion autofeat af afl
 ```
 
 The function must run inside the current shell because Bash supplies completion state through special variables.
@@ -117,16 +117,14 @@ This completion path performs no Git commands, fetching, drift calculation, or w
 The Bash function understands these contexts:
 
 * Top-level command names.
-* Feature names for `open`, `run`, `sync`, `status`, `review`, and `teardown`.
+* Feature names for `open`, `run`, `sync`, `status`, and `teardown`.
 * `--force` for `teardown`.
-* `--base` for `review`.
 * `-task` for `run`.
 * `bash` after `autofeat completion`.
 
 It also handles aliases specially:
 
 * `af` behaves like `autofeat`.
-* `afr` starts in `review` context.
 * `afl` starts in `list` context.
 
 Already-selected feature names are removed. Thus:
@@ -137,7 +135,8 @@ autofeat teardown feature/alpha <Tab>
 
 will not suggest `feature/alpha` again.
 
-When the cursor is immediately after `--base` or `-task`, the function returns no feature suggestions because that position expects a free-form value.
+When the cursor is immediately after `-task`, the function returns no feature
+suggestions because that position expects a free-form value.
 
 **Failure Behavior**
 

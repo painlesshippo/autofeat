@@ -8,8 +8,6 @@ and open them together in one VS Code workspace.
 * Git installed and available on `PATH`.
 * VS Code's `code` command on `PATH` to use the default workspace-opening
   command. Another editor command can be configured instead.
-* Linux's `xdg-open` command on `PATH` to open generated reviews in a browser.
-  In WSL, `autofeat` uses `explorer.exe` and `wslpath` instead.
 
 On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
 
@@ -37,8 +35,7 @@ removed so the operation can be retried.
 `$HOME/.autofeat/state.json` stores `default_base_branch`, which defaults to
 `master`. When a repository is added, `autofeat` detects `master` or `main`
 and records the result as that repository's `base_branch`. Change either value
-in the state file to use a different persistent review base; a command-line
-`--base` option is a one-time override.
+in the state file to use a different persistent base branch.
 
 ## Installation
 Install the latest released version:
@@ -59,8 +56,8 @@ Ensure the installed binary directory, or the directory containing the built
 binary, is on `PATH`.
 
 `mise run install` installs the built binary into `$HOME/.local/bin` and adds
-the `af`, `afr`, and `afl` aliases for `autofeat`, `autofeat review`, and
-`autofeat list` to `$HOME/.bashrc` by default. It also enables Bash completion
+the `af` and `afl` aliases for `autofeat` and `autofeat list` to `$HOME/.bashrc`
+by default. It also enables Bash completion
 for the command and aliases. Override these locations with `INSTALL_DIR` and
 `SHELL_RC` when necessary, then reload the configured shell file.
 
@@ -109,7 +106,7 @@ feature, and patterns such as `"feature/*"`. Quote wildcard selectors so the
 shell passes them to `autofeat` instead of expanding them as file names.
 
 Bash completion suggests active feature names for `open`, `run`, `sync`,
-`status`, `review`, and `teardown`, including subsequent selector positions.
+`status`, and `teardown`, including subsequent selector positions.
 It omits names already selected and includes each command's supported options.
 
 Create a feature session from inside a Git repository. The command creates a
@@ -186,26 +183,6 @@ and leaves the rebase in progress so it can be continued or aborted with the
 Git commands printed by `autofeat`. Repositories without an `origin` remote
 rebase onto their local base branch without fetching.
 
-Generate and open a static HTML review of the changes in every active session.
-Omitting the selector defaults to `"*"`. The review compares each worktree
-with its merge-base against the stored base branch and includes committed,
-staged, unstaged, and untracked changes. It also shows cached ahead and behind
-counts without fetching. Each changed file is labeled as added, modified,
-deleted, renamed, or copied, and its diff includes the whole file as context:
-
-```sh
-autofeat review
-autofeat review "*"
-```
-
-Review one feature session or every feature whose name starts with
-`feature/`:
-
-```sh
-autofeat review feature/potato
-autofeat review "feature/*"
-```
-
 Running the feature command outside a Git repository also opens an existing
 session:
 
@@ -256,20 +233,6 @@ Summary states include `ready`, `dirty`, `behind-base`, `unpushed`,
 continues with the other repositories. A completed report exits successfully
 regardless of repository health; invalid selectors and failures to load state
 or write the report still return an error.
-
-Use another branch as a one-time comparison override when needed:
-
-```sh
-autofeat review --base develop
-autofeat review feature/potato --base develop
-```
-
-The command writes `$HOME/.autofeat/review.html`, opens it in the default
-browser, and exits. It renders repository-level errors when the selected base
-branch is unavailable, while continuing to render the other repositories. The
-file is a snapshot: run `autofeat review` again after changes to refresh it.
-Browser refresh only reloads the latest generated snapshot. Native Linux uses
-`xdg-open`; WSL opens the snapshot through Windows `explorer.exe`.
 
 Print the build version, commit, and timestamp:
 

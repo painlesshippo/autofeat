@@ -114,9 +114,7 @@ func TestBashCompletionBehavior(t *testing.T) {
 		{name: "run option", words: []string{"autofeat", "run", "feature/alpha", "-"}, completionWord: 3, want: "-task\n"},
 		{name: "run task value", words: []string{"autofeat", "run", "feature/alpha", "-task", ""}, completionWord: 4, want: ""},
 		{name: "run task terminates command", words: []string{"autofeat", "run", "feature/alpha", "-task", "write tests", ""}, completionWord: 5, want: ""},
-		{name: "review base value", words: []string{"autofeat", "review", "--base", ""}, completionWord: 3, want: ""},
 		{name: "af alias", words: []string{"af", "st"}, completionWord: 1, want: "status\n"},
-		{name: "afr alias", words: []string{"afr", "feature/t"}, completionWord: 1, want: "feature/team/nested\n"},
 		{name: "afl alias", words: []string{"afl", ""}, completionWord: 1, want: ""},
 		{name: "endpoint failure", words: []string{"autofeat", "status", ""}, completionWord: 2, failEndpoint: true, want: ""},
 	}
@@ -165,39 +163,6 @@ fi
 	}
 }
 
-func TestReviewCommandDispatch(t *testing.T) {
-	originalReviewCommand := reviewCommand
-	t.Cleanup(func() {
-		reviewCommand = originalReviewCommand
-	})
-
-	var gotSelectors []string
-	var gotBase string
-	reviewCommand = func(selectors []string, baseRef string) error {
-		gotSelectors = selectors
-		gotBase = baseRef
-		return nil
-	}
-
-	if err := run([]string{"review"}); err != nil {
-		t.Fatalf("run(review) error = %v", err)
-	}
-	if len(gotSelectors) != 1 || gotSelectors[0] != "*" || gotBase != "" {
-		t.Errorf("run(review) = (%q, %q), want ([*], stored base)", gotSelectors, gotBase)
-	}
-
-	if err := run([]string{"review", "feature/*", "--base", "develop"}); err != nil {
-		t.Fatalf("run(review feature/* --base develop) error = %v", err)
-	}
-	if len(gotSelectors) != 1 || gotSelectors[0] != "feature/*" || gotBase != "develop" {
-		t.Errorf("review dispatch = (%q, %q), want ([feature/*], develop)", gotSelectors, gotBase)
-	}
-
-	if err := run([]string{"review", "--base"}); err == nil {
-		t.Error("run(review --base) error = nil, want usage error")
-	}
-}
-
 func TestStatusCommandDispatch(t *testing.T) {
 	originalStatusCommand := statusCommand
 	t.Cleanup(func() {
@@ -226,36 +191,6 @@ func TestStatusCommandDispatch(t *testing.T) {
 
 	if err := run([]string{"status", "--json"}); err == nil {
 		t.Error("run(status --json) error = nil, want usage error")
-	}
-}
-
-func TestReviewArgumentsRecognizesShellExpandedWildcard(t *testing.T) {
-	directory := t.TempDir()
-	for _, name := range []string{"bin", "cmd", "README.md"} {
-		path := filepath.Join(directory, name)
-		if err := os.WriteFile(path, nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	originalDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(directory); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(originalDirectory); err != nil {
-			t.Errorf("restore working directory: %v", err)
-		}
-	})
-
-	selectors, baseRef, err := reviewArguments([]string{"README.md", "bin", "cmd"})
-	if err != nil {
-		t.Fatalf("reviewArguments(shell expansion) error = %v", err)
-	}
-	if len(selectors) != 1 || selectors[0] != "*" || baseRef != "" {
-		t.Errorf("reviewArguments(shell expansion) = (%q, %q), want ([*], empty base)", selectors, baseRef)
 	}
 }
 
@@ -1330,66 +1265,6 @@ func TestListSessionsToRendersDrift(t *testing.T) {
 	}
 }
 
-func TestReviewSessionsWritesSnapshot(t *testing.T) {
-	requireMainGit(t)
-	t.Setenv("HOME", t.TempDir())
-
-	repoPath := createMainRepository(t)
-	runMainGit(t, repoPath, "branch", "-M", "main")
-	runMainGit(t, repoPath, "checkout", "-qb", "feature/review")
-	writeAndCommitMainFile(t, repoPath, "feature.txt", "feature\n", "feature change")
-
-	if err := state.SaveSession("feature/review", state.Session{Repos: []state.Repository{{
-		Name: "repository", WorktreePath: repoPath,
-	}}}); err != nil {
-		t.Fatal(err)
-	}
-
-	originalOpenSnapshotCommand := openSnapshotCommand
-	t.Cleanup(func() {
-		openSnapshotCommand = originalOpenSnapshotCommand
-	})
-	var openedPath string
-	openSnapshotCommand = func(snapshotPath string) error {
-		openedPath = snapshotPath
-		return nil
-	}
-
-	if err := reviewSessions([]string{"feature/review"}, ""); err != nil {
-		t.Fatalf("reviewSessions() error = %v", err)
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantPath := filepath.Join(home, ".autofeat", "review.html")
-	if openedPath != wantPath {
-		t.Errorf("opened snapshot = %q, want %q", openedPath, wantPath)
-	}
-	contents, err := os.ReadFile(wantPath)
-	if err != nil {
-		t.Fatalf("read snapshot: %v", err)
-	}
-	for _, want := range []string{"feature/review", "feature.txt"} {
-		if !strings.Contains(string(contents), want) {
-			t.Errorf("review snapshot does not contain %q", want)
-		}
-	}
-
-	session, err := state.GetSession("feature/review")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if session.Repos[0].BaseBranch != "main" {
-		t.Errorf("backfilled BaseBranch = %q, want main", session.Repos[0].BaseBranch)
-	}
-
-	if err := reviewSessions([]string{"feature/missing"}, ""); err == nil {
-		t.Error("reviewSessions(feature/missing) error = nil, want no-match error")
-	}
-}
-
 func TestDetectBaseBranchFallsBackToStateDefault(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
@@ -1446,18 +1321,6 @@ func TestHeadlessArgs(t *testing.T) {
 	got := headlessArgs()
 	if len(got) != 2 || got[0] != "-i" || got[1] != headlessPrompt {
 		t.Errorf("headlessArgs() = %q, want [-i %q]", got, headlessPrompt)
-	}
-}
-
-func TestIsWSLRelease(t *testing.T) {
-	for release, want := range map[string]bool{
-		"6.6.87.2-microsoft-standard-WSL2":   true,
-		"5.15.153.1-microsoft-standard-WSL2": true,
-		"6.8.0-31-generic":                   false,
-	} {
-		if got := isWSLRelease(release); got != want {
-			t.Errorf("isWSLRelease(%q) = %t, want %t", release, got, want)
-		}
 	}
 }
 

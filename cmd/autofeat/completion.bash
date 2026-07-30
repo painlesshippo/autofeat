@@ -7,10 +7,6 @@ _autofeat_completion() {
 	local first_argument=2
 
 	case "$command_name" in
-		afr)
-			command="review"
-			first_argument=1
-			;;
 		afl)
 			command="list"
 			first_argument=1
@@ -18,7 +14,7 @@ _autofeat_completion() {
 		*)
 			if ((COMP_CWORD == 1)); then
 				local candidate
-				for candidate in new open run sync status review teardown list version completion; do
+				for candidate in new open run sync status teardown list version completion; do
 					if [[ "$candidate" == "$current"* ]]; then
 						COMPREPLY+=("$candidate")
 					fi
@@ -37,7 +33,7 @@ _autofeat_completion() {
 	fi
 
 	case "$command" in
-		open | run | sync | status | review | teardown) ;;
+		open | run | sync | status | teardown) ;;
 		*) return ;;
 	esac
 
@@ -45,7 +41,7 @@ _autofeat_completion() {
 	if ((COMP_CWORD > 0)); then
 		previous="${COMP_WORDS[COMP_CWORD - 1]}"
 	fi
-	if [[ "$previous" == "--base" || "$previous" == "-task" ]]; then
+	if [[ "$previous" == "-task" ]]; then
 		return
 	fi
 
@@ -57,7 +53,6 @@ _autofeat_completion() {
 	local index
 	local skip_value=false
 	local force_seen=false
-	local base_seen=false
 	local task_seen=false
 	local word
 	for ((index = first_argument; index < COMP_CWORD; index++)); do
@@ -69,10 +64,6 @@ _autofeat_completion() {
 		case "$word" in
 			--force)
 				force_seen=true
-				;;
-			--base)
-				base_seen=true
-				skip_value=true
 				;;
 			-task)
 				task_seen=true
@@ -106,8 +97,6 @@ _autofeat_completion() {
 
 	if [[ "$command" == "teardown" && "$force_seen" == false ]]; then
 		candidates+=(--force)
-	elif [[ "$command" == "review" && "$base_seen" == false ]]; then
-		candidates+=(--base)
 	elif [[ "$command" == "run" && "$task_seen" == false && ${#selected[@]} -gt 0 ]]; then
 		candidates+=(-task)
 	fi
@@ -120,4 +109,4 @@ _autofeat_completion() {
 	done
 }
 
-complete -F _autofeat_completion autofeat af afr afl
+complete -F _autofeat_completion autofeat af afl
