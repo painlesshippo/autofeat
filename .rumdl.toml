@@ -21,10 +21,14 @@ enabled = false # Allow lists directly after headings
 maximum = 1 # Allow at most one consecutive blank line
 
 [MD013]
-line-length = 100   # Line length
+line-length = 120   # Line length
 code-blocks = false # Exclude code blocks from line length check
 tables = false      # Exclude tables from line length check
 headings = true     # Include headings in line length check
+reflow = true       # Wrap long prose lines automatically
+
+[MD036]
+fix = true # Convert emphasis-only section labels to headings
 
 [MD044]
 # Proper names that should be capitalized correctly

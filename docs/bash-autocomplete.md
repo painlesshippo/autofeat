@@ -1,4 +1,4 @@
-**Overview**
+## Overview
 
 The feature is split into two parts:
 
@@ -22,7 +22,7 @@ sequenceDiagram
     Bash-->>User: feature/alpha feature/potato
 ```
 
-**Embedding The Script**
+## Embedding The Script
 
 The Bash code lives in completion.bash, but it is compiled into the Go binary:
 
@@ -43,7 +43,7 @@ autofeat completion bash
 
 dispatches through main.go and writes the embedded script to standard output through `writeBashCompletion`.
 
-**Shell Startup**
+## Shell Startup
 
 The installer adds this to `.bashrc`:
 
@@ -66,7 +66,7 @@ complete -F _autofeat_completion autofeat af afl
 
 The function must run inside the current shell because Bash supplies completion state through special variables.
 
-**Bash Completion State**
+## Bash Completion State
 
 When Tab is pressed, Bash calls `_autofeat_completion` from completion.bash.
 
@@ -91,7 +91,7 @@ COMP_CWORD=2
 
 The function reads `feature/` as the current prefix and eventually fills `COMPREPLY` with matching active features.
 
-**Finding Feature Names**
+## Finding Feature Names
 
 The Bash function runs:
 
@@ -108,11 +108,13 @@ The hidden `__complete features` command dispatches to `writeFeatureCompletions`
 3. Sorts them.
 4. Prints one feature name per line.
 
-`state.ListSessions()` reads `$HOME/.autofeat/state.json` through state.go. A missing state file represents an empty session map.
+`state.ListSessions()` reads `$HOME/.autofeat/state.json` through state.go. A missing state file represents an empty
+session map.
 
-This completion path performs no Git commands, fetching, drift calculation, or worktree inspection. Feature suggestions therefore remain inexpensive and offline.
+This completion path performs no Git commands, fetching, drift calculation, or worktree inspection. Feature suggestions
+therefore remain inexpensive and offline.
 
-**Context Filtering**
+## Context Filtering
 
 The Bash function understands these contexts:
 
@@ -138,7 +140,7 @@ will not suggest `feature/alpha` again.
 When the cursor is immediately after `-task`, the function returns no feature
 suggestions because that position expects a free-form value.
 
-**Failure Behavior**
+## Failure Behavior
 
 The feature lookup redirects errors:
 
@@ -152,9 +154,11 @@ Therefore:
 * Malformed or unreadable state also produces no candidates or terminal noise.
 * Command-specific options may still be offered independently.
 
-Completion is advisory only. When Enter is pressed, the normal command path reloads state and validates selectors through `runSelectedFeatures` and `selectFeatureNames` in main.go. Wildcard selectors such as `"feature/*"` are resolved there, not by the completion script.
+Completion is advisory only. When Enter is pressed, the normal command path reloads state and validates selectors
+through `runSelectedFeatures` and `selectFeatureNames` in main.go. Wildcard selectors such as `"feature/*"` are resolved
+there, not by the completion script.
 
-**Tests**
+## Tests
 
 Coverage in main_test.go verifies:
 
