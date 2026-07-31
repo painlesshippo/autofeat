@@ -35,7 +35,7 @@ func Default() (Config, error) {
 		WorkspaceBaseDir: filepath.Join(homeDir, ".autofeat-workspaces"),
 		EditorCmd:        defaultEditorCommand,
 		HeadlessCmd:      defaultHeadlessCommand,
-		PostAddCommands:  []string{"mise install"},
+		PostAddCommands:  []string{},
 	}, nil
 }
 
@@ -101,7 +101,7 @@ func LoadFromPath(path string) (Config, error) {
 		config.HeadlessCmd = defaultHeadlessCommand
 	}
 	if config.PostAddCommands == nil {
-		config.PostAddCommands = []string{"mise install"}
+		config.PostAddCommands = []string{}
 	}
 	if err := config.Validate(); err != nil {
 		return Config{}, fmt.Errorf("validate config %q: %w", path, err)

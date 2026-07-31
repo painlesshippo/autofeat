@@ -16,9 +16,7 @@ On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
   "workspace_base_dir": "/home/your-user/.autofeat-workspaces",
   "editor_cmd": "code",
   "headless_cmd": "copilot",
-  "post_add_commands": [
-    "mise install"
-  ]
+  "post_add_commands": []
 }
 ```
 
@@ -28,7 +26,7 @@ should receive a workspace-file path. Set `headless_cmd` to the interactive
 agent command used by `run`. Set `post_add_commands` to shell commands that
 should run after each local worktree or remote clone is created. Commands run
 sequentially through `sh` with the new repository as their working directory.
-The default is `["mise install"]`; set it to `[]` to disable post-add commands.
+The default is `[]`, so no post-add commands run unless they are configured.
 If a command fails, subsequent commands do not run and the new repository is
 removed so the operation can be retried.
 

@@ -70,7 +70,7 @@ func TestLoadFromPathDefaultsMissingHeadlessCommand(t *testing.T) {
 	}
 }
 
-func TestLoadFromPathDefaultsMissingPostAddCommands(t *testing.T) {
+func TestLoadFromPathDefaultsMissingPostAddCommandsToEmpty(t *testing.T) {
 	t.Parallel()
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
@@ -83,8 +83,8 @@ func TestLoadFromPathDefaultsMissingPostAddCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromPath() error = %v", err)
 	}
-	if !reflect.DeepEqual(config.PostAddCommands, []string{"mise install"}) {
-		t.Errorf("PostAddCommands = %q, want [mise install]", config.PostAddCommands)
+	if config.PostAddCommands == nil || len(config.PostAddCommands) != 0 {
+		t.Errorf("PostAddCommands = %#v, want empty non-nil slice", config.PostAddCommands)
 	}
 }
 
@@ -131,7 +131,7 @@ func TestLoadCreatesDefaultConfigOnFirstUse(t *testing.T) {
 		WorkspaceBaseDir: filepath.Join(home, ".autofeat-workspaces"),
 		EditorCmd:        defaultEditorCommand,
 		HeadlessCmd:      defaultHeadlessCommand,
-		PostAddCommands:  []string{"mise install"},
+		PostAddCommands:  []string{},
 	}
 	if !reflect.DeepEqual(config, want) {
 		t.Errorf("Load() first use = %+v, want %+v", config, want)
