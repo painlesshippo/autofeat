@@ -25,7 +25,7 @@ fi
 
 if ((${#markdown_files[@]})); then
     printf 'Formatting %d Markdown files with rumdl...\n' "${#markdown_files[@]}"
-    rumdl fmt --no-cache "${markdown_files[@]}" &
+    rumdl fmt --quiet --no-cache "${markdown_files[@]}" &
     formatter_pids+=("$!")
     formatter_names+=("rumdl")
 fi
@@ -46,7 +46,7 @@ fi
 
 if ((${#toml_files[@]})); then
     printf 'Formatting %d TOML files with taplo...\n' "${#toml_files[@]}"
-    taplo fmt "${toml_files[@]}" &
+    RUST_LOG=warn taplo fmt "${toml_files[@]}" &
     formatter_pids+=("$!")
     formatter_names+=("taplo")
 fi
