@@ -1,3 +1,5 @@
+# Bash autocomplete
+
 ## Overview
 
 The feature is split into two parts:
