@@ -5,6 +5,8 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
+start_time_ms=$(date +%s%3N)
+
 mapfile -d '' go_files < <(git ls-files --cached --others --exclude-standard -z -- '*.go')
 mapfile -d '' markdown_files < <(git ls-files --cached --others --exclude-standard -z -- '*.md' '*.markdown')
 mapfile -d '' shell_files < <(git ls-files --cached --others --exclude-standard -z -- '*.sh' '.githooks/*')
@@ -36,4 +38,5 @@ if ((${#toml_files[@]})); then
     taplo fmt "${toml_files[@]}"
 fi
 
-printf 'Formatting complete.\n'
+end_time_ms=$(date +%s%3N)
+printf 'Formatting complete in %dms.\n' "$((end_time_ms - start_time_ms))"
