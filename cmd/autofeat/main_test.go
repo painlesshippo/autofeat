@@ -881,6 +881,58 @@ func TestAddRepositoryCreatesSessionWorktreeAndWorkspace(t *testing.T) {
 	}
 }
 
+func TestAddRepositorySupportsRepositoriesWithSameName(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	writeMainConfig(t, "code", "copilot")
+
+	repositoryRoot := t.TempDir()
+	repositories := []string{
+		filepath.Join(repositoryRoot, "first", "repository"),
+		filepath.Join(repositoryRoot, "second", "repository"),
+	}
+	for _, repoPath := range repositories {
+		if err := os.MkdirAll(repoPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runMainGit(t, repoPath, "init", "-q")
+		runMainGit(t, repoPath, "config", "user.email", "test@example.com")
+		runMainGit(t, repoPath, "config", "user.name", "Test User")
+		writeAndCommitMainFile(t, repoPath, "README.md", "initial\n", "initial commit")
+		runMainGit(t, repoPath, "branch", "-M", "main")
+		t.Chdir(repoPath)
+		if err := addRepository("feature/same-name"); err != nil {
+			t.Fatalf("addRepository(%q) error = %v", repoPath, err)
+		}
+	}
+
+	session, err := state.GetSession("feature/same-name")
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if len(session.Repos) != 2 {
+		t.Fatalf("session repos = %+v, want two repositories", session.Repos)
+	}
+	wantDirectories := []string{"repository", "repository-second"}
+	for index, repository := range session.Repos {
+		if repository.Name != "repository" {
+			t.Errorf("repository name = %q, want repository", repository.Name)
+		}
+		if got := filepath.Base(repository.WorktreePath); got != wantDirectories[index] {
+			t.Errorf("worktree directory = %q, want %q", got, wantDirectories[index])
+		}
+	}
+	workspaceContents, err := os.ReadFile(session.WorkspaceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range wantDirectories {
+		if !strings.Contains(string(workspaceContents), "./"+directory) {
+			t.Errorf("workspace file does not reference %q:\n%s", directory, workspaceContents)
+		}
+	}
+}
+
 func TestAddRepositoryRunsPostAddCommandsInWorktree(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
@@ -1339,6 +1391,46 @@ func TestIsRemoteURL(t *testing.T) {
 
 	if isRemoteURL("ssh://git@github.com/example/repo.git") {
 		t.Error("isRemoteURL() accepted an unsupported URL prefix")
+	}
+}
+
+func TestRepositoryDirectoryName(t *testing.T) {
+	t.Parallel()
+
+	repositories := []state.Repository{
+		{WorktreePath: "/workspaces/feature/repository"},
+		{WorktreePath: "/workspaces/feature/repository-parent"},
+	}
+	tests := []struct {
+		name         string
+		repositories []state.Repository
+		want         string
+	}{
+		{name: "repository name available", want: "repository"},
+		{name: "parent name preferred", repositories: repositories[:1], want: "repository-parent"},
+		{name: "numeric fallback", repositories: repositories, want: "repository-2"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := repositoryDirectoryName("repository", "parent", test.repositories); got != test.want {
+				t.Errorf("repositoryDirectoryName() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRepositoryParentName(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"/sources/example/repository":               "example",
+		"https://github.com/example/repository.git": "example",
+		"git@github.com:example/repository.git":     "example",
+	}
+	for repositoryPath, want := range tests {
+		if got := repositoryParentName(repositoryPath); got != want {
+			t.Errorf("repositoryParentName(%q) = %q, want %q", repositoryPath, got, want)
+		}
 	}
 }
 

@@ -586,22 +586,7 @@ func addRepository(featureName string) error {
 	repoName := filepath.Base(filepath.Clean(repoRoot))
 	featureDirName := featureDirectoryName(featureName)
 	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
-	worktreePath := filepath.Join(featureDir, repoName)
 	workspaceFile := filepath.Join(featureDir, featureDirName+".code-workspace")
-
-	if err := os.MkdirAll(featureDir, 0o755); err != nil {
-		return fmt.Errorf("create feature directory: %w", err)
-	}
-	if err := gitcmd.AddWorktree(featureBranchName(featureName), worktreePath, baseRef); err != nil {
-		return err
-	}
-	if err := runPostAddCommands(configuration.PostAddCommands, worktreePath); err != nil {
-		removeErr := gitcmd.RemoveWorktree(worktreePath, true)
-		if removeErr == nil {
-			removeErr = gitcmd.DeleteBranch(repoRoot, featureBranchName(featureName))
-		}
-		return errors.Join(err, removeErr)
-	}
 
 	session, err := state.GetSession(featureName)
 	newSession := errors.Is(err, state.ErrSessionNotFound)
@@ -615,6 +600,22 @@ func addRepository(featureName string) error {
 			WorkspaceFile: workspaceFile,
 			Repos:         make([]state.Repository, 0, 1),
 		}
+	}
+	parentName := filepath.Base(filepath.Dir(repoRoot))
+	worktreePath := filepath.Join(featureDir, repositoryDirectoryName(repoName, parentName, session.Repos))
+
+	if err := os.MkdirAll(featureDir, 0o755); err != nil {
+		return fmt.Errorf("create feature directory: %w", err)
+	}
+	if err := gitcmd.AddWorktree(featureBranchName(featureName), worktreePath, baseRef); err != nil {
+		return err
+	}
+	if err := runPostAddCommands(configuration.PostAddCommands, worktreePath); err != nil {
+		removeErr := gitcmd.RemoveWorktree(worktreePath, true)
+		if removeErr == nil {
+			removeErr = gitcmd.DeleteBranch(repoRoot, featureBranchName(featureName))
+		}
+		return errors.Join(err, removeErr)
 	}
 
 	session.Repos = append(session.Repos, state.Repository{
@@ -632,11 +633,7 @@ func addRepository(featureName string) error {
 		return err
 	}
 
-	repoNames := make([]string, 0, len(session.Repos))
-	for _, repo := range session.Repos {
-		repoNames = append(repoNames, repo.Name)
-	}
-	if err := workspace.Write(session.WorkspaceFile, repoNames); err != nil {
+	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
 		return err
 	}
 
@@ -657,7 +654,6 @@ func addRemoteRepository(featureName, remoteURL string) error {
 
 	featureDirName := featureDirectoryName(featureName)
 	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
-	worktreePath := filepath.Join(featureDir, repoName)
 	workspaceFile := filepath.Join(featureDir, featureDirName+".code-workspace")
 
 	session, err := state.GetSession(featureName)
@@ -673,6 +669,7 @@ func addRemoteRepository(featureName, remoteURL string) error {
 			Repos:         make([]state.Repository, 0, 1),
 		}
 	}
+	worktreePath := filepath.Join(featureDir, repositoryDirectoryName(repoName, repositoryParentName(remoteURL), session.Repos))
 
 	if err := os.MkdirAll(featureDir, 0o755); err != nil {
 		return fmt.Errorf("create feature directory: %w", err)
@@ -711,11 +708,7 @@ func addRemoteRepository(featureName, remoteURL string) error {
 		BaseBranch:    baseBranch,
 	})
 
-	repoNames := make([]string, 0, len(session.Repos))
-	for _, repo := range session.Repos {
-		repoNames = append(repoNames, repo.Name)
-	}
-	if err := workspace.Write(session.WorkspaceFile, repoNames); err != nil {
+	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
 		return err
 	}
 
@@ -1037,6 +1030,48 @@ func featureBranchName(featureName string) string {
 
 func featureDirectoryName(featureName string) string {
 	return strings.NewReplacer("%", "%25", "/", "%2F").Replace(featureName)
+}
+
+func repositoryDirectoryName(repoName, parentName string, repositories []state.Repository) string {
+	usedNames := make(map[string]struct{}, len(repositories))
+	for _, repository := range repositories {
+		usedNames[filepath.Base(repository.WorktreePath)] = struct{}{}
+	}
+
+	candidates := []string{repoName}
+	if parentName != "" && parentName != "." && parentName != ".." && parentName != string(filepath.Separator) {
+		candidates = append(candidates, repoName+"-"+parentName)
+	}
+	for _, candidate := range candidates {
+		if _, exists := usedNames[candidate]; !exists {
+			return candidate
+		}
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := fmt.Sprintf("%s-%d", repoName, suffix)
+		if _, exists := usedNames[candidate]; !exists {
+			return candidate
+		}
+	}
+}
+
+func repositoryDirectoryNames(repositories []state.Repository) []string {
+	directoryNames := make([]string, 0, len(repositories))
+	for _, repository := range repositories {
+		directoryNames = append(directoryNames, filepath.Base(repository.WorktreePath))
+	}
+	return directoryNames
+}
+
+func repositoryParentName(repositoryPath string) string {
+	trimmedPath := strings.TrimSuffix(strings.TrimSpace(repositoryPath), "/")
+	separator := strings.LastIndex(trimmedPath, "/")
+	if separator < 0 {
+		return ""
+	}
+	parentPath := trimmedPath[:separator]
+	separator = strings.LastIndexAny(parentPath, "/:")
+	return parentPath[separator+1:]
 }
 
 func remoteRepositoryName(remoteURL string) (string, error) {
