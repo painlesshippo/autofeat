@@ -109,6 +109,8 @@ func TestBashCompletionBehavior(t *testing.T) {
 		{name: "command", words: []string{"autofeat", "te"}, completionWord: 1, want: "teardown\n"},
 		{name: "teardown features and option", words: []string{"autofeat", "teardown", ""}, completionWord: 2, want: "bug/fix\nfeature/alpha\nfeature/team/nested\n--force\n"},
 		{name: "slash prefix", words: []string{"autofeat", "open", "feature/t"}, completionWord: 2, want: "feature/team/nested\n"},
+		{name: "open copilot option", words: []string{"autofeat", "open", "feature/alpha", "-"}, completionWord: 3, want: "--copilot\n"},
+		{name: "open copilot option filtered", words: []string{"autofeat", "open", "feature/alpha", "--copilot", "-"}, completionWord: 4, want: ""},
 		{name: "selected feature filtered", words: []string{"autofeat", "sync", "feature/alpha", ""}, completionWord: 3, want: "bug/fix\nfeature/team/nested\n"},
 		{name: "run option requires selector", words: []string{"autofeat", "run", "-"}, completionWord: 2, want: ""},
 		{name: "run option", words: []string{"autofeat", "run", "feature/alpha", "-"}, completionWord: 3, want: "-task\n"},
@@ -230,6 +232,39 @@ func TestRunCommandDispatch(t *testing.T) {
 
 	if err := run([]string{"run", "feature/a", "-task"}); err == nil {
 		t.Error("run(run feature/a -task) error = nil, want usage error")
+	}
+}
+
+func TestOpenCommandCopilotDispatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := state.SaveSession("feature/copilot", state.Session{}); err != nil {
+		t.Fatal(err)
+	}
+	originalOpenFeatureCommand := openFeatureCommand
+	originalOpenCopilotCommand := openCopilotCommand
+	t.Cleanup(func() {
+		openFeatureCommand = originalOpenFeatureCommand
+		openCopilotCommand = originalOpenCopilotCommand
+	})
+
+	var openedWith string
+	openFeatureCommand = func(string) error {
+		openedWith = "editor"
+		return nil
+	}
+	openCopilotCommand = func(string) error {
+		openedWith = "copilot"
+		return nil
+	}
+
+	if err := run([]string{"open", "feature/copilot", "--copilot"}); err != nil {
+		t.Fatalf("run(open feature/copilot --copilot) error = %v", err)
+	}
+	if openedWith != "copilot" {
+		t.Errorf("open command = %q, want copilot", openedWith)
+	}
+	if err := run([]string{"open", "feature/copilot", "--copilot", "--copilot"}); err == nil {
+		t.Error("run(open with duplicate --copilot) error = nil, want usage error")
 	}
 }
 
@@ -1231,6 +1266,30 @@ func TestOpenSessionInvokesEditorWithWorkspaceFile(t *testing.T) {
 	}
 	if !strings.Contains(string(contents), workspaceFile) {
 		t.Errorf("editor invocation = %q, want workspace file %q", contents, workspaceFile)
+	}
+}
+
+func TestOpenCopilotSessionStartsAgentInFeatureDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	scriptPath, logPath := writeStubCommand(t)
+	writeMainConfig(t, "code", scriptPath)
+	featureDir := t.TempDir()
+	if err := state.SaveSession("feature/copilot", state.Session{FeatureDir: featureDir}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+
+	if err := openCopilotSession("feature/copilot"); err != nil {
+		t.Fatalf("openCopilotSession() error = %v", err)
+	}
+
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(string(contents)), featureDir; got != want {
+		t.Errorf("Copilot invocation = %q, want cwd %q and no arguments", got, want)
 	}
 }
 

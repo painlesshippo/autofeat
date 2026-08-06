@@ -122,6 +122,7 @@ The Bash function understands these contexts:
 
 * Top-level command names.
 * Feature names for `open`, `run`, `sync`, `status`, and `teardown`.
+* `--copilot` for `open`.
 * `--force` for `teardown`.
 * `-task` for `run`.
 * `bash` after `autofeat completion`.

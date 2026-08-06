@@ -52,6 +52,7 @@ _autofeat_completion() {
 
 	local index
 	local skip_value=false
+	local copilot_seen=false
 	local force_seen=false
 	local task_seen=false
 	local word
@@ -62,6 +63,9 @@ _autofeat_completion() {
 			continue
 		fi
 		case "$word" in
+			--copilot)
+				copilot_seen=true
+				;;
 			--force)
 				force_seen=true
 				;;
@@ -95,7 +99,9 @@ _autofeat_completion() {
 		fi
 	done
 
-	if [[ "$command" == "teardown" && "$force_seen" == false ]]; then
+	if [[ "$command" == "open" && "$copilot_seen" == false ]]; then
+		candidates+=(--copilot)
+	elif [[ "$command" == "teardown" && "$force_seen" == false ]]; then
 		candidates+=(--force)
 	elif [[ "$command" == "run" && "$task_seen" == false && ${#selected[@]} -gt 0 ]]; then
 		candidates+=(-task)

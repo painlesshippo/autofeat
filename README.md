@@ -8,6 +8,8 @@ and open them together in one VS Code workspace.
 * Git installed and available on `PATH`.
 * VS Code's `code` command on `PATH` to use the default workspace-opening
   command. Another editor command can be configured instead.
+* GitHub Copilot CLI's `copilot` command on `PATH` to use `open --copilot` or
+  the default headless-agent command.
 
 On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
 
@@ -23,12 +25,12 @@ On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
 Set `workspace_base_dir` to choose where feature worktrees and
 `.code-workspace` files are created. Set `editor_cmd` to the executable that
 should receive a workspace-file path. Set `headless_cmd` to the interactive
-agent command used by `run`. Set `post_add_commands` to shell commands that
-should run after each local worktree or remote clone is created. Commands run
-sequentially through `sh` with the new repository as their working directory.
-The default is `[]`, so no post-add commands run unless they are configured.
-If a command fails, subsequent commands do not run and the new repository is
-removed so the operation can be retried.
+agent command used by `open --copilot` and `run`. Set `post_add_commands` to
+shell commands that should run after each local worktree or remote clone is
+created. Commands run sequentially through `sh` with the new repository as
+their working directory. The default is `[]`, so no post-add commands run
+unless they are configured. If a command fails, subsequent commands do not run
+and the new repository is removed so the operation can be retried.
 
 `$HOME/.autofeat/state.json` stores `default_base_branch`, which defaults to
 `master`. When a repository is added, `autofeat` detects `master` or `main`
@@ -151,6 +153,14 @@ Open a session explicitly from any directory:
 
 ```sh
 autofeat open feature/potato
+```
+
+Open GitHub Copilot CLI in the invoking terminal with the feature directory as
+its workspace root. The CLI remains interactive and receives no initial
+prompt:
+
+```sh
+autofeat open feature/potato --copilot
 ```
 
 Run the configured headless agent from a feature directory. When started from

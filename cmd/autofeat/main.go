@@ -36,6 +36,7 @@ var bashCompletion string
 var (
 	statusCommand      = statusSessions
 	openFeatureCommand = openSession
+	openCopilotCommand = openCopilotSession
 	runFeatureCommand  = runFeature
 	syncFeatureCommand = syncFeature
 	teardownCommand    = teardownSession
@@ -78,7 +79,15 @@ func run(args []string) error {
 	case "new":
 		return runNewCommand(args[1:])
 	case "open":
-		return runSelectedFeatures(args[1:], openFeatureCommand)
+		selectors, copilot, err := openArguments(args[1:])
+		if err != nil {
+			return usageError()
+		}
+		command := openFeatureCommand
+		if copilot {
+			command = openCopilotCommand
+		}
+		return runSelectedFeatures(selectors, command)
 	case "run":
 		selectors, task, err := runArguments(args[1:])
 		if err != nil {
@@ -151,6 +160,25 @@ func statusArguments(args []string) ([]string, error) {
 		return []string{"*"}, nil
 	}
 	return args, nil
+}
+
+func openArguments(args []string) ([]string, bool, error) {
+	selectors := make([]string, 0, len(args))
+	copilot := false
+	for _, arg := range args {
+		if arg != "--copilot" {
+			selectors = append(selectors, arg)
+			continue
+		}
+		if copilot {
+			return nil, false, errors.New("duplicate --copilot")
+		}
+		copilot = true
+	}
+	if len(selectors) == 0 {
+		return nil, false, errors.New("feature selector is required")
+	}
+	return selectors, copilot, nil
 }
 
 func shellExpandedWildcard(selectors []string) bool {
@@ -759,6 +787,32 @@ func openSession(featureName string) error {
 	command.Stderr = os.Stderr
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("open feature %q with %q: %w", featureName, configuration.EditorCmd, err)
+	}
+
+	return nil
+}
+
+func openCopilotSession(featureName string) error {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return err
+	}
+
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if _, err := exec.LookPath(configuration.HeadlessCmd); err != nil {
+		return fmt.Errorf("find Copilot command %q: %w", configuration.HeadlessCmd, err)
+	}
+
+	command := exec.Command(configuration.HeadlessCmd)
+	command.Dir = session.FeatureDir
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("open feature %q with Copilot command %q: %w", featureName, configuration.HeadlessCmd, err)
 	}
 
 	return nil
