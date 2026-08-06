@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/painlesshippo/autofeat/internal/hooks"
 )
 
 const (
@@ -18,10 +20,10 @@ const (
 
 // Config is the global autofeat configuration stored in ~/.autofeat/config.json.
 type Config struct {
-	WorkspaceBaseDir string   `json:"workspace_base_dir"`
-	EditorCmd        string   `json:"editor_cmd"`
-	HeadlessCmd      string   `json:"headless_cmd"`
-	PostAddCommands  []string `json:"post_add_commands"`
+	WorkspaceBaseDir string             `json:"workspace_base_dir"`
+	EditorCmd        string             `json:"editor_cmd"`
+	HeadlessCmd      string             `json:"headless_cmd"`
+	Hooks            []hooks.Definition `json:"hooks"`
 }
 
 // Default returns the default configuration for the current user.
@@ -35,8 +37,16 @@ func Default() (Config, error) {
 		WorkspaceBaseDir: filepath.Join(homeDir, ".autofeat-workspaces"),
 		EditorCmd:        defaultEditorCommand,
 		HeadlessCmd:      defaultHeadlessCommand,
-		PostAddCommands:  []string{},
+		Hooks:            defaultHooks(),
 	}, nil
+}
+
+func defaultHooks() []hooks.Definition {
+	return []hooks.Definition{{
+		When:    hooks.PostAdd,
+		IfFiles: []string{"mise.toml", ".mise.toml"},
+		Run:     "mise trust && mise install",
+	}}
 }
 
 // Path returns the location of the global configuration file.
@@ -100,8 +110,8 @@ func LoadFromPath(path string) (Config, error) {
 	if strings.TrimSpace(config.HeadlessCmd) == "" {
 		config.HeadlessCmd = defaultHeadlessCommand
 	}
-	if config.PostAddCommands == nil {
-		config.PostAddCommands = []string{}
+	if config.Hooks == nil {
+		config.Hooks = defaultHooks()
 	}
 	if err := config.Validate(); err != nil {
 		return Config{}, fmt.Errorf("validate config %q: %w", path, err)
@@ -143,9 +153,9 @@ func (config Config) Validate() error {
 	if strings.TrimSpace(config.HeadlessCmd) == "" {
 		return errors.New("headless_cmd is required")
 	}
-	for index, command := range config.PostAddCommands {
-		if strings.TrimSpace(command) == "" {
-			return fmt.Errorf("post_add_commands[%d] is required", index)
+	for index, hook := range config.Hooks {
+		if err := hook.Validate(); err != nil {
+			return fmt.Errorf("hooks[%d]: %w", index, err)
 		}
 	}
 

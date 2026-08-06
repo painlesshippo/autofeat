@@ -12,6 +12,7 @@ import (
 
 	"github.com/painlesshippo/autofeat/internal/config"
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
+	"github.com/painlesshippo/autofeat/internal/hooks"
 	"github.com/painlesshippo/autofeat/internal/state"
 )
 
@@ -823,10 +824,10 @@ func mainWorkspaceDir(t *testing.T) string {
 
 func writeMainConfig(t *testing.T, editorCmd, headlessCmd string) {
 	t.Helper()
-	writeMainConfigWithPostAddCommands(t, editorCmd, headlessCmd, []string{})
+	writeMainConfigWithHooks(t, editorCmd, headlessCmd, []hooks.Definition{})
 }
 
-func writeMainConfigWithPostAddCommands(t *testing.T, editorCmd, headlessCmd string, postAddCommands []string) {
+func writeMainConfigWithHooks(t *testing.T, editorCmd, headlessCmd string, definitions []hooks.Definition) {
 	t.Helper()
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -836,11 +837,36 @@ func writeMainConfigWithPostAddCommands(t *testing.T, editorCmd, headlessCmd str
 		WorkspaceBaseDir: filepath.Join(home, ".autofeat-workspaces"),
 		EditorCmd:        editorCmd,
 		HeadlessCmd:      headlessCmd,
-		PostAddCommands:  postAddCommands,
+		Hooks:            definitions,
 	}
 	if err := config.SaveToPath(filepath.Join(home, ".autofeat", "config.json"), configuration); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeMainDefaultConfig(t *testing.T) {
+	t.Helper()
+	configuration, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(configuration); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func installMainMiseStub(t *testing.T) string {
+	t.Helper()
+	directory := t.TempDir()
+	logPath := filepath.Join(directory, "mise.log")
+	stubPath := filepath.Join(directory, "mise")
+	contents := "#!/bin/sh\nprintf '%s\\t%s\\n' \"$PWD\" \"$*\" >> \"$MISE_TEST_LOG\"\n"
+	if err := os.WriteFile(stubPath, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MISE_TEST_LOG", logPath)
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
 }
 
 func writeStubCommand(t *testing.T) (scriptPath, logPath string) {
@@ -968,15 +994,15 @@ func TestAddRepositorySupportsRepositoriesWithSameName(t *testing.T) {
 	}
 }
 
-func TestAddRepositoryRunsPostAddCommandsInWorktree(t *testing.T) {
+func TestAddRepositoryRunsPostAddHooksInWorktree(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
 
 	repoPath := createMainRepository(t)
 	runMainGit(t, repoPath, "branch", "-M", "main")
-	writeMainConfigWithPostAddCommands(t, "code", "copilot", []string{
-		"printf 'first' > first-hook.txt",
-		"printf 'second' > second-hook.txt",
+	writeMainConfigWithHooks(t, "code", "copilot", []hooks.Definition{
+		{When: hooks.PostAdd, Run: "printf 'first' > first-hook.txt"},
+		{When: hooks.PostAdd, Run: "printf 'second' > second-hook.txt"},
 	})
 	t.Chdir(repoPath)
 
@@ -999,17 +1025,17 @@ func TestAddRepositoryRunsPostAddCommandsInWorktree(t *testing.T) {
 	}
 }
 
-func TestAddRepositoryCleansUpAfterPostAddCommandFailure(t *testing.T) {
+func TestAddRepositoryCleansUpAfterPostAddHookFailure(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
 
 	repoPath := createMainRepository(t)
 	runMainGit(t, repoPath, "branch", "-M", "main")
-	writeMainConfigWithPostAddCommands(t, "code", "copilot", []string{"exit 23"})
+	writeMainConfigWithHooks(t, "code", "copilot", []hooks.Definition{{When: hooks.PostAdd, Run: "exit 23"}})
 	t.Chdir(repoPath)
 
 	if err := addRepository("feature/hook-failure"); err == nil {
-		t.Fatal("addRepository() error = nil, want post-add command error")
+		t.Fatal("addRepository() error = nil, want post-add hook error")
 	}
 	if _, err := state.GetSession("feature/hook-failure"); !errors.Is(err, state.ErrSessionNotFound) {
 		t.Errorf("GetSession() after failed command error = %v, want ErrSessionNotFound", err)
@@ -1020,6 +1046,58 @@ func TestAddRepositoryCleansUpAfterPostAddCommandFailure(t *testing.T) {
 	}
 	if branches := mainGitOutput(t, repoPath, "branch", "--list", "feature/hook-failure"); strings.TrimSpace(branches) != "" {
 		t.Errorf("failed feature branch still exists: %q", branches)
+	}
+}
+
+func TestAddRepositoryRunsDefaultMiseHookForMiseFiles(t *testing.T) {
+	requireMainGit(t)
+
+	tests := []struct {
+		name        string
+		featureName string
+		fileName    string
+		wantRuns    bool
+	}{
+		{name: "mise.toml", featureName: "feature/mise", fileName: "mise.toml", wantRuns: true},
+		{name: ".mise.toml", featureName: "feature/dot-mise", fileName: ".mise.toml", wantRuns: true},
+		{name: "no mise file", featureName: "feature/no-mise", wantRuns: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			logPath := installMainMiseStub(t)
+			repoPath := createMainRepository(t)
+			runMainGit(t, repoPath, "branch", "-M", "main")
+			if test.fileName != "" {
+				writeAndCommitMainFile(t, repoPath, test.fileName, "[tools]\n", "add mise config")
+			}
+			writeMainDefaultConfig(t)
+			t.Chdir(repoPath)
+
+			if err := addRepository(test.featureName); err != nil {
+				t.Fatalf("addRepository() error = %v", err)
+			}
+			session, err := state.GetSession(test.featureName)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			contents, err := os.ReadFile(logPath)
+			if !test.wantRuns {
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("mise log ReadFile() error = %v, want file not to exist", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			worktreePath := session.Repos[0].WorktreePath
+			want := worktreePath + "\ttrust\n" + worktreePath + "\tinstall\n"
+			if string(contents) != want {
+				t.Errorf("mise invocations = %q, want %q", contents, want)
+			}
+		})
 	}
 }
 
@@ -1052,13 +1130,13 @@ func TestAddRemoteRepositoryClonesAndRecordsSession(t *testing.T) {
 	}
 }
 
-func TestAddRemoteRepositoryRunsPostAddCommandsInClone(t *testing.T) {
+func TestAddRemoteRepositoryRunsPostAddHooksInClone(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
 
 	_, remotePath := createRemoteMainRepository(t)
-	writeMainConfigWithPostAddCommands(t, "code", "copilot", []string{
-		"test \"$(git branch --show-current)\" = feature/remote-hook && printf 'remote' > remote-hook.txt",
+	writeMainConfigWithHooks(t, "code", "copilot", []hooks.Definition{
+		{When: hooks.PostAdd, Run: "test \"$(git branch --show-current)\" = feature/remote-hook && printf 'remote' > remote-hook.txt"},
 	})
 	if err := addRemoteRepository("feature/remote-hook", remotePath); err != nil {
 		t.Fatalf("addRemoteRepository() error = %v", err)
@@ -1074,6 +1152,34 @@ func TestAddRemoteRepositoryRunsPostAddCommandsInClone(t *testing.T) {
 	}
 	if string(contents) != "remote" {
 		t.Errorf("remote post-add output = %q, want remote", contents)
+	}
+}
+
+func TestAddRemoteRepositoryRunsDefaultMiseHookInClone(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	logPath := installMainMiseStub(t)
+
+	sourcePath, remotePath := createRemoteMainRepository(t)
+	writeAndCommitMainFile(t, sourcePath, "mise.toml", "[tools]\n", "add mise config")
+	runMainGit(t, sourcePath, "push", "-q", "origin", "main")
+	writeMainDefaultConfig(t)
+
+	if err := addRemoteRepository("feature/remote-mise", remotePath); err != nil {
+		t.Fatalf("addRemoteRepository() error = %v", err)
+	}
+	session, err := state.GetSession("feature/remote-mise")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := session.Repos[0].WorktreePath
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := worktreePath + "\ttrust\n" + worktreePath + "\tinstall\n"
+	if string(contents) != want {
+		t.Errorf("mise invocations = %q, want %q", contents, want)
 	}
 }
 
