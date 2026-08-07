@@ -18,19 +18,29 @@ On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
   "workspace_base_dir": "/home/your-user/.autofeat-workspaces",
   "editor_cmd": "code",
   "headless_cmd": "copilot",
-  "post_add_commands": []
+  "hooks": [
+    {
+      "when": "post-add",
+      "if_files": [
+        "mise.toml",
+        ".mise.toml"
+      ],
+      "run": "mise trust && mise install"
+    }
+  ]
 }
 ```
 
 Set `workspace_base_dir` to choose where feature worktrees and
 `.code-workspace` files are created. Set `editor_cmd` to the executable that
 should receive a workspace-file path. Set `headless_cmd` to the interactive
-agent command used by `open --copilot` and `run`. Set `post_add_commands` to
-shell commands that should run after each local worktree or remote clone is
-created. Commands run sequentially through `sh` with the new repository as
-their working directory. The default is `[]`, so no post-add commands run
-unless they are configured. If a command fails, subsequent commands do not run
-and the new repository is removed so the operation can be retried.
+agent command used by `open --copilot` and `run`. Set `hooks` to commands that
+run at supported lifecycle events. A `post-add` hook runs through `sh` with the
+new local worktree or remote clone as its working directory. Its optional
+`if_files` list limits execution to repositories containing at least one listed
+file. By default, autofeat trusts and installs Mise projects after adding them.
+Set `hooks` to `[]` to disable all hooks. If a hook fails, subsequent hooks do
+not run and the new repository is removed so the operation can be retried.
 
 `$HOME/.autofeat/state.json` stores `default_base_branch`, which defaults to
 `master`. When a repository is added, `autofeat` detects `master` or `main`

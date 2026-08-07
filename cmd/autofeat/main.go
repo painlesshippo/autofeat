@@ -788,6 +788,9 @@ func openConfig() error {
 	if err != nil {
 		return err
 	}
+	if err := config.Save(configuration); err != nil {
+		return err
+	}
 	configPath, err := config.Path()
 	if err != nil {
 		return err

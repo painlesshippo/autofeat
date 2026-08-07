@@ -1403,9 +1403,15 @@ func TestOpenConfigInvokesEditorWithConfigFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	scriptPath, logPath := writeStubCommand(t)
-	writeMainConfig(t, scriptPath, "copilot")
 	configPath, err := config.Path()
 	if err != nil {
+		t.Fatal(err)
+	}
+	legacyConfig := fmt.Sprintf(`{"workspace_base_dir":"/tmp/workspaces","editor_cmd":%q,"headless_cmd":"copilot"}`, scriptPath)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(legacyConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1418,6 +1424,13 @@ func TestOpenConfigInvokesEditorWithConfigFile(t *testing.T) {
 	}
 	if !strings.Contains(string(contents), configPath) {
 		t.Errorf("editor invocation = %q, want config file %q", contents, configPath)
+	}
+	configuration, err := config.LoadFromPath(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(configuration.Hooks) == 0 {
+		t.Errorf("persisted hooks = %#v, want defaults", configuration.Hooks)
 	}
 }
 
