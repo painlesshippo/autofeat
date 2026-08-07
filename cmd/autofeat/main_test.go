@@ -26,6 +26,29 @@ func TestVersionCommand(t *testing.T) {
 	}
 }
 
+func TestConfigCommandDispatch(t *testing.T) {
+	originalOpenConfigCommand := openConfigCommand
+	t.Cleanup(func() {
+		openConfigCommand = originalOpenConfigCommand
+	})
+
+	called := false
+	openConfigCommand = func() error {
+		called = true
+		return nil
+	}
+
+	if err := run([]string{"config"}); err != nil {
+		t.Fatalf("run(config) error = %v", err)
+	}
+	if !called {
+		t.Error("run(config) did not open the config")
+	}
+	if err := run([]string{"config", "extra"}); err == nil {
+		t.Error("run(config, extra) error = nil, want usage error")
+	}
+}
+
 func TestFeatureCompletions(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	for _, name := range []string{"feature/zulu", "bug/fix", "feature/team/nested"} {
@@ -108,6 +131,7 @@ func TestBashCompletionBehavior(t *testing.T) {
 		want           string
 	}{
 		{name: "command", words: []string{"autofeat", "te"}, completionWord: 1, want: "teardown\n"},
+		{name: "config command", words: []string{"autofeat", "con"}, completionWord: 1, want: "config\n"},
 		{name: "teardown features and option", words: []string{"autofeat", "teardown", ""}, completionWord: 2, want: "bug/fix\nfeature/alpha\nfeature/team/nested\n--force\n"},
 		{name: "slash prefix", words: []string{"autofeat", "open", "feature/t"}, completionWord: 2, want: "feature/team/nested\n"},
 		{name: "open copilot option", words: []string{"autofeat", "open", "feature/alpha", "-"}, completionWord: 3, want: "--copilot\n"},
@@ -1372,6 +1396,28 @@ func TestOpenSessionInvokesEditorWithWorkspaceFile(t *testing.T) {
 	}
 	if !strings.Contains(string(contents), workspaceFile) {
 		t.Errorf("editor invocation = %q, want workspace file %q", contents, workspaceFile)
+	}
+}
+
+func TestOpenConfigInvokesEditorWithConfigFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	scriptPath, logPath := writeStubCommand(t)
+	writeMainConfig(t, scriptPath, "copilot")
+	configPath, err := config.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := openConfig(); err != nil {
+		t.Fatalf("openConfig() error = %v", err)
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), configPath) {
+		t.Errorf("editor invocation = %q, want config file %q", contents, configPath)
 	}
 }
 

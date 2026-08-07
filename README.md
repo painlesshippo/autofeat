@@ -105,6 +105,12 @@ commands accept exact feature names, multiple selectors, `"*"` for every
 feature, and patterns such as `"feature/*"`. Quote wildcard selectors so the
 shell passes them to `autofeat` instead of expanding them as file names.
 
+Open the global configuration in the configured editor:
+
+```sh
+autofeat config
+```
+
 Bash completion suggests active feature names for `open`, `run`, `sync`,
 `status`, and `teardown`, including subsequent selector positions.
 It omits names already selected and includes each command's supported options.

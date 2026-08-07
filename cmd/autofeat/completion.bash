@@ -14,7 +14,7 @@ _autofeat_completion() {
 		*)
 			if ((COMP_CWORD == 1)); then
 				local candidate
-				for candidate in new open run sync status teardown list version completion; do
+				for candidate in new open run sync status teardown list config version completion; do
 					if [[ "$candidate" == "$current"* ]]; then
 						COMPREPLY+=("$candidate")
 					fi

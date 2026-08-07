@@ -36,6 +36,7 @@ var bashCompletion string
 
 var (
 	statusCommand      = statusSessions
+	openConfigCommand  = openConfig
 	openFeatureCommand = openSession
 	openCopilotCommand = openCopilotSession
 	runFeatureCommand  = runFeature
@@ -71,6 +72,11 @@ func run(args []string) error {
 			return usageError()
 		}
 		return listSessions()
+	case "config":
+		if len(args) != 1 {
+			return usageError()
+		}
+		return openConfigCommand()
 	case "version":
 		if len(args) != 1 {
 			return usageError()
@@ -777,6 +783,27 @@ func openSession(featureName string) error {
 	return nil
 }
 
+func openConfig() error {
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
+	configPath, err := config.Path()
+	if err != nil {
+		return err
+	}
+
+	command := exec.Command(configuration.EditorCmd, configPath)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("open config with %q: %w", configuration.EditorCmd, err)
+	}
+
+	return nil
+}
+
 func openCopilotSession(featureName string) error {
 	session, err := state.GetSession(featureName)
 	if err != nil {
@@ -1124,5 +1151,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat <new|open|run|sync|status|teardown|list|version|completion> [feature-selector ...] [options]")
+	return errors.New("usage: autofeat <new|open|run|sync|status|teardown|list|config|version|completion> [feature-selector ...] [options]")
 }
