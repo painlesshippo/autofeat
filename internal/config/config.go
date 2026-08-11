@@ -1,9 +1,11 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,10 +18,12 @@ const (
 	configFileName         = "config.json"
 	defaultEditorCommand   = "code"
 	defaultHeadlessCommand = "copilot"
+	currentSchemaVersion   = 1
 )
 
 // Config is the global autofeat configuration stored in ~/.autofeat/config.json.
 type Config struct {
+	SchemaVersion    int                `json:"schema_version"`
 	WorkspaceBaseDir string             `json:"workspace_base_dir"`
 	EditorCmd        string             `json:"editor_cmd"`
 	HeadlessCmd      string             `json:"headless_cmd"`
@@ -34,6 +38,7 @@ func Default() (Config, error) {
 	}
 
 	return Config{
+		SchemaVersion:    currentSchemaVersion,
 		WorkspaceBaseDir: filepath.Join(homeDir, ".autofeat-workspaces"),
 		EditorCmd:        defaultEditorCommand,
 		HeadlessCmd:      defaultHeadlessCommand,
@@ -103,8 +108,21 @@ func LoadFromPath(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read config %q: %w", path, err)
 	}
 
+	schemaVersion, err := schemaVersion(contents)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
+	}
+	if schemaVersion != 0 && schemaVersion != currentSchemaVersion {
+		return Config{}, fmt.Errorf("parse config %q: unsupported schema version %d; upgrade autofeat", path, schemaVersion)
+	}
+
 	var config Config
-	if err := json.Unmarshal(contents, &config); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil {
+		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
+	}
+	if err := rejectTrailingJSON(decoder); err != nil {
 		return Config{}, fmt.Errorf("parse config %q: %w", path, err)
 	}
 	if strings.TrimSpace(config.HeadlessCmd) == "" {
@@ -113,6 +131,7 @@ func LoadFromPath(path string) (Config, error) {
 	if config.Hooks == nil {
 		config.Hooks = defaultHooks()
 	}
+	config.SchemaVersion = currentSchemaVersion
 	if err := config.Validate(); err != nil {
 		return Config{}, fmt.Errorf("validate config %q: %w", path, err)
 	}
@@ -122,6 +141,10 @@ func LoadFromPath(path string) (Config, error) {
 
 // SaveToPath validates and writes config as indented JSON to path.
 func SaveToPath(path string, config Config) error {
+	if config.SchemaVersion != 0 && config.SchemaVersion != currentSchemaVersion {
+		return fmt.Errorf("validate config: unsupported schema version %d; upgrade autofeat", config.SchemaVersion)
+	}
+	config.SchemaVersion = currentSchemaVersion
 	if err := config.Validate(); err != nil {
 		return fmt.Errorf("validate config: %w", err)
 	}
@@ -137,6 +160,40 @@ func SaveToPath(path string, config Config) error {
 	}
 	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		return fmt.Errorf("write config %q: %w", path, err)
+	}
+
+	return nil
+}
+
+func schemaVersion(contents []byte) (int, error) {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return 0, err
+	}
+
+	rawVersion, ok := document["schema_version"]
+	if !ok {
+		return 0, nil
+	}
+
+	var version *int
+	if err := json.Unmarshal(rawVersion, &version); err != nil {
+		return 0, fmt.Errorf("schema_version must be an integer: %w", err)
+	}
+	if version == nil || *version < 0 {
+		return 0, errors.New("schema_version must be a non-negative integer")
+	}
+
+	return *version, nil
+}
+
+func rejectTrailingJSON(decoder *json.Decoder) error {
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values are not allowed")
+		}
+		return err
 	}
 
 	return nil

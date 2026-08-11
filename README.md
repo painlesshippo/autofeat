@@ -15,6 +15,7 @@ On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
 
 ```json
 {
+  "schema_version": 1,
   "workspace_base_dir": "/home/your-user/.autofeat-workspaces",
   "editor_cmd": "code",
   "headless_cmd": "copilot",
@@ -42,10 +43,17 @@ file. By default, autofeat trusts and installs Mise projects after adding them.
 Set `hooks` to `[]` to disable all hooks. If a hook fails, subsequent hooks do
 not run and the new repository is removed so the operation can be retried.
 
+Both `config.json` and `state.json` include an independent `schema_version`.
+Existing unversioned files are accepted and upgraded to version 1 the next time
+autofeat writes them. A file created by a newer, unsupported schema requires a
+newer autofeat binary. Unknown fields are rejected so manual editing mistakes
+do not silently discard data on the next write.
+
 `$HOME/.autofeat/state.json` stores `default_base_branch`, which defaults to
 `master`. When a repository is added, `autofeat` detects `master` or `main`
 and records the result as that repository's `base_branch`. Change either value
-in the state file to use a different persistent base branch.
+in the state file to use a different persistent base branch, while preserving
+its `schema_version`.
 
 ## Installation
 Install the latest released version:

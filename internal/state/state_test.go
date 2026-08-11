@@ -39,6 +39,9 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 	if !strings.Contains(string(contents), `"is_remote_clone": true`) {
 		t.Errorf("state JSON does not contain is_remote_clone: %s", contents)
 	}
+	if !strings.Contains(string(contents), `"schema_version": 1`) {
+		t.Errorf("state JSON does not contain schema version: %s", contents)
+	}
 
 	got, err := LoadFromPath(path)
 	if err != nil {
@@ -74,6 +77,9 @@ func TestLoadFromPathReturnsEmptyStateWhenMissing(t *testing.T) {
 	if state.DefaultBaseBranch != DefaultBaseBranch {
 		t.Errorf("DefaultBaseBranch = %q, want %q", state.DefaultBaseBranch, DefaultBaseBranch)
 	}
+	if state.SchemaVersion != currentSchemaVersion {
+		t.Errorf("SchemaVersion = %d, want %d", state.SchemaVersion, currentSchemaVersion)
+	}
 }
 
 func TestLoadFromPathDefaultsMissingGlobalBaseBranch(t *testing.T) {
@@ -103,6 +109,144 @@ func TestLoadFromPathRejectsCorruptState(t *testing.T) {
 
 	if _, err := LoadFromPath(path); err == nil {
 		t.Fatal("LoadFromPath() error = nil, want parse error")
+	}
+}
+
+func TestLoadFromPathNormalizesLegacySchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":0,"sessions":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath() error = %v", err)
+	}
+	if state.SchemaVersion != currentSchemaVersion {
+		t.Errorf("SchemaVersion = %d, want %d", state.SchemaVersion, currentSchemaVersion)
+	}
+	if state.DefaultBaseBranch != DefaultBaseBranch {
+		t.Errorf("DefaultBaseBranch = %q, want %q", state.DefaultBaseBranch, DefaultBaseBranch)
+	}
+}
+
+func TestLoadFromPathRejectsInvalidSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		version string
+		want    string
+	}{
+		"future":   {version: "2", want: "unsupported schema version 2"},
+		"negative": {version: "-1", want: "non-negative integer"},
+		"null":     {version: "null", want: "non-negative integer"},
+		"string":   {version: `"1"`, want: "must be an integer"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "state.json")
+			contents := []byte(`{"schema_version":` + test.version + `,"sessions":{}}`)
+			if err := os.WriteFile(path, contents, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := LoadFromPath(path)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Errorf("LoadFromPath() error = %v, want error containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadFromPathRejectsUnknownFields(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"legacy top-level":     `{"sessions":{},"unknown":true}`,
+		"versioned repository": `{"schema_version":1,"sessions":{"feature":{"repos":[{"name":"repo","worktree_path":"/tmp/repo","unknown":true}]}}}`,
+	}
+	for name, contents := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "state.json")
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := LoadFromPath(path)
+			if err == nil || !strings.Contains(err.Error(), "unknown field") {
+				t.Errorf("LoadFromPath() error = %v, want unknown field error", err)
+			}
+		})
+	}
+}
+
+func TestLoadFromPathRejectsTrailingJSON(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"sessions":{}} {}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadFromPath(path); err == nil {
+		t.Fatal("LoadFromPath() error = nil, want trailing JSON error")
+	}
+}
+
+func TestLoadFromPathValidatesState(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	contents := []byte(`{"sessions":{"feature":{"repos":[{"name":"repo"}]}}}`)
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadFromPath(path)
+	if err == nil || !strings.Contains(err.Error(), "worktree_path is required") {
+		t.Errorf("LoadFromPath() error = %v, want worktree validation error", err)
+	}
+}
+
+func TestSaveToPathValidatesState(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		state State
+		want  string
+	}{
+		"unsupported version": {
+			state: State{SchemaVersion: currentSchemaVersion + 1},
+			want:  "unsupported schema version",
+		},
+		"blank session name": {
+			state: State{Sessions: map[string]Session{" ": {}}},
+			want:  "session name is required",
+		},
+		"missing repository name": {
+			state: State{Sessions: map[string]Session{"feature": {Repos: []Repository{{WorktreePath: "/tmp/repo"}}}}},
+			want:  "name is required",
+		},
+		"missing worktree path": {
+			state: State{Sessions: map[string]Session{"feature": {Repos: []Repository{{Name: "repo"}}}}},
+			want:  "worktree_path is required",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			err := SaveToPath(filepath.Join(t.TempDir(), "state.json"), test.state)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Errorf("SaveToPath() error = %v, want error containing %q", err, test.want)
+			}
+		})
 	}
 }
 

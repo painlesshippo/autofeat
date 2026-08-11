@@ -2,17 +2,21 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 const (
-	appDirectoryName = ".autofeat"
-	stateFileName    = "state.json"
+	appDirectoryName     = ".autofeat"
+	stateFileName        = "state.json"
+	currentSchemaVersion = 1
 	// DefaultBaseBranch is used when no global or repository-specific base is set.
 	DefaultBaseBranch = "master"
 )
@@ -39,6 +43,7 @@ type Session struct {
 
 // State is the complete persisted autofeat state.
 type State struct {
+	SchemaVersion     int                `json:"schema_version"`
 	DefaultBaseBranch string             `json:"default_base_branch"`
 	Sessions          map[string]Session `json:"sessions"`
 }
@@ -126,14 +131,27 @@ func Save(state State) error {
 func LoadFromPath(path string) (State, error) {
 	contents, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return State{DefaultBaseBranch: DefaultBaseBranch, Sessions: make(map[string]Session)}, nil
+		return State{SchemaVersion: currentSchemaVersion, DefaultBaseBranch: DefaultBaseBranch, Sessions: make(map[string]Session)}, nil
 	}
 	if err != nil {
 		return State{}, fmt.Errorf("read state %q: %w", path, err)
 	}
 
+	schemaVersion, err := schemaVersion(contents)
+	if err != nil {
+		return State{}, fmt.Errorf("parse state %q: %w", path, err)
+	}
+	if schemaVersion != 0 && schemaVersion != currentSchemaVersion {
+		return State{}, fmt.Errorf("parse state %q: unsupported schema version %d; upgrade autofeat", path, schemaVersion)
+	}
+
 	var state State
-	if err := json.Unmarshal(contents, &state); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&state); err != nil {
+		return State{}, fmt.Errorf("parse state %q: %w", path, err)
+	}
+	if err := rejectTrailingJSON(decoder); err != nil {
 		return State{}, fmt.Errorf("parse state %q: %w", path, err)
 	}
 	if state.Sessions == nil {
@@ -142,17 +160,28 @@ func LoadFromPath(path string) (State, error) {
 	if state.DefaultBaseBranch == "" {
 		state.DefaultBaseBranch = DefaultBaseBranch
 	}
+	state.SchemaVersion = currentSchemaVersion
+	if err := state.Validate(); err != nil {
+		return State{}, fmt.Errorf("validate state %q: %w", path, err)
+	}
 
 	return state, nil
 }
 
 // SaveToPath writes state as indented JSON to path.
 func SaveToPath(path string, state State) error {
+	if state.SchemaVersion != 0 && state.SchemaVersion != currentSchemaVersion {
+		return fmt.Errorf("validate state: unsupported schema version %d; upgrade autofeat", state.SchemaVersion)
+	}
+	state.SchemaVersion = currentSchemaVersion
 	if state.Sessions == nil {
 		state.Sessions = make(map[string]Session)
 	}
 	if state.DefaultBaseBranch == "" {
 		state.DefaultBaseBranch = DefaultBaseBranch
+	}
+	if err := state.Validate(); err != nil {
+		return fmt.Errorf("validate state: %w", err)
 	}
 
 	contents, err := json.MarshalIndent(state, "", "  ")
@@ -166,6 +195,62 @@ func SaveToPath(path string, state State) error {
 	}
 	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		return fmt.Errorf("write state %q: %w", path, err)
+	}
+
+	return nil
+}
+
+// Validate verifies that state contains values required by state consumers.
+func (state State) Validate() error {
+	if strings.TrimSpace(state.DefaultBaseBranch) == "" {
+		return errors.New("default_base_branch is required")
+	}
+	for name, session := range state.Sessions {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("session name is required")
+		}
+		for index, repository := range session.Repos {
+			if strings.TrimSpace(repository.Name) == "" {
+				return fmt.Errorf("session %q repos[%d]: name is required", name, index)
+			}
+			if strings.TrimSpace(repository.WorktreePath) == "" {
+				return fmt.Errorf("session %q repos[%d]: worktree_path is required", name, index)
+			}
+		}
+	}
+
+	return nil
+}
+
+func schemaVersion(contents []byte) (int, error) {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(contents, &document); err != nil {
+		return 0, err
+	}
+
+	rawVersion, ok := document["schema_version"]
+	if !ok {
+		return 0, nil
+	}
+
+	var version *int
+	if err := json.Unmarshal(rawVersion, &version); err != nil {
+		return 0, fmt.Errorf("schema_version must be an integer: %w", err)
+	}
+	if version == nil || *version < 0 {
+		return 0, errors.New("schema_version must be a non-negative integer")
+	}
+
+	return *version, nil
+}
+
+func rejectTrailingJSON(decoder *json.Decoder) error {
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values are not allowed")
+		}
+		return err
 	}
 
 	return nil

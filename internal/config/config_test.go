@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/painlesshippo/autofeat/internal/hooks"
@@ -14,6 +15,7 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 
 	configPath := filepath.Join(t.TempDir(), ".autofeat", "config.json")
 	want := Config{
+		SchemaVersion:    currentSchemaVersion,
 		WorkspaceBaseDir: "/tmp/autofeat-workspaces",
 		EditorCmd:        "code",
 		HeadlessCmd:      "copilot",
@@ -26,6 +28,13 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 
 	if err := SaveToPath(configPath, want); err != nil {
 		t.Fatalf("SaveToPath() error = %v", err)
+	}
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(contents), `"schema_version": 1`) {
+		t.Errorf("config JSON does not contain schema version: %s", contents)
 	}
 
 	got, err := LoadFromPath(configPath)
@@ -134,6 +143,7 @@ func TestLoadCreatesDefaultConfigOnFirstUse(t *testing.T) {
 		t.Fatalf("Load() first use error = %v", err)
 	}
 	want := Config{
+		SchemaVersion:    currentSchemaVersion,
 		WorkspaceBaseDir: filepath.Join(home, ".autofeat-workspaces"),
 		EditorCmd:        defaultEditorCommand,
 		HeadlessCmd:      defaultHeadlessCommand,
@@ -156,6 +166,113 @@ func TestLoadCreatesDefaultConfigOnFirstUse(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, config) {
 		t.Errorf("Load() second use = %+v, want persisted %+v", got, config)
+	}
+}
+
+func TestLoadFromPathNormalizesLegacySchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	contents := []byte(`{"schema_version":0,"workspace_base_dir":"/tmp/workspaces","editor_cmd":"code"}`)
+	if err := os.WriteFile(configPath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := LoadFromPath(configPath)
+	if err != nil {
+		t.Fatalf("LoadFromPath() error = %v", err)
+	}
+	if config.SchemaVersion != currentSchemaVersion {
+		t.Errorf("SchemaVersion = %d, want %d", config.SchemaVersion, currentSchemaVersion)
+	}
+	if config.HeadlessCmd != defaultHeadlessCommand {
+		t.Errorf("HeadlessCmd = %q, want %q", config.HeadlessCmd, defaultHeadlessCommand)
+	}
+	if !reflect.DeepEqual(config.Hooks, defaultHooks()) {
+		t.Errorf("Hooks = %#v, want defaults %#v", config.Hooks, defaultHooks())
+	}
+}
+
+func TestLoadFromPathRejectsInvalidSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		version string
+		want    string
+	}{
+		"future":   {version: "2", want: "unsupported schema version 2"},
+		"negative": {version: "-1", want: "non-negative integer"},
+		"null":     {version: "null", want: "non-negative integer"},
+		"string":   {version: `"1"`, want: "must be an integer"},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			contents := []byte(`{"schema_version":` + test.version + `,"workspace_base_dir":"/tmp/workspaces","editor_cmd":"code"}`)
+			if err := os.WriteFile(configPath, contents, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := LoadFromPath(configPath)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Errorf("LoadFromPath() error = %v, want error containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadFromPathRejectsUnknownFields(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"legacy top-level": `{"workspace_base_dir":"/tmp/workspaces","editor_cmd":"code","unknown":true}`,
+		"versioned hook":   `{"schema_version":1,"workspace_base_dir":"/tmp/workspaces","editor_cmd":"code","hooks":[{"when":"post-add","run":"true","unknown":true}]}`,
+	}
+	for name, contents := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(configPath, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := LoadFromPath(configPath)
+			if err == nil || !strings.Contains(err.Error(), "unknown field") {
+				t.Errorf("LoadFromPath() error = %v, want unknown field error", err)
+			}
+		})
+	}
+}
+
+func TestLoadFromPathRejectsTrailingJSON(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	contents := []byte(`{"workspace_base_dir":"/tmp/workspaces","editor_cmd":"code"} {}`)
+	if err := os.WriteFile(configPath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadFromPath(configPath); err == nil {
+		t.Fatal("LoadFromPath() error = nil, want trailing JSON error")
+	}
+}
+
+func TestSaveToPathRejectsUnsupportedSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	config := Config{
+		SchemaVersion:    currentSchemaVersion + 1,
+		WorkspaceBaseDir: "/tmp/workspaces",
+		EditorCmd:        "code",
+		HeadlessCmd:      "copilot",
+	}
+	err := SaveToPath(filepath.Join(t.TempDir(), "config.json"), config)
+	if err == nil || !strings.Contains(err.Error(), "unsupported schema version") {
+		t.Errorf("SaveToPath() error = %v, want unsupported schema version error", err)
 	}
 }
 

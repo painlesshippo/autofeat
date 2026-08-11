@@ -1467,6 +1467,9 @@ func TestOpenConfigInvokesEditorWithConfigFile(t *testing.T) {
 	if len(configuration.Hooks) == 0 {
 		t.Errorf("persisted hooks = %#v, want defaults", configuration.Hooks)
 	}
+	if configuration.SchemaVersion != 1 {
+		t.Errorf("persisted schema version = %d, want 1", configuration.SchemaVersion)
+	}
 }
 
 func TestOpenCopilotSessionStartsAgentInFeatureDir(t *testing.T) {
