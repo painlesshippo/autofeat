@@ -1256,6 +1256,41 @@ func TestTeardownSessionRemovesWorktreesAndState(t *testing.T) {
 	}
 }
 
+func TestTeardownSessionRunsPostTeardownHooksAfterRemoval(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	logPath := filepath.Join(t.TempDir(), "post-teardown.log")
+	t.Setenv("POST_TEARDOWN_LOG", logPath)
+	statePath, err := state.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AUTOFEAT_TEST_STATE", statePath)
+	writeMainConfigWithHooks(t, "code", "copilot", []hooks.Definition{{
+		When: hooks.PostTeardown,
+		Run:  `test ! -e feature%2Fhooks && ! grep -q 'feature/hooks' "$AUTOFEAT_TEST_STATE" && pwd > "$POST_TEARDOWN_LOG"`,
+	}})
+	t.Chdir(repoPath)
+
+	if err := addRepository("feature/hooks"); err != nil {
+		t.Fatalf("addRepository() error = %v", err)
+	}
+	if err := teardownSession("feature/hooks", false); err != nil {
+		t.Fatalf("teardownSession() error = %v", err)
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := mainWorkspaceDir(t) + "\n"
+	if string(contents) != want {
+		t.Errorf("post-teardown working directory = %q, want %q", contents, want)
+	}
+}
+
 func TestTeardownSessionDirtyWorktree(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())

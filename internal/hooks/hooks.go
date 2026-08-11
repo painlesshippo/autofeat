@@ -10,7 +10,10 @@ import (
 
 type Event string
 
-const PostAdd Event = "post-add"
+const (
+	PostAdd      Event = "post-add"
+	PostTeardown Event = "post-teardown"
+)
 
 type Definition struct {
 	When    Event    `json:"when"`
@@ -19,7 +22,7 @@ type Definition struct {
 }
 
 func (definition Definition) Validate() error {
-	if definition.When != PostAdd {
+	if definition.When != PostAdd && definition.When != PostTeardown {
 		return fmt.Errorf("unsupported hook event %q", definition.When)
 	}
 	if strings.TrimSpace(definition.Run) == "" {

@@ -10,9 +10,11 @@ import (
 func TestDefinitionValidate(t *testing.T) {
 	t.Parallel()
 
-	valid := Definition{When: PostAdd, IfFiles: []string{"mise.toml", ".mise.toml"}, Run: "mise install"}
-	if err := valid.Validate(); err != nil {
-		t.Fatalf("Validate() error = %v", err)
+	for _, event := range []Event{PostAdd, PostTeardown} {
+		valid := Definition{When: event, IfFiles: []string{"mise.toml", ".mise.toml"}, Run: "mise install"}
+		if err := valid.Validate(); err != nil {
+			t.Errorf("Validate() event %q error = %v", event, err)
+		}
 	}
 
 	tests := map[string]Definition{

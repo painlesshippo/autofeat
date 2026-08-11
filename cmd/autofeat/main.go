@@ -1034,6 +1034,10 @@ func teardownSession(featureName string, force bool) error {
 	if err != nil {
 		return err
 	}
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
 
 	if !force {
 		for _, repo := range session.Repos {
@@ -1075,6 +1079,9 @@ func teardownSession(featureName string, force bool) error {
 		return fmt.Errorf("remove feature directory: %w", err)
 	}
 	if err := state.DeleteSession(featureName); err != nil {
+		return err
+	}
+	if err := hooks.Run(configuration.Hooks, hooks.PostTeardown, configuration.WorkspaceBaseDir); err != nil {
 		return err
 	}
 
