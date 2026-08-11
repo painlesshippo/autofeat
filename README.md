@@ -99,13 +99,12 @@ TOML files are formatted with `gofmt`, `rumdl`, `shfmt`, `gotmplfmt`, and
 
 ## Releasing
 The build uses `svu` to derive the current `MAJOR.MINOR.PATCH` version from Git
-tags. Builds outside `main`, `master`, or `trunk` append the branch name as a
-SemVer prerelease suffix, replacing characters such as `/` with `-`. Builds
-with uncommitted changes append `-dirty`.
+tags. Builds outside `master` append the branch name as a SemVer prerelease
+suffix, replacing characters such as `/` with `-`. Builds with uncommitted
+changes append `-dirty`.
 
 To create and publish a release, first commit all intended changes, switch to
-`main`, `master`, or `trunk`, and ensure `origin` is reachable with Git
-authentication:
+`master`, and ensure `origin` is reachable with Git authentication:
 
 ```sh
 mise run release
@@ -114,8 +113,8 @@ mise run release
 The command uses `svu next` to derive the next version from Conventional
 Commits, runs the full test suite, creates and verifies an annotated
 `vMAJOR.MINOR.PATCH` release tag, and pushes it to `origin`. It aborts before
-creating a tag when the working tree is dirty, the current branch is not a
-trunk branch, or remote authentication fails.
+creating a tag when the working tree is dirty, the current branch is not
+`master`, or remote authentication fails.
 
 ## Usage
 Commands use `autofeat <command> [feature-selector ...]`. Existing-session

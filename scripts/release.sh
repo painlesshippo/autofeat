@@ -11,13 +11,10 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 branch_name="$(git symbolic-ref --quiet --short HEAD || true)"
-case "$branch_name" in
-main | master | trunk) ;;
-*)
-    echo "Release aborted: releases must be created from main, master, or trunk." >&2
+if [[ "$branch_name" != master ]]; then
+    echo "Release aborted: releases must be created from master." >&2
     exit 1
-    ;;
-esac
+fi
 
 if ! git remote get-url origin >/dev/null 2>&1; then
     echo "Release aborted: no origin remote is configured." >&2
