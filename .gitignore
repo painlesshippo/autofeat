@@ -22,3 +22,6 @@ go.work.sum
 .vscode/
 .idea/
 .DS_Store
+
+# Local work
+.local/
