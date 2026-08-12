@@ -68,7 +68,7 @@ func ValidateBranchName(branchName string) error {
 // AddWorktree creates a worktree at destPath on a new branch named branchName,
 // starting from baseRef.
 func AddWorktree(branchName, destPath, baseRef string) error {
-	if _, err := run("worktree", "add", destPath, "-b", branchName, baseRef); err != nil {
+	if _, err := run("worktree", "add", "--no-track", destPath, "-b", branchName, baseRef); err != nil {
 		return fmt.Errorf("add worktree %q: %w", destPath, err)
 	}
 
@@ -87,7 +87,7 @@ func Clone(url, destPath string) error {
 // CheckoutNewBranch creates and checks out branchName from baseRef in the
 // repository at destPath.
 func CheckoutNewBranch(destPath, branchName, baseRef string) error {
-	if _, err := run("-C", destPath, "checkout", "-b", branchName, baseRef); err != nil {
+	if _, err := run("-C", destPath, "checkout", "--no-track", "-b", branchName, baseRef); err != nil {
 		return fmt.Errorf("create branch %q in %q: %w", branchName, destPath, err)
 	}
 

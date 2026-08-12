@@ -160,6 +160,42 @@ func TestResolveBaseRefPrefersOriginAndFallsBackWithoutIt(t *testing.T) {
 	}
 }
 
+func TestCheckoutNewBranchDoesNotTrackBaseRef(t *testing.T) {
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	runGit(t, repoPath, "remote", "add", "origin", repoPath)
+	runGit(t, repoPath, "fetch", "-q", "origin", "main")
+	runGit(t, repoPath, "config", "branch.autoSetupMerge", "always")
+
+	if err := CheckoutNewBranch(repoPath, "feature/checkout", "origin/main"); err != nil {
+		t.Fatalf("CheckoutNewBranch() error = %v", err)
+	}
+	assertNoUpstream(t, repoPath)
+}
+
+func TestAddWorktreeDoesNotTrackBaseRef(t *testing.T) {
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	runGit(t, repoPath, "remote", "add", "origin", repoPath)
+	runGit(t, repoPath, "fetch", "-q", "origin", "main")
+	runGit(t, repoPath, "config", "branch.autoSetupMerge", "always")
+	changeDirectory(t, repoPath)
+	worktreePath := filepath.Join(t.TempDir(), "worktree")
+
+	if err := AddWorktree("feature/worktree", worktreePath, "origin/main"); err != nil {
+		t.Fatalf("AddWorktree() error = %v", err)
+	}
+	assertNoUpstream(t, worktreePath)
+}
+
+func assertNoUpstream(t *testing.T, repoPath string) {
+	t.Helper()
+	command := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "@{upstream}")
+	if output, err := command.CombinedOutput(); err == nil {
+		t.Errorf("branch unexpectedly tracks %q", strings.TrimSpace(string(output)))
+	}
+}
+
 func TestFetchBaseAndAheadBehind(t *testing.T) {
 	requireGit(t)
 
