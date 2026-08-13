@@ -75,23 +75,47 @@ func ValidateBranchName(branchName string) error {
 	return nil
 }
 
-// AddWorktree creates a worktree at destPath on a new branch named branchName,
-// starting from baseRef.
-func AddWorktree(branchName, destPath, baseRef string) error {
-	if _, err := run("worktree", "add", "--no-track", destPath, "-b", branchName, baseRef); err != nil {
-		return fmt.Errorf("add worktree %q: %w", destPath, err)
-	}
-
-	return nil
+// AddWorktree creates a worktree at destPath, reusing branchName when it exists
+// locally or creating it from its cached origin branch or baseRef. The returned
+// boolean reports whether a local branch was created.
+func AddWorktree(branchName, destPath, baseRef string) (bool, error) {
+	return addWorktreeAt("", branchName, destPath, baseRef)
 }
 
-// AddWorktreeAt creates a worktree from the repository at repoPath.
-func AddWorktreeAt(repoPath, branchName, destPath, baseRef string) error {
-	if _, err := run("-C", repoPath, "worktree", "add", "--no-track", destPath, "-b", branchName, baseRef); err != nil {
-		return fmt.Errorf("add worktree %q: %w", destPath, err)
+// AddWorktreeAt creates a worktree from the repository at repoPath, reusing
+// branchName when possible. The returned boolean reports whether a local branch
+// was created.
+func AddWorktreeAt(repoPath, branchName, destPath, baseRef string) (bool, error) {
+	return addWorktreeAt(repoPath, branchName, destPath, baseRef)
+}
+
+func addWorktreeAt(repoPath, branchName, destPath, baseRef string) (bool, error) {
+	localExists, err := refExists(repoPath, "refs/heads/"+branchName)
+	if err != nil {
+		return false, err
 	}
 
-	return nil
+	args := repositoryArgs(repoPath, "worktree", "add")
+	created := !localExists
+	if localExists {
+		args = append(args, destPath, branchName)
+	} else {
+		startRef := baseRef
+		remoteRef := "refs/remotes/origin/" + branchName
+		remoteExists, err := refExists(repoPath, remoteRef)
+		if err != nil {
+			return false, err
+		}
+		if remoteExists {
+			startRef = remoteRef
+		}
+		args = append(args, "--no-track", destPath, "-b", branchName, startRef)
+	}
+
+	if _, err := run(args...); err != nil {
+		return false, fmt.Errorf("add worktree %q: %w", destPath, err)
+	}
+	return created, nil
 }
 
 // Clone clones url into destPath.
@@ -103,14 +127,54 @@ func Clone(url, destPath string) error {
 	return nil
 }
 
-// CheckoutNewBranch creates and checks out branchName from baseRef in the
-// repository at destPath.
-func CheckoutNewBranch(destPath, branchName, baseRef string) error {
-	if _, err := run("-C", destPath, "checkout", "--no-track", "-b", branchName, baseRef); err != nil {
-		return fmt.Errorf("create branch %q in %q: %w", branchName, destPath, err)
+// CheckoutBranch checks out branchName, reusing it when it exists locally or
+// creating it from its cached origin branch or baseRef. The returned boolean
+// reports whether a local branch was created.
+func CheckoutBranch(destPath, branchName, baseRef string) (bool, error) {
+	localExists, err := refExists(destPath, "refs/heads/"+branchName)
+	if err != nil {
+		return false, err
+	}
+	if localExists {
+		if _, err := run("-C", destPath, "checkout", branchName); err != nil {
+			return false, fmt.Errorf("check out branch %q in %q: %w", branchName, destPath, err)
+		}
+		return false, nil
 	}
 
-	return nil
+	startRef := baseRef
+	remoteRef := "refs/remotes/origin/" + branchName
+	remoteExists, err := refExists(destPath, remoteRef)
+	if err != nil {
+		return false, err
+	}
+	if remoteExists {
+		startRef = remoteRef
+	}
+	if _, err := run("-C", destPath, "checkout", "--no-track", "-b", branchName, startRef); err != nil {
+		return false, fmt.Errorf("create branch %q in %q: %w", branchName, destPath, err)
+	}
+	return true, nil
+}
+
+func refExists(repoPath, ref string) (bool, error) {
+	args := repositoryArgs(repoPath, "show-ref", "--verify", "--quiet", ref)
+	command := exec.Command("git", args...)
+	if err := command.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("resolve Git reference %q: %w", ref, err)
+	}
+	return true, nil
+}
+
+func repositoryArgs(repoPath string, args ...string) []string {
+	if repoPath == "" {
+		return args
+	}
+	return append([]string{"-C", repoPath}, args...)
 }
 
 // CurrentBranch returns the checked-out branch name in the worktree at destPath.

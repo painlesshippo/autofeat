@@ -224,16 +224,23 @@ If adding a later repository fails, autofeat removes the worktrees, clones, and
 branches it already created for that session. Template creation requires a new
 feature name and does not append to an existing session.
 
-Create a feature session from inside a Git repository. The command creates a
-branch with the supplied feature name, adds a worktree, records the session,
-and regenerates its VS Code workspace. Feature names use valid Git branch
-syntax, so hierarchical names such as `feature/potato` and `bug/f321s-aaa` are
-supported.
+Create a feature session from inside a Git repository. The command reuses or
+creates a branch with the supplied feature name, adds a worktree, records the
+session, and regenerates its VS Code workspace. Feature names use valid Git
+branch syntax, so hierarchical names such as `feature/potato` and
+`bug/f321s-aaa` are supported.
 
-For an unqualified branch name, the feature branch starts from the repository's
-cached `origin/<branch>` when it exists, or from the local branch otherwise.
-Repository addition does not fetch, so it remains available offline and uses
-the most recently fetched commit.
+An existing local feature branch is reused at its current tip. If no local
+branch exists but a cached `origin/<feature>` branch does, autofeat creates the
+local feature branch from that cached commit without configuring an upstream.
+Otherwise, the feature branch is created from the selected base reference.
+Repository addition does not fetch. A feature branch that is already checked
+out in another worktree remains there, and Git reports the checkout conflict.
+
+For an unqualified base branch name, a newly created feature branch starts from
+the repository's cached `origin/<branch>` when it exists, or from the local base
+branch otherwise. Repository addition does not fetch, so it remains available
+offline and uses the most recently fetched commit.
 
 Select and remember a different base reference for the current repository with
 `--ref`. Branches, tags, commit SHAs, full refs, and Git revision expressions

@@ -186,15 +186,19 @@ func TestResolveBaseRefPrefersOriginAndFallsBackWithoutIt(t *testing.T) {
 	}
 }
 
-func TestCheckoutNewBranchDoesNotTrackBaseRef(t *testing.T) {
+func TestCheckoutBranchDoesNotTrackBaseRef(t *testing.T) {
 	repoPath := createRepository(t)
 	runGit(t, repoPath, "branch", "-M", "main")
 	runGit(t, repoPath, "remote", "add", "origin", repoPath)
 	runGit(t, repoPath, "fetch", "-q", "origin", "main")
 	runGit(t, repoPath, "config", "branch.autoSetupMerge", "always")
 
-	if err := CheckoutNewBranch(repoPath, "feature/checkout", "origin/main"); err != nil {
-		t.Fatalf("CheckoutNewBranch() error = %v", err)
+	created, err := CheckoutBranch(repoPath, "feature/checkout", "origin/main")
+	if err != nil {
+		t.Fatalf("CheckoutBranch() error = %v", err)
+	}
+	if !created {
+		t.Error("CheckoutBranch() created = false, want true")
 	}
 	assertNoUpstream(t, repoPath)
 }
@@ -208,10 +212,83 @@ func TestAddWorktreeDoesNotTrackBaseRef(t *testing.T) {
 	changeDirectory(t, repoPath)
 	worktreePath := filepath.Join(t.TempDir(), "worktree")
 
-	if err := AddWorktree("feature/worktree", worktreePath, "origin/main"); err != nil {
+	created, err := AddWorktree("feature/worktree", worktreePath, "origin/main")
+	if err != nil {
 		t.Fatalf("AddWorktree() error = %v", err)
 	}
+	if !created {
+		t.Error("AddWorktree() created = false, want true")
+	}
 	assertNoUpstream(t, worktreePath)
+}
+
+func TestAddWorktreeReusesLocalBranch(t *testing.T) {
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "feature/existing")
+	runGit(t, repoPath, "remote", "add", "origin", repoPath)
+	runGit(t, repoPath, "fetch", "-q", "origin", "feature/existing")
+	runGit(t, repoPath, "checkout", "-qb", "other")
+	runGit(t, repoPath, "commit", "--allow-empty", "-qm", "other change")
+	runGit(t, repoPath, "branch", "-f", "feature/existing", "other")
+	featureCommit := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "feature/existing"))
+	remoteCommit := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "refs/remotes/origin/feature/existing"))
+	if featureCommit == remoteCommit {
+		t.Fatal("test setup did not create divergent local and cached origin branches")
+	}
+	changeDirectory(t, repoPath)
+	worktreePath := filepath.Join(t.TempDir(), "worktree")
+
+	created, err := AddWorktree("feature/existing", worktreePath, "other")
+	if err != nil {
+		t.Fatalf("AddWorktree() error = %v", err)
+	}
+	if created {
+		t.Error("AddWorktree() created = true, want false")
+	}
+	if got := strings.TrimSpace(runGitOutput(t, worktreePath, "rev-parse", "HEAD")); got != featureCommit {
+		t.Errorf("worktree HEAD = %q, want existing branch commit %q", got, featureCommit)
+	}
+}
+
+func TestAddWorktreeCreatesFromCachedOriginBranch(t *testing.T) {
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "feature/cached")
+	runGit(t, repoPath, "remote", "add", "origin", repoPath)
+	runGit(t, repoPath, "fetch", "-q", "origin", "feature/cached")
+	runGit(t, repoPath, "branch", "-D", "feature/cached")
+	runGit(t, repoPath, "commit", "--allow-empty", "-qm", "base change")
+	remoteCommit := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "refs/remotes/origin/feature/cached"))
+	changeDirectory(t, repoPath)
+	worktreePath := filepath.Join(t.TempDir(), "worktree")
+
+	created, err := AddWorktree("feature/cached", worktreePath, "master")
+	if err != nil {
+		t.Fatalf("AddWorktree() error = %v", err)
+	}
+	if !created {
+		t.Error("AddWorktree() created = false, want true")
+	}
+	if got := strings.TrimSpace(runGitOutput(t, worktreePath, "rev-parse", "HEAD")); got != remoteCommit {
+		t.Errorf("worktree HEAD = %q, want cached origin commit %q", got, remoteCommit)
+	}
+	assertNoUpstream(t, worktreePath)
+}
+
+func TestAddWorktreeRejectsBranchCheckedOutElsewhere(t *testing.T) {
+	repoPath := createRepository(t)
+	changeDirectory(t, repoPath)
+	worktreePath := filepath.Join(t.TempDir(), "worktree")
+
+	created, err := AddWorktree("master", worktreePath, "master")
+	if err == nil {
+		t.Fatal("AddWorktree() error = nil, want checked-out branch conflict")
+	}
+	if created {
+		t.Error("AddWorktree() created = true, want false")
+	}
+	if _, statErr := os.Stat(worktreePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("conflicting worktree exists: Stat() error = %v", statErr)
+	}
 }
 
 func assertNoUpstream(t *testing.T, repoPath string) {
@@ -236,8 +313,8 @@ func TestFetchBaseAndAheadBehind(t *testing.T) {
 	if err := Clone(remotePath, clonePath); err != nil {
 		t.Fatalf("Clone() error = %v", err)
 	}
-	if err := CheckoutNewBranch(clonePath, "feature/sync", "origin/main"); err != nil {
-		t.Fatalf("CheckoutNewBranch() error = %v", err)
+	if _, err := CheckoutBranch(clonePath, "feature/sync", "origin/main"); err != nil {
+		t.Fatalf("CheckoutBranch() error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(clonePath, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -398,7 +475,7 @@ func TestAddWorktreeAndDetectUncommittedChanges(t *testing.T) {
 	changeDirectory(t, repoPath)
 	worktreePath := filepath.Join(t.TempDir(), "agent-worktree")
 
-	if err := AddWorktree("agent/test", worktreePath, "master"); err != nil {
+	if _, err := AddWorktree("agent/test", worktreePath, "master"); err != nil {
 		t.Fatalf("AddWorktree() error = %v", err)
 	}
 	t.Cleanup(func() {
@@ -450,7 +527,7 @@ func TestAddWorktreeStartsFromExplicitBase(t *testing.T) {
 	changeDirectory(t, repoPath)
 
 	worktreePath := filepath.Join(t.TempDir(), "agent-worktree")
-	if err := AddWorktree("agent/explicit-base", worktreePath, "master"); err != nil {
+	if _, err := AddWorktree("agent/explicit-base", worktreePath, "master"); err != nil {
 		t.Fatalf("AddWorktree() error = %v", err)
 	}
 	t.Cleanup(func() {
@@ -473,7 +550,7 @@ func TestRemoveWorktree(t *testing.T) {
 	repoPath := createRepository(t)
 	changeDirectory(t, repoPath)
 	worktreePath := filepath.Join(t.TempDir(), "agent-worktree")
-	if err := AddWorktree("agent/remove", worktreePath, "master"); err != nil {
+	if _, err := AddWorktree("agent/remove", worktreePath, "master"); err != nil {
 		t.Fatalf("AddWorktree() error = %v", err)
 	}
 
@@ -501,8 +578,8 @@ func TestCloneCheckoutNewBranchAndDetectUnpushedCommits(t *testing.T) {
 	if err := Clone(remotePath, clonePath); err != nil {
 		t.Fatalf("Clone() error = %v", err)
 	}
-	if err := CheckoutNewBranch(clonePath, "agent/test", "origin/agent/test"); err != nil {
-		t.Fatalf("CheckoutNewBranch() error = %v", err)
+	if _, err := CheckoutBranch(clonePath, "agent/test", "origin/agent/test"); err != nil {
+		t.Fatalf("CheckoutBranch() error = %v", err)
 	}
 
 	unpushed, err := HasUnpushedCommits(clonePath, "agent/test")

@@ -434,31 +434,32 @@ func addRepositoryWithRef(featureName, requestedBaseBranch string) error {
 	if err != nil {
 		return err
 	}
-	return addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch)
+	_, err = addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch)
+	return err
 }
 
-func addRepositoryAt(featureName, repoRoot string) error {
+func addRepositoryAt(featureName, repoRoot string) (bool, error) {
 	return addRepositoryAtRef(featureName, repoRoot, "")
 }
 
-func addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch string) error {
+func addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch string) (bool, error) {
 	configuration, err := config.Load()
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	currentState, err := state.Load()
 	if err != nil {
-		return err
+		return false, err
 	}
 	repositoryKey := filepath.Clean(repoRoot)
 	baseBranch, err := selectBaseBranch(repoRoot, repositoryKey, requestedBaseBranch, currentState)
 	if err != nil {
-		return err
+		return false, err
 	}
 	baseRef, err := gitcmd.ResolveBaseRef(repoRoot, baseBranch)
 	if err != nil {
-		return err
+		return false, err
 	}
 	sessionBaseRef := sessionBaseReference(baseBranch, baseRef)
 	repoName := filepath.Base(filepath.Clean(repoRoot))
@@ -480,17 +481,18 @@ func addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch string) error
 	worktreePath := filepath.Join(featureDir, repositoryDirectoryName(repoName, parentName, session.Repos))
 
 	if err := os.MkdirAll(featureDir, 0o755); err != nil {
-		return fmt.Errorf("create feature directory: %w", err)
+		return false, fmt.Errorf("create feature directory: %w", err)
 	}
-	if err := gitcmd.AddWorktreeAt(repoRoot, featureBranchName(featureName), worktreePath, baseRef); err != nil {
-		return err
+	branchCreated, err := gitcmd.AddWorktreeAt(repoRoot, featureBranchName(featureName), worktreePath, baseRef)
+	if err != nil {
+		return false, err
 	}
 	if err := hooks.Run(configuration.Hooks, hooks.PostAdd, worktreePath); err != nil {
 		removeErr := gitcmd.RemoveWorktree(worktreePath, true)
-		if removeErr == nil {
+		if removeErr == nil && branchCreated {
 			removeErr = gitcmd.DeleteBranch(repoRoot, featureBranchName(featureName))
 		}
-		return errors.Join(err, removeErr)
+		return false, errors.Join(err, removeErr)
 	}
 
 	session.Repos = append(session.Repos, state.Repository{
@@ -504,15 +506,15 @@ func addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch string) error
 		currentState.RepositoryBaseBranches[repositoryKey] = requestedBaseBranch
 	}
 	if err := state.Save(currentState); err != nil {
-		return err
+		return branchCreated, err
 	}
 
 	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
-		return err
+		return branchCreated, err
 	}
 
 	fmt.Printf("Added %s to feature %s\n", repoName, featureName)
-	return nil
+	return branchCreated, nil
 }
 
 func addRemoteRepository(featureName, remoteURL string) error {
@@ -574,7 +576,7 @@ func addRemoteRepositoryWithRef(featureName, remoteURL, requestedBaseBranch stri
 	}
 	sessionBaseRef := sessionBaseReference(baseBranch, baseRef)
 
-	if err := gitcmd.CheckoutNewBranch(worktreePath, featureBranchName(featureName), baseRef); err != nil {
+	if _, err := gitcmd.CheckoutBranch(worktreePath, featureBranchName(featureName), baseRef); err != nil {
 		return err
 	}
 	if err := hooks.Run(configuration.Hooks, hooks.PostAdd, worktreePath); err != nil {
@@ -798,20 +800,23 @@ func instantiateTemplate(featureName, templateName string) error {
 		}
 	}
 
+	createdBranches := make(map[string]bool)
 	for _, repository := range template.Repositories {
 		if repository.Kind == templates.LocalRepository {
-			err = addRepositoryAt(featureName, localRoots[repository.Source])
+			var branchCreated bool
+			branchCreated, err = addRepositoryAt(featureName, localRoots[repository.Source])
+			createdBranches[filepath.Clean(localRoots[repository.Source])] = branchCreated
 		} else {
 			err = addRemoteRepository(featureName, repository.Source)
 		}
 		if err != nil {
-			return errors.Join(err, rollbackTemplateSession(featureName))
+			return errors.Join(err, rollbackTemplateSession(featureName, createdBranches))
 		}
 	}
 	return nil
 }
 
-func rollbackTemplateSession(featureName string) error {
+func rollbackTemplateSession(featureName string, createdBranches map[string]bool) error {
 	session, err := state.GetSession(featureName)
 	if errors.Is(err, state.ErrSessionNotFound) {
 		return nil
@@ -829,7 +834,7 @@ func rollbackTemplateSession(featureName string) error {
 		}
 		removeErr := gitcmd.RemoveWorktree(repository.WorktreePath, true)
 		cleanupErr = errors.Join(cleanupErr, removeErr)
-		if removeErr == nil {
+		if removeErr == nil && createdBranches[filepath.Clean(repository.OriginalPath)] {
 			cleanupErr = errors.Join(cleanupErr, gitcmd.DeleteBranch(repository.OriginalPath, featureBranchName(featureName)))
 		}
 	}

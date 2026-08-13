@@ -1057,6 +1057,57 @@ func TestAddRepositoryCreatesSessionWorktreeAndWorkspace(t *testing.T) {
 	}
 }
 
+func TestAddRepositoryReusesExistingLocalBranch(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "branch", "x1")
+	existingCommit := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "x1"))
+	writeAndCommitMainFile(t, repoPath, "main.txt", "main\n", "advance main")
+	t.Chdir(repoPath)
+
+	if err := addRepository("x1"); err != nil {
+		t.Fatalf("addRepository() error = %v", err)
+	}
+	session, err := state.GetSession("x1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := session.Repos[0].WorktreePath
+	if got := strings.TrimSpace(mainGitOutput(t, worktreePath, "rev-parse", "HEAD")); got != existingCommit {
+		t.Errorf("worktree HEAD = %q, want existing branch commit %q", got, existingCommit)
+	}
+}
+
+func TestAddRepositoryCreatesFromCachedOriginBranch(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "branch", "x1")
+	runMainGit(t, repoPath, "remote", "add", "origin", repoPath)
+	runMainGit(t, repoPath, "fetch", "-q", "origin", "x1")
+	runMainGit(t, repoPath, "branch", "-D", "x1")
+	remoteCommit := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "refs/remotes/origin/x1"))
+	writeAndCommitMainFile(t, repoPath, "main.txt", "main\n", "advance main")
+	t.Chdir(repoPath)
+
+	if err := addRepository("x1"); err != nil {
+		t.Fatalf("addRepository() error = %v", err)
+	}
+	session, err := state.GetSession("x1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := session.Repos[0].WorktreePath
+	if got := strings.TrimSpace(mainGitOutput(t, worktreePath, "rev-parse", "HEAD")); got != remoteCommit {
+		t.Errorf("worktree HEAD = %q, want cached origin commit %q", got, remoteCommit)
+	}
+}
+
 func TestNewRefAcceptsAndRemembersAnyGitReference(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
@@ -1195,7 +1246,7 @@ func TestInstantiateTemplateCreatesOrderedLocalRepositories(t *testing.T) {
 	}
 }
 
-func TestInstantiateTemplateRollsBackEarlierRepositories(t *testing.T) {
+func TestInstantiateTemplateReusesExistingBranch(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
 	writeMainConfig(t, "code", "copilot")
@@ -1205,23 +1256,64 @@ func TestInstantiateTemplateRollsBackEarlierRepositories(t *testing.T) {
 	for _, repositoryPath := range []string{firstRepository, secondRepository} {
 		runMainGit(t, repositoryPath, "branch", "-M", "main")
 	}
-	runMainGit(t, secondRepository, "branch", "feature/rollback")
-	if err := templates.Put("rollback", templates.Template{Repositories: []templates.Repository{
+	runMainGit(t, secondRepository, "branch", "feature/existing")
+	if err := templates.Put("existing", templates.Template{Repositories: []templates.Repository{
 		{Kind: templates.LocalRepository, Source: firstRepository},
 		{Kind: templates.LocalRepository, Source: secondRepository},
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
+	if err := instantiateTemplate("feature/existing", "existing"); err != nil {
+		t.Fatalf("instantiateTemplate() error = %v", err)
+	}
+	session, err := state.GetSession("feature/existing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.Repos) != 2 {
+		t.Fatalf("session repositories = %+v, want two", session.Repos)
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, session.Repos[1].WorktreePath, "branch", "--show-current")); got != "feature/existing" {
+		t.Errorf("reused branch = %q, want feature/existing", got)
+	}
+}
+
+func TestInstantiateTemplateRollbackPreservesReusedBranches(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	writeMainConfigWithHooks(t, "code", "copilot", []hooks.Definition{{
+		When: hooks.PostAdd,
+		Run:  "if [ -e fail-template ]; then exit 23; fi",
+	}})
+
+	repositories := []string{createMainRepository(t), createMainRepository(t), createMainRepository(t)}
+	for _, repositoryPath := range repositories {
+		runMainGit(t, repositoryPath, "branch", "-M", "main")
+	}
+	runMainGit(t, repositories[0], "branch", "feature/rollback")
+	writeAndCommitMainFile(t, repositories[2], "fail-template", "fail\n", "fail template hook")
+	entries := make([]templates.Repository, 0, len(repositories))
+	for _, repositoryPath := range repositories {
+		entries = append(entries, templates.Repository{Kind: templates.LocalRepository, Source: repositoryPath})
+	}
+	if err := templates.Put("rollback", templates.Template{Repositories: entries}); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := instantiateTemplate("feature/rollback", "rollback"); err == nil {
-		t.Fatal("instantiateTemplate() error = nil, want branch collision error")
+		t.Fatal("instantiateTemplate() error = nil, want hook error")
 	}
 	if _, err := state.GetSession("feature/rollback"); !errors.Is(err, state.ErrSessionNotFound) {
 		t.Errorf("GetSession() error = %v, want ErrSessionNotFound", err)
 	}
-	command := exec.Command("git", "-C", firstRepository, "show-ref", "--verify", "--quiet", "refs/heads/feature/rollback")
-	if err := command.Run(); err == nil {
-		t.Error("first repository feature branch remains after rollback")
+	if branches := strings.TrimSpace(mainGitOutput(t, repositories[0], "branch", "--list", "feature/rollback")); branches == "" {
+		t.Error("reused feature branch was deleted during rollback")
+	}
+	for _, repositoryPath := range repositories[1:] {
+		if branches := strings.TrimSpace(mainGitOutput(t, repositoryPath, "branch", "--list", "feature/rollback")); branches != "" {
+			t.Errorf("created feature branch remains in %q after rollback: %q", repositoryPath, branches)
+		}
 	}
 }
 
@@ -1329,6 +1421,29 @@ func TestAddRepositoryCleansUpAfterPostAddHookFailure(t *testing.T) {
 	}
 	if branches := mainGitOutput(t, repoPath, "branch", "--list", "feature/hook-failure"); strings.TrimSpace(branches) != "" {
 		t.Errorf("failed feature branch still exists: %q", branches)
+	}
+}
+
+func TestAddRepositoryHookFailurePreservesExistingBranch(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "branch", "feature/hook-failure")
+	existingCommit := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "feature/hook-failure"))
+	writeMainConfigWithHooks(t, "code", "copilot", []hooks.Definition{{When: hooks.PostAdd, Run: "exit 23"}})
+	t.Chdir(repoPath)
+
+	if err := addRepository("feature/hook-failure"); err == nil {
+		t.Fatal("addRepository() error = nil, want post-add hook error")
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "feature/hook-failure")); got != existingCommit {
+		t.Errorf("existing branch commit = %q after hook failure, want %q", got, existingCommit)
+	}
+	worktreePath := filepath.Join(mainWorkspaceDir(t), "feature%2Fhook-failure", filepath.Base(repoPath))
+	if _, err := os.Stat(worktreePath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("failed worktree was not removed: Stat() error = %v", err)
 	}
 }
 
