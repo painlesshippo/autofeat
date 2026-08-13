@@ -5,6 +5,7 @@ and open them together in one VS Code workspace.
 
 ## Requirements
 * Go 1.26.5 or later, only when building or installing the CLI from source.
+* Mise, when using the source installation and development tasks.
 * Git installed and available on `PATH`.
 * VS Code's `code` command on `PATH` to use the default workspace-opening
   command. Another editor command can be configured instead.
@@ -56,87 +57,41 @@ in the state file to use a different persistent base branch, while preserving
 its `schema_version`.
 
 ## Installation
-Prebuilt amd64 binaries are available from
-[GitHub Releases](https://github.com/painlesshippo/autofeat/releases/latest).
-Choose the version to install from that page, then follow the instructions for
-your platform.
+The release installers download the latest amd64 binary from
+[GitHub Releases](https://github.com/painlesshippo/autofeat/releases/latest),
+verify its SHA-256 checksum, install it, and add its directory to `PATH`.
 
-### Linux and WSL
-Download the Linux release, install it in `$HOME/.local/bin`, and verify it:
+### Install a release on Linux or WSL
 
 ```sh
-VERSION=0.2.0
-ARCHIVE="autofeat_${VERSION}_linux_amd64.tar.gz"
-curl -fLO "https://github.com/painlesshippo/autofeat/releases/download/v${VERSION}/${ARCHIVE}"
-tar -xzf "$ARCHIVE" autofeat
-mkdir -p "$HOME/.local/bin"
-install -m 0755 autofeat "$HOME/.local/bin/autofeat"
-rm -f "$ARCHIVE" autofeat
-"$HOME/.local/bin/autofeat" version
+curl -fsSL https://raw.githubusercontent.com/painlesshippo/autofeat/master/scripts/install-linux.sh | bash
 ```
 
-Replace `0.2.0` with the released version. Ensure `$HOME/.local/bin` is on the
-Linux `PATH`.
+The script installs to `$HOME/.local/bin` and configures Bash aliases and
+completion. Append `-s -- --version 0.2.0` to install a specific version.
 
-### Windows
-Run the following in PowerShell to download the Windows release, install it in
-`$HOME\bin`, add that directory to the user `PATH`, and verify it:
+### Install a release on Windows
 
 ```powershell
-$Version = "0.2.0"
-$Archive = "autofeat_${Version}_windows_amd64.zip"
-$InstallDir = Join-Path $HOME "bin"
-$ExtractDir = Join-Path ([IO.Path]::GetTempPath()) "autofeat-$Version"
-$Url = "https://github.com/painlesshippo/autofeat/releases/download/v${Version}/${Archive}"
-
-Invoke-WebRequest -Uri $Url -OutFile $Archive
-Remove-Item $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
-Expand-Archive -Path $Archive -DestinationPath $ExtractDir
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Copy-Item (Join-Path $ExtractDir "autofeat.exe") $InstallDir -Force
-Remove-Item $Archive, $ExtractDir -Recurse -Force
-
-$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if (($UserPath -split ";") -notcontains $InstallDir) {
-  [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
-}
-$env:Path = "$InstallDir;$env:Path"
-autofeat version
+irm https://raw.githubusercontent.com/painlesshippo/autofeat/master/scripts/install-win.ps1 | iex
 ```
 
-Replace `0.2.0` with the released version. Each release also includes
-`checksums.txt` with SHA-256 checksums for both archives.
+The script installs to `$HOME\bin` and adds that directory to the user `PATH`.
+Set the `VERSION` environment variable to install a specific version.
 
-### Install from source
-To compile and install the latest tagged version with Go:
-
-```sh
-go install github.com/painlesshippo/autofeat/cmd/autofeat@latest
-```
-
-Or build from a local clone:
+### Install from source on Linux or WSL
 
 ```sh
 git clone https://github.com/painlesshippo/autofeat.git
 cd autofeat
-go build -o autofeat ./cmd/autofeat
+bash scripts/install-from-sources-linux.sh
 ```
 
-Ensure the installed binary directory, or the directory containing the built
-binary, is on `PATH`.
+`mise run install` is a shorthand for the same source installer.
 
-`mise run install` installs the built binary into `$HOME/.local/bin` and adds
-the `af` and `afl` aliases for `autofeat` and `autofeat list` to `$HOME/.bashrc`
-by default. It also enables Bash completion
-for the command and aliases. Override these locations with `INSTALL_DIR` and
-`SHELL_RC` when necessary, then reload the configured shell file.
-
-When installing with `go install` or copying the binary manually, add the
-following line to `$HOME/.bashrc` and reload the shell:
-
-```bash
-source <(autofeat completion bash)
-```
+The source installer uses Mise to install the pinned build tools before
+building. Set `INSTALL_DIR` to override the installation directory and
+`SHELL_RC` to override the Bash configuration file.
 
 ## Development
 Enable the repository's Git hooks after cloning:
@@ -176,6 +131,9 @@ packaging locally without publishing anything with:
 ```sh
 mise run release-check
 ```
+
+See [Release Implementation](docs/releases.md) for the complete tagging,
+GitHub Actions, packaging, installer-validation, and recovery flow.
 
 ## Usage
 Commands use `autofeat <command> [feature-selector ...]`. Existing-session

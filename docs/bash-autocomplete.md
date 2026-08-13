@@ -53,7 +53,7 @@ The installer adds this to `.bashrc`:
 source <(autofeat completion bash)
 ```
 
-That behavior is implemented in install.sh.
+That behavior is implemented in `install-linux.sh`.
 
 When Bash starts:
 

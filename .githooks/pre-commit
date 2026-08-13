@@ -11,7 +11,24 @@ else
     exit 1
 fi
 
+report_formatting_failure() {
+    file="$1"
+    formatter="$2"
+    details="${3:-}"
+
+    printf '\n[pre-commit] Formatting failed: %s (%s)\n' "$file" "$formatter" >&2
+    if [ -n "$details" ]; then
+        printf '%s\n' "$details" >&2
+    fi
+    printf '%s\n' \
+        '[pre-commit] Fix and stage the result:' \
+        '  mise run format' \
+        "  git add -- \"$file\"" >&2
+}
+
 check_formatting() {
+    printf '%s\n' '[pre-commit] Checking staged file formatting...'
+
     git diff --cached --name-only --diff-filter=ACMR |
         while IFS= read -r file; do
             [ -n "$file" ] || continue
@@ -20,42 +37,46 @@ check_formatting() {
             *.go)
                 diff="$(git show ":$file" | "$mise" exec -- gofmt -d)"
                 if [ -n "$diff" ]; then
-                    printf '%s\n' "$diff"
-                    printf 'Run gofmt on %s and stage the result.\n' "$file" >&2
+                    report_formatting_failure "$file" gofmt "$diff"
                     return 1
                 fi
                 ;;
             *.md | *.markdown)
-                if ! git show ":$file" | "$mise" exec -- rumdl fmt --check --stdin --stdin-filename "$file"; then
-                    printf 'Run rumdl fmt on %s and stage the result.\n' "$file" >&2
+                original="$(git show ":$file")"
+                if ! formatted="$(printf '%s\n' "$original" | "$mise" exec -- rumdl fmt --silent --stdin --stdin-filename "$file" 2>&1)"; then
+                    report_formatting_failure "$file" rumdl "$formatted"
+                    return 1
+                fi
+                if [ "$original" != "$formatted" ]; then
+                    report_formatting_failure "$file" rumdl
                     return 1
                 fi
                 ;;
             *.sh | .githooks/*)
-                if ! git show ":$file" | "$mise" exec -- shfmt -d -i 4 --filename "$file"; then
-                    printf 'Run shfmt on %s and stage the result.\n' "$file" >&2
+                if ! diff="$(git show ":$file" | "$mise" exec -- shfmt -d -i 4 --filename "$file" 2>&1)"; then
+                    report_formatting_failure "$file" shfmt "$diff"
                     return 1
                 fi
                 ;;
             *.tmpl)
                 original="$(git show ":$file")"
-                if ! formatted="$(printf '%s\n' "$original" | "$mise" exec -- gotmplfmt)"; then
-                    printf 'Unable to format staged file: %s\n' "$file" >&2
+                if ! formatted="$(printf '%s\n' "$original" | "$mise" exec -- gotmplfmt 2>&1)"; then
+                    report_formatting_failure "$file" gotmplfmt "$formatted"
                     return 1
                 fi
                 if [ "$original" != "$formatted" ]; then
-                    printf 'Run gotmplfmt on %s and stage the result.\n' "$file" >&2
+                    report_formatting_failure "$file" gotmplfmt
                     return 1
                 fi
                 ;;
             *.toml)
                 original="$(git show ":$file")"
-                if ! formatted="$(printf '%s\n' "$original" | "$mise" exec -- taplo format --stdin-filepath "$file" -)"; then
-                    printf 'Unable to format staged file: %s\n' "$file" >&2
+                if ! formatted="$(printf '%s\n' "$original" | "$mise" exec -- taplo format --stdin-filepath "$file" - 2>&1)"; then
+                    report_formatting_failure "$file" taplo "$formatted"
                     return 1
                 fi
                 if [ "$original" != "$formatted" ]; then
-                    printf 'Run taplo format on %s and stage the result.\n' "$file" >&2
+                    report_formatting_failure "$file" taplo
                     return 1
                 fi
                 ;;
@@ -64,3 +85,4 @@ check_formatting() {
 }
 
 check_formatting
+printf '%s\n' '[pre-commit] Formatting checks passed.'

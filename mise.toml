@@ -15,6 +15,21 @@ run = "bash ./scripts/build.sh"
 description = "Run the test suite"
 run = "go test -v ./..."
 
+[tasks.test-install]
+description = "Run all installer integration tests"
+run = """
+bash ./scripts/install-linux.test.sh
+bash ./scripts/install-from-sources-linux.test.sh
+if command -v pwsh >/dev/null 2>&1; then
+	pwsh -NoProfile -File ./scripts/install-win.test.ps1
+elif command -v powershell.exe >/dev/null 2>&1; then
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w "$PWD/scripts/install-win.test.ps1")"
+else
+	echo "PowerShell is required to run install-win.test.ps1." >&2
+	exit 1
+fi
+"""
+
 [tasks.format]
 description = "Format all supported repository files"
 run = "bash ./scripts/format.sh"
@@ -50,8 +65,7 @@ run = "bash ./scripts/debug.sh"
 
 [tasks.install]
 description = "Install the CLI and add it to PATH"
-depends = ["build"]
-run = "bash ./scripts/install.sh"
+run = "bash ./scripts/install-from-sources-linux.sh"
 
 [tasks.uninstall]
 description = "Remove the installed CLI and PATH entry"
