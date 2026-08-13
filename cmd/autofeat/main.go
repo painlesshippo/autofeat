@@ -135,26 +135,66 @@ func run(args []string) error {
 }
 
 func runNewCommand(args []string) error {
-	if len(args) < 1 || len(args) > 3 {
-		return usageError()
-	}
-	featureName := args[0]
-	if err := validateFeatureName(featureName); err != nil {
+	arguments, err := parseNewArguments(args)
+	if err != nil {
 		return err
 	}
-	if len(args) == 3 {
-		if args[1] != "--template" || args[2] == "" {
-			return usageError()
-		}
-		return instantiateTemplate(featureName, args[2])
+	if err := validateFeatureName(arguments.featureName); err != nil {
+		return err
 	}
-	if len(args) == 2 {
-		if !isRemoteURL(args[1]) {
-			return usageError()
+	if arguments.baseBranch != "" {
+		if err := gitcmd.ValidateBranchName(arguments.baseBranch); err != nil {
+			return err
 		}
-		return addRemoteRepository(featureName, args[1])
 	}
-	return addRepository(featureName)
+	if arguments.templateName != "" {
+		return instantiateTemplate(arguments.featureName, arguments.templateName)
+	}
+	if arguments.remoteURL != "" {
+		return addRemoteRepositoryWithRef(arguments.featureName, arguments.remoteURL, arguments.baseBranch)
+	}
+	return addRepositoryWithRef(arguments.featureName, arguments.baseBranch)
+}
+
+type newArguments struct {
+	featureName  string
+	remoteURL    string
+	templateName string
+	baseBranch   string
+}
+
+func parseNewArguments(args []string) (newArguments, error) {
+	if len(args) == 0 {
+		return newArguments{}, usageError()
+	}
+
+	arguments := newArguments{featureName: args[0]}
+	for index := 1; index < len(args); index++ {
+		switch args[index] {
+		case "--template":
+			if arguments.templateName != "" || index+1 >= len(args) || args[index+1] == "" {
+				return newArguments{}, usageError()
+			}
+			arguments.templateName = args[index+1]
+			index++
+		case "--ref":
+			if arguments.baseBranch != "" || index+1 >= len(args) || args[index+1] == "" {
+				return newArguments{}, usageError()
+			}
+			arguments.baseBranch = args[index+1]
+			index++
+		default:
+			if arguments.remoteURL != "" || !isRemoteURL(args[index]) {
+				return newArguments{}, usageError()
+			}
+			arguments.remoteURL = args[index]
+		}
+	}
+	if arguments.templateName != "" && (arguments.remoteURL != "" || arguments.baseBranch != "") {
+		return newArguments{}, usageError()
+	}
+
+	return arguments, nil
 }
 
 func runTemplateCommand(args []string) error {
@@ -630,20 +670,33 @@ func statusDetail(status repositoryStatus) string {
 }
 
 func addRepository(featureName string) error {
+	return addRepositoryWithRef(featureName, "")
+}
+
+func addRepositoryWithRef(featureName, requestedBaseBranch string) error {
 	repoRoot, err := gitcmd.GetRepoRoot()
 	if err != nil {
 		return err
 	}
-	return addRepositoryAt(featureName, repoRoot)
+	return addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch)
 }
 
 func addRepositoryAt(featureName, repoRoot string) error {
+	return addRepositoryAtRef(featureName, repoRoot, "")
+}
+
+func addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch string) error {
 	configuration, err := config.Load()
 	if err != nil {
 		return err
 	}
 
-	baseBranch, err := detectBaseBranch(repoRoot)
+	currentState, err := state.Load()
+	if err != nil {
+		return err
+	}
+	repositoryKey := filepath.Clean(repoRoot)
+	baseBranch, err := selectBaseBranch(repoRoot, repositoryKey, requestedBaseBranch, currentState)
 	if err != nil {
 		return err
 	}
@@ -656,11 +709,8 @@ func addRepositoryAt(featureName, repoRoot string) error {
 	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
 	workspaceFile := filepath.Join(featureDir, featureDirName+".code-workspace")
 
-	session, err := state.GetSession(featureName)
-	newSession := errors.Is(err, state.ErrSessionNotFound)
-	if err != nil && !newSession {
-		return err
-	}
+	session, sessionExists := currentState.Sessions[featureName]
+	newSession := !sessionExists
 	if newSession {
 		session = state.Session{
 			CreatedAt:     time.Now().UTC(),
@@ -692,12 +742,11 @@ func addRepositoryAt(featureName, repoRoot string) error {
 		WorktreePath: worktreePath,
 		BaseBranch:   baseBranch,
 	})
-	if newSession {
-		err = state.SaveSession(featureName, session)
-	} else {
-		err = state.UpdateSession(featureName, session)
+	currentState.Sessions[featureName] = session
+	if requestedBaseBranch != "" {
+		currentState.RepositoryBaseBranches[repositoryKey] = requestedBaseBranch
 	}
-	if err != nil {
+	if err := state.Save(currentState); err != nil {
 		return err
 	}
 
@@ -710,6 +759,10 @@ func addRepositoryAt(featureName, repoRoot string) error {
 }
 
 func addRemoteRepository(featureName, remoteURL string) error {
+	return addRemoteRepositoryWithRef(featureName, remoteURL, "")
+}
+
+func addRemoteRepositoryWithRef(featureName, remoteURL, requestedBaseBranch string) error {
 	repoName, err := remoteRepositoryName(remoteURL)
 	if err != nil {
 		return err
@@ -724,11 +777,13 @@ func addRemoteRepository(featureName, remoteURL string) error {
 	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
 	workspaceFile := filepath.Join(featureDir, featureDirName+".code-workspace")
 
-	session, err := state.GetSession(featureName)
-	newSession := errors.Is(err, state.ErrSessionNotFound)
-	if err != nil && !newSession {
+	currentState, err := state.Load()
+	if err != nil {
 		return err
 	}
+	repositoryKey := strings.TrimSuffix(strings.TrimSpace(remoteURL), "/")
+	session, sessionExists := currentState.Sessions[featureName]
+	newSession := !sessionExists
 	if newSession {
 		session = state.Session{
 			CreatedAt:     time.Now().UTC(),
@@ -752,7 +807,7 @@ func addRemoteRepository(featureName, remoteURL string) error {
 		}
 		_ = os.RemoveAll(worktreePath)
 	}()
-	baseBranch, err := detectBaseBranch(worktreePath)
+	baseBranch, err := selectBaseBranch(worktreePath, repositoryKey, requestedBaseBranch, currentState)
 	if err != nil {
 		return err
 	}
@@ -780,12 +835,11 @@ func addRemoteRepository(featureName, remoteURL string) error {
 		return err
 	}
 
-	if newSession {
-		err = state.SaveSession(featureName, session)
-	} else {
-		err = state.UpdateSession(featureName, session)
+	currentState.Sessions[featureName] = session
+	if requestedBaseBranch != "" {
+		currentState.RepositoryBaseBranches[repositoryKey] = requestedBaseBranch
 	}
-	if err != nil {
+	if err := state.Save(currentState); err != nil {
 		return err
 	}
 	cloneSucceeded = true
@@ -1185,17 +1239,27 @@ func appendTask(featureDir, task string) error {
 }
 
 func detectBaseBranch(repositoryPath string) (string, error) {
+	currentState, err := state.Load()
+	if err != nil {
+		return "", err
+	}
+	return selectBaseBranch(repositoryPath, filepath.Clean(repositoryPath), "", currentState)
+}
+
+func selectBaseBranch(repositoryPath, repositoryKey, requestedBaseBranch string, currentState state.State) (string, error) {
+	if requestedBaseBranch != "" {
+		return requestedBaseBranch, nil
+	}
+	if baseBranch := currentState.RepositoryBaseBranches[repositoryKey]; baseBranch != "" {
+		return baseBranch, nil
+	}
+
 	baseBranch, err := gitcmd.DetectBaseBranch(repositoryPath)
 	if err != nil {
 		return "", err
 	}
 	if baseBranch != "" {
 		return baseBranch, nil
-	}
-
-	currentState, err := state.Load()
-	if err != nil {
-		return "", err
 	}
 	return currentState.DefaultBaseBranch, nil
 }

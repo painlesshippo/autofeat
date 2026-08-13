@@ -114,11 +114,44 @@ func TestTemplateCommandArguments(t *testing.T) {
 		{"template", "save", "full-stack", "feature/source"},
 		{"new", "feature/test", "--template"},
 		{"new", "feature/test", "--unknown", "full-stack"},
+		{"new", "feature/test", "--template", "full-stack", "--ref", "develop"},
+		{"new", "feature/test", "--ref", "bad..branch"},
 	}
 	for _, args := range invalid {
 		if err := run(args); err == nil {
 			t.Errorf("run(%q) error = nil, want usage error", args)
 		}
+	}
+}
+
+func TestParseNewArguments(t *testing.T) {
+	tests := map[string]struct {
+		args []string
+		want newArguments
+	}{
+		"local ref": {
+			args: []string{"feature/test", "--ref", "develop"},
+			want: newArguments{featureName: "feature/test", baseBranch: "develop"},
+		},
+		"remote ref": {
+			args: []string{"feature/test", "https://example.com/repo.git", "--ref", "develop"},
+			want: newArguments{featureName: "feature/test", remoteURL: "https://example.com/repo.git", baseBranch: "develop"},
+		},
+		"ref before remote": {
+			args: []string{"feature/test", "--ref", "develop", "git@example.com:team/repo.git"},
+			want: newArguments{featureName: "feature/test", remoteURL: "git@example.com:team/repo.git", baseBranch: "develop"},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseNewArguments(test.args)
+			if err != nil {
+				t.Fatalf("parseNewArguments() error = %v", err)
+			}
+			if got != test.want {
+				t.Errorf("parseNewArguments() = %+v, want %+v", got, test.want)
+			}
+		})
 	}
 }
 
@@ -159,7 +192,9 @@ func TestBashCompletionBehavior(t *testing.T) {
 		{name: "run option", words: []string{"autofeat", "run", "feature/alpha", "-"}, completionWord: 3, want: "-task\n"},
 		{name: "run task value", words: []string{"autofeat", "run", "feature/alpha", "-task", ""}, completionWord: 4, want: ""},
 		{name: "run task terminates command", words: []string{"autofeat", "run", "feature/alpha", "-task", "write tests", ""}, completionWord: 5, want: ""},
-		{name: "new template option", words: []string{"autofeat", "new", "feature/new", "-"}, completionWord: 3, want: "--template\n"},
+		{name: "new options", words: []string{"autofeat", "new", "feature/new", "-"}, completionWord: 3, want: "--template\n--ref\n"},
+		{name: "new ref value", words: []string{"autofeat", "new", "feature/new", "--ref", ""}, completionWord: 4, want: ""},
+		{name: "new remote ref option", words: []string{"autofeat", "new", "feature/new", "https://example.com/repo.git", "-"}, completionWord: 4, want: "--ref\n"},
 		{name: "new template name", words: []string{"autofeat", "new", "feature/new", "--template", "f"}, completionWord: 4, want: "full-stack\n"},
 		{name: "template subcommand", words: []string{"autofeat", "template", "sh"}, completionWord: 2, want: "show\n"},
 		{name: "template show name", words: []string{"autofeat", "template", "show", "b"}, completionWord: 3, want: "backend\n"},
@@ -991,6 +1026,55 @@ func TestAddRepositoryCreatesSessionWorktreeAndWorkspace(t *testing.T) {
 		if !strings.Contains(string(workspaceContents), repository.Name) {
 			t.Errorf("workspace file does not reference %q:\n%s", repository.Name, workspaceContents)
 		}
+	}
+}
+
+func TestNewRefSelectsAndRemembersRepositoryBaseBranch(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "checkout", "-qb", "develop")
+	writeAndCommitMainFile(t, repoPath, "develop.txt", "develop\n", "develop commit")
+	developCommit := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD"))
+	runMainGit(t, repoPath, "checkout", "-q", "main")
+	t.Chdir(repoPath)
+
+	if err := runNewCommand([]string{"feature/explicit", "--ref", "develop"}); err != nil {
+		t.Fatalf("runNewCommand() explicit ref error = %v", err)
+	}
+	explicitSession, err := state.GetSession("feature/explicit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := explicitSession.Repos[0].BaseBranch; got != "develop" {
+		t.Errorf("explicit session base branch = %q, want develop", got)
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, explicitSession.Repos[0].WorktreePath, "rev-parse", "HEAD")); got != developCommit {
+		t.Errorf("explicit worktree HEAD = %q, want develop commit %q", got, developCommit)
+	}
+
+	currentState, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := currentState.RepositoryBaseBranches[filepath.Clean(repoPath)]; got != "develop" {
+		t.Errorf("remembered base branch = %q, want develop", got)
+	}
+
+	if err := runNewCommand([]string{"feature/remembered"}); err != nil {
+		t.Fatalf("runNewCommand() remembered ref error = %v", err)
+	}
+	rememberedSession, err := state.GetSession("feature/remembered")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rememberedSession.Repos[0].BaseBranch; got != "develop" {
+		t.Errorf("remembered session base branch = %q, want develop", got)
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, rememberedSession.Repos[0].WorktreePath, "rev-parse", "HEAD")); got != developCommit {
+		t.Errorf("remembered worktree HEAD = %q, want develop commit %q", got, developCommit)
 	}
 }
 

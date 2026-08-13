@@ -16,7 +16,7 @@ import (
 const (
 	appDirectoryName     = ".autofeat"
 	stateFileName        = "state.json"
-	currentSchemaVersion = 1
+	currentSchemaVersion = 2
 	// DefaultBaseBranch is used when no global or repository-specific base is set.
 	DefaultBaseBranch = "master"
 )
@@ -43,9 +43,10 @@ type Session struct {
 
 // State is the complete persisted autofeat state.
 type State struct {
-	SchemaVersion     int                `json:"schema_version"`
-	DefaultBaseBranch string             `json:"default_base_branch"`
-	Sessions          map[string]Session `json:"sessions"`
+	SchemaVersion          int                `json:"schema_version"`
+	DefaultBaseBranch      string             `json:"default_base_branch"`
+	RepositoryBaseBranches map[string]string  `json:"repository_base_branches"`
+	Sessions               map[string]Session `json:"sessions"`
 }
 
 // Path returns the location of the global state file.
@@ -131,7 +132,12 @@ func Save(state State) error {
 func LoadFromPath(path string) (State, error) {
 	contents, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return State{SchemaVersion: currentSchemaVersion, DefaultBaseBranch: DefaultBaseBranch, Sessions: make(map[string]Session)}, nil
+		return State{
+			SchemaVersion:          currentSchemaVersion,
+			DefaultBaseBranch:      DefaultBaseBranch,
+			RepositoryBaseBranches: make(map[string]string),
+			Sessions:               make(map[string]Session),
+		}, nil
 	}
 	if err != nil {
 		return State{}, fmt.Errorf("read state %q: %w", path, err)
@@ -141,7 +147,7 @@ func LoadFromPath(path string) (State, error) {
 	if err != nil {
 		return State{}, fmt.Errorf("parse state %q: %w", path, err)
 	}
-	if schemaVersion != 0 && schemaVersion != currentSchemaVersion {
+	if schemaVersion > currentSchemaVersion {
 		return State{}, fmt.Errorf("parse state %q: unsupported schema version %d; upgrade autofeat", path, schemaVersion)
 	}
 
@@ -156,6 +162,9 @@ func LoadFromPath(path string) (State, error) {
 	}
 	if state.Sessions == nil {
 		state.Sessions = make(map[string]Session)
+	}
+	if state.RepositoryBaseBranches == nil {
+		state.RepositoryBaseBranches = make(map[string]string)
 	}
 	if state.DefaultBaseBranch == "" {
 		state.DefaultBaseBranch = DefaultBaseBranch
@@ -176,6 +185,9 @@ func SaveToPath(path string, state State) error {
 	state.SchemaVersion = currentSchemaVersion
 	if state.Sessions == nil {
 		state.Sessions = make(map[string]Session)
+	}
+	if state.RepositoryBaseBranches == nil {
+		state.RepositoryBaseBranches = make(map[string]string)
 	}
 	if state.DefaultBaseBranch == "" {
 		state.DefaultBaseBranch = DefaultBaseBranch
@@ -204,6 +216,14 @@ func SaveToPath(path string, state State) error {
 func (state State) Validate() error {
 	if strings.TrimSpace(state.DefaultBaseBranch) == "" {
 		return errors.New("default_base_branch is required")
+	}
+	for repository, baseBranch := range state.RepositoryBaseBranches {
+		if strings.TrimSpace(repository) == "" {
+			return errors.New("repository_base_branches contains an empty repository")
+		}
+		if strings.TrimSpace(baseBranch) == "" {
+			return fmt.Errorf("repository_base_branches[%q] is required", repository)
+		}
 	}
 	for name, session := range state.Sessions {
 		if strings.TrimSpace(name) == "" {

@@ -45,17 +45,19 @@ Set `hooks` to `[]` to disable all hooks. If a hook fails, subsequent hooks do
 not run and the new repository is removed so the operation can be retried.
 
 `config.json`, `state.json`, and `templates.json` each include an independent
-`schema_version`. Existing unversioned files are accepted and upgraded to
-version 1 the next time autofeat writes them. A file created by a newer,
-unsupported schema requires a newer autofeat binary. Unknown fields are
-rejected so manual editing mistakes do not silently discard data on the next
-write.
+`schema_version`. Config and template files currently use version 1, while the
+state file uses version 2. Existing unversioned files and version 1 state files
+are accepted and upgraded the next time autofeat writes them. A file created by
+a newer, unsupported schema requires a newer autofeat binary. Unknown fields
+are rejected so manual editing mistakes do not silently discard data on the
+next write.
 
 `$HOME/.autofeat/state.json` stores `default_base_branch`, which defaults to
-`master`. When a repository is added, `autofeat` detects `master` or `main`
-and records the result as that repository's `base_branch`. Change either value
-in the state file to use a different persistent base branch, while preserving
-its `schema_version`.
+`master`, and `repository_base_branches`, which remembers base branches selected
+with `new --ref`. When a repository is added without a remembered branch,
+`autofeat` detects `master` or `main` and records the result in the session as
+that repository's `base_branch`. Change these values in the state file to use a
+different persistent base branch, while preserving its `schema_version`.
 
 ## Installation
 The release installers download the latest amd64 binary from
@@ -174,11 +176,12 @@ autofeat new feature/new-checkout --template full-stack
 ```
 
 Local repositories receive worktrees and remote repositories are cloned in the
-stored order. Base branches are detected when the new session is created, and
-normal `post-add` hooks run for every repository. All sources are checked before
-creation begins. If adding a later repository fails, autofeat removes the
-worktrees, clones, and branches it already created for that session. Template
-creation requires a new feature name and does not append to an existing session.
+stored order. Remembered base branches are reused where available; otherwise,
+base branches are detected when the new session is created. Normal `post-add`
+hooks run for every repository. All sources are checked before creation begins.
+If adding a later repository fails, autofeat removes the worktrees, clones, and
+branches it already created for that session. Template creation requires a new
+feature name and does not append to an existing session.
 
 Create a feature session from inside a Git repository. The command creates a
 branch with the supplied feature name, adds a worktree, records the session,
@@ -190,6 +193,18 @@ The feature branch starts from the repository's cached `origin/<base>` when an
 `origin` remote exists, or from the local base branch otherwise. Repository
 addition does not fetch, so it remains available offline and uses the most
 recently fetched base commit.
+
+Select and remember a different base branch for the current repository with
+`--ref`:
+
+```sh
+autofeat new feature/potato --ref develop
+```
+
+Future sessions created from the same canonical repository path reuse
+`develop`. Another explicit `--ref` replaces the remembered branch. Base branch
+selection uses an explicit ref first, then the remembered repository ref, then
+detected `master` or `main`, and finally `default_base_branch`.
 
 ```sh
 cd ~/sources/repo1
@@ -205,7 +220,10 @@ the supplied feature branch:
 
 ```sh
 autofeat new feature/potato https://github.com/example/repo3.git
+autofeat new feature/other https://github.com/example/repo3.git --ref develop
 ```
+
+Remote repository preferences are remembered by their normalized URL.
 
 Workspace directory names are flattened so they remain a directory.
 `/` is escaped as `%2F` (and literal `%` as `%25`) to avoid collisions. With

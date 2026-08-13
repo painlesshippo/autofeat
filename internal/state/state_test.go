@@ -14,7 +14,7 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), ".autofeat", "state.json")
 	createdAt := time.Date(2026, time.July, 21, 10, 0, 0, 0, time.UTC)
-	want := State{DefaultBaseBranch: "develop", Sessions: map[string]Session{
+	want := State{DefaultBaseBranch: "develop", RepositoryBaseBranches: map[string]string{"/sources/repo1": "release"}, Sessions: map[string]Session{
 		"feature1": {
 			CreatedAt:     createdAt,
 			FeatureDir:    "/tmp/workspaces/feature1",
@@ -39,7 +39,7 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 	if !strings.Contains(string(contents), `"is_remote_clone": true`) {
 		t.Errorf("state JSON does not contain is_remote_clone: %s", contents)
 	}
-	if !strings.Contains(string(contents), `"schema_version": 1`) {
+	if !strings.Contains(string(contents), `"schema_version": 2`) {
 		t.Errorf("state JSON does not contain schema version: %s", contents)
 	}
 
@@ -58,6 +58,9 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 	}
 	if got.DefaultBaseBranch != want.DefaultBaseBranch {
 		t.Errorf("DefaultBaseBranch = %q, want %q", got.DefaultBaseBranch, want.DefaultBaseBranch)
+	}
+	if got.RepositoryBaseBranches["/sources/repo1"] != "release" {
+		t.Errorf("RepositoryBaseBranches = %v, want persisted release branch", got.RepositoryBaseBranches)
 	}
 	if got.Sessions["feature1"].Repos[0].BaseBranch != "main" {
 		t.Errorf("BaseBranch = %q, want main", got.Sessions["feature1"].Repos[0].BaseBranch)
@@ -79,6 +82,9 @@ func TestLoadFromPathReturnsEmptyStateWhenMissing(t *testing.T) {
 	}
 	if state.SchemaVersion != currentSchemaVersion {
 		t.Errorf("SchemaVersion = %d, want %d", state.SchemaVersion, currentSchemaVersion)
+	}
+	if state.RepositoryBaseBranches == nil {
+		t.Error("RepositoryBaseBranches = nil, want empty map")
 	}
 }
 
@@ -132,6 +138,26 @@ func TestLoadFromPathNormalizesLegacySchemaVersion(t *testing.T) {
 	}
 }
 
+func TestLoadFromPathMigratesVersionOne(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, []byte(`{"schema_version":1,"default_base_branch":"main","sessions":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath() error = %v", err)
+	}
+	if state.SchemaVersion != currentSchemaVersion {
+		t.Errorf("SchemaVersion = %d, want %d", state.SchemaVersion, currentSchemaVersion)
+	}
+	if state.RepositoryBaseBranches == nil {
+		t.Error("RepositoryBaseBranches = nil, want empty map")
+	}
+}
+
 func TestLoadFromPathRejectsInvalidSchemaVersion(t *testing.T) {
 	t.Parallel()
 
@@ -139,7 +165,7 @@ func TestLoadFromPathRejectsInvalidSchemaVersion(t *testing.T) {
 		version string
 		want    string
 	}{
-		"future":   {version: "2", want: "unsupported schema version 2"},
+		"future":   {version: "3", want: "unsupported schema version 3"},
 		"negative": {version: "-1", want: "non-negative integer"},
 		"null":     {version: "null", want: "non-negative integer"},
 		"string":   {version: `"1"`, want: "must be an integer"},
@@ -236,6 +262,14 @@ func TestSaveToPathValidatesState(t *testing.T) {
 		"missing worktree path": {
 			state: State{Sessions: map[string]Session{"feature": {Repos: []Repository{{Name: "repo"}}}}},
 			want:  "worktree_path is required",
+		},
+		"blank repository override": {
+			state: State{RepositoryBaseBranches: map[string]string{" ": "main"}},
+			want:  "empty repository",
+		},
+		"blank base branch override": {
+			state: State{RepositoryBaseBranches: map[string]string{"/repo": " "}},
+			want:  "is required",
 		},
 	}
 	for name, test := range tests {
