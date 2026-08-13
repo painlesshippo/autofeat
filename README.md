@@ -4,7 +4,7 @@ development. A feature session can group worktrees from multiple repositories
 and open them together in one VS Code workspace.
 
 ## Requirements
-* Go 1.26.5 or later, to build or install the CLI.
+* Go 1.26.5 or later, only when building or installing the CLI from source.
 * Git installed and available on `PATH`.
 * VS Code's `code` command on `PATH` to use the default workspace-opening
   command. Another editor command can be configured instead.
@@ -56,29 +56,63 @@ in the state file to use a different persistent base branch, while preserving
 its `schema_version`.
 
 ## Installation
-Install the latest released version with Go:
+Prebuilt amd64 binaries are available from
+[GitHub Releases](https://github.com/painlesshippo/autofeat/releases/latest).
+Choose the version to install from that page, then follow the instructions for
+your platform.
+
+### Linux and WSL
+Download the Linux release, install it in `$HOME/.local/bin`, and verify it:
+
+```sh
+VERSION=0.2.0
+ARCHIVE="autofeat_${VERSION}_linux_amd64.tar.gz"
+curl -fLO "https://github.com/painlesshippo/autofeat/releases/download/v${VERSION}/${ARCHIVE}"
+tar -xzf "$ARCHIVE" autofeat
+mkdir -p "$HOME/.local/bin"
+install -m 0755 autofeat "$HOME/.local/bin/autofeat"
+rm -f "$ARCHIVE" autofeat
+"$HOME/.local/bin/autofeat" version
+```
+
+Replace `0.2.0` with the released version. Ensure `$HOME/.local/bin` is on the
+Linux `PATH`.
+
+### Windows
+Run the following in PowerShell to download the Windows release, install it in
+`$HOME\bin`, add that directory to the user `PATH`, and verify it:
+
+```powershell
+$Version = "0.2.0"
+$Archive = "autofeat_${Version}_windows_amd64.zip"
+$InstallDir = Join-Path $HOME "bin"
+$ExtractDir = Join-Path ([IO.Path]::GetTempPath()) "autofeat-$Version"
+$Url = "https://github.com/painlesshippo/autofeat/releases/download/v${Version}/${Archive}"
+
+Invoke-WebRequest -Uri $Url -OutFile $Archive
+Remove-Item $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
+Expand-Archive -Path $Archive -DestinationPath $ExtractDir
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+Copy-Item (Join-Path $ExtractDir "autofeat.exe") $InstallDir -Force
+Remove-Item $Archive, $ExtractDir -Recurse -Force
+
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (($UserPath -split ";") -notcontains $InstallDir) {
+  [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
+}
+$env:Path = "$InstallDir;$env:Path"
+autofeat version
+```
+
+Replace `0.2.0` with the released version. Each release also includes
+`checksums.txt` with SHA-256 checksums for both archives.
+
+### Install from source
+To compile and install the latest tagged version with Go:
 
 ```sh
 go install github.com/painlesshippo/autofeat/cmd/autofeat@latest
 ```
-
-Prebuilt binaries are available from
-[GitHub Releases](https://github.com/painlesshippo/autofeat/releases/latest).
-For WSL, download the Linux amd64 archive, extract it, and place `autofeat` on
-the Linux `PATH`:
-
-```sh
-VERSION=1.2.3
-curl -LO "https://github.com/painlesshippo/autofeat/releases/download/v${VERSION}/autofeat_${VERSION}_linux_amd64.tar.gz"
-tar -xzf "autofeat_${VERSION}_linux_amd64.tar.gz"
-mkdir -p "$HOME/.local/bin"
-install -m 0755 autofeat "$HOME/.local/bin/autofeat"
-```
-
-On Windows, download `autofeat_<version>_windows_amd64.zip` from the same
-release, extract `autofeat.exe`, and place its directory on the Windows
-`PATH`. Each release also includes `checksums.txt` with SHA-256 checksums for
-both archives.
 
 Or build from a local clone:
 
