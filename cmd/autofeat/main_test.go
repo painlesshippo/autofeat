@@ -16,6 +16,7 @@ import (
 	"github.com/painlesshippo/autofeat/internal/hooks"
 	"github.com/painlesshippo/autofeat/internal/state"
 	"github.com/painlesshippo/autofeat/internal/templates"
+	"github.com/spf13/cobra"
 )
 
 func TestVersionCommand(t *testing.T) {
@@ -59,12 +60,13 @@ func TestFeatureCompletions(t *testing.T) {
 		}
 	}
 
-	var output bytes.Buffer
-	if err := writeFeatureCompletions(&output); err != nil {
-		t.Fatalf("writeFeatureCompletions() error = %v", err)
+	got, directive := featureCompletions([]string{"bug/fix"}, "feature/")
+	want := []string{"feature/team/nested", "feature/zulu"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("featureCompletions() = %q, want %q", got, want)
 	}
-	if got, want := output.String(), "bug/fix\nfeature/team/nested\nfeature/zulu\n"; got != want {
-		t.Errorf("writeFeatureCompletions() = %q, want %q", got, want)
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("featureCompletions() directive = %v, want NoFileComp", directive)
 	}
 }
 
@@ -72,12 +74,12 @@ func TestFeatureCompletionsEmptyAndMalformedState(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		t.Setenv("HOME", t.TempDir())
 
-		var output bytes.Buffer
-		if err := writeFeatureCompletions(&output); err != nil {
-			t.Fatalf("writeFeatureCompletions() error = %v", err)
+		got, directive := featureCompletions(nil, "")
+		if len(got) != 0 {
+			t.Errorf("featureCompletions() = %q, want no candidates", got)
 		}
-		if output.Len() != 0 {
-			t.Errorf("writeFeatureCompletions() = %q, want empty output", output.String())
+		if directive != cobra.ShellCompDirectiveNoFileComp {
+			t.Errorf("featureCompletions() directive = %v, want NoFileComp", directive)
 		}
 	})
 
@@ -92,14 +94,18 @@ func TestFeatureCompletionsEmptyAndMalformedState(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := writeFeatureCompletions(&bytes.Buffer{}); err == nil {
-			t.Fatal("writeFeatureCompletions() error = nil, want malformed state error")
+		got, directive := featureCompletions(nil, "")
+		if len(got) != 0 {
+			t.Errorf("featureCompletions() = %q, want silent empty candidates", got)
+		}
+		if directive != cobra.ShellCompDirectiveNoFileComp {
+			t.Errorf("featureCompletions() directive = %v, want NoFileComp", directive)
 		}
 	})
 }
 
 func TestCompletionCommandArguments(t *testing.T) {
-	for _, args := range [][]string{{"completion"}, {"completion", "zsh"}, {"completion", "bash", "extra"}, {"__complete"}, {"__complete", "unknown"}} {
+	for _, args := range [][]string{{"completion"}, {"completion", "zsh"}, {"completion", "fish"}, {"completion", "bash", "extra"}, {"completion", "powershell", "extra"}} {
 		if err := run(args); err == nil {
 			t.Errorf("run(%q) error = nil, want usage error", args)
 		}
@@ -123,132 +129,137 @@ func TestTemplateCommandArguments(t *testing.T) {
 	}
 }
 
-func TestParseNewArguments(t *testing.T) {
-	tests := map[string]struct {
-		args []string
-		want newArguments
-	}{
-		"local ref": {
-			args: []string{"feature/test", "--ref", "develop"},
-			want: newArguments{featureName: "feature/test", baseBranch: "develop"},
-		},
-		"remote ref": {
-			args: []string{"feature/test", "https://example.com/repo.git", "--ref", "develop"},
-			want: newArguments{featureName: "feature/test", remoteURL: "https://example.com/repo.git", baseBranch: "develop"},
-		},
-		"ref before remote": {
-			args: []string{"feature/test", "--ref", "develop", "git@example.com:team/repo.git"},
-			want: newArguments{featureName: "feature/test", remoteURL: "git@example.com:team/repo.git", baseBranch: "develop"},
-		},
-	}
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			got, err := parseNewArguments(test.args)
-			if err != nil {
-				t.Fatalf("parseNewArguments() error = %v", err)
-			}
-			if got != test.want {
-				t.Errorf("parseNewArguments() = %+v, want %+v", got, test.want)
-			}
-		})
-	}
-}
-
-func TestBashCompletionSyntax(t *testing.T) {
+func TestGeneratedBashCompletionSyntax(t *testing.T) {
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash is not available")
 	}
 
-	command := exec.Command(bashPath, "-n")
-	command.Stdin = strings.NewReader(bashCompletion)
-	if output, err := command.CombinedOutput(); err != nil {
+	var completion bytes.Buffer
+	command := newRootCommand()
+	command.SetOut(&completion)
+	command.SetArgs([]string{"completion", "bash"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("completion bash error = %v", err)
+	}
+	if completion.Len() == 0 {
+		t.Fatal("completion bash generated empty output")
+	}
+
+	syntaxCommand := exec.Command(bashPath, "-n")
+	syntaxCommand.Stdin = strings.NewReader(completion.String())
+	if output, err := syntaxCommand.CombinedOutput(); err != nil {
 		t.Fatalf("bash -n completion error = %v\n%s", err, output)
 	}
 }
 
-func TestBashCompletionBehavior(t *testing.T) {
-	bashPath, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("bash is not available")
+func TestGeneratedPowerShellCompletion(t *testing.T) {
+	var completion bytes.Buffer
+	rootCommand := newRootCommand()
+	rootCommand.SetOut(&completion)
+	rootCommand.SetArgs([]string{"completion", "powershell"})
+	if err := rootCommand.Execute(); err != nil {
+		t.Fatalf("completion powershell error = %v", err)
+	}
+	if !strings.Contains(completion.String(), "Register-ArgumentCompleter") {
+		t.Fatal("PowerShell completion does not register an argument completer")
 	}
 
-	tests := []struct {
-		name           string
-		words          []string
-		completionWord int
-		failEndpoint   bool
-		want           string
-	}{
-		{name: "command", words: []string{"autofeat", "te"}, completionWord: 1, want: "teardown\ntemplate\n"},
-		{name: "config command", words: []string{"autofeat", "con"}, completionWord: 1, want: "config\n"},
-		{name: "teardown features and option", words: []string{"autofeat", "teardown", ""}, completionWord: 2, want: "bug/fix\nfeature/alpha\nfeature/team/nested\n--force\n"},
-		{name: "slash prefix", words: []string{"autofeat", "open", "feature/t"}, completionWord: 2, want: "feature/team/nested\n"},
-		{name: "open copilot option", words: []string{"autofeat", "open", "feature/alpha", "-"}, completionWord: 3, want: "--copilot\n"},
-		{name: "open copilot option filtered", words: []string{"autofeat", "open", "feature/alpha", "--copilot", "-"}, completionWord: 4, want: ""},
-		{name: "selected feature filtered", words: []string{"autofeat", "sync", "feature/alpha", ""}, completionWord: 3, want: "bug/fix\nfeature/team/nested\n"},
-		{name: "run option requires selector", words: []string{"autofeat", "run", "-"}, completionWord: 2, want: ""},
-		{name: "run option", words: []string{"autofeat", "run", "feature/alpha", "-"}, completionWord: 3, want: "-task\n"},
-		{name: "run task value", words: []string{"autofeat", "run", "feature/alpha", "-task", ""}, completionWord: 4, want: ""},
-		{name: "run task terminates command", words: []string{"autofeat", "run", "feature/alpha", "-task", "write tests", ""}, completionWord: 5, want: ""},
-		{name: "new options", words: []string{"autofeat", "new", "feature/new", "-"}, completionWord: 3, want: "--template\n--ref\n"},
-		{name: "new ref value", words: []string{"autofeat", "new", "feature/new", "--ref", ""}, completionWord: 4, want: ""},
-		{name: "new remote ref option", words: []string{"autofeat", "new", "feature/new", "https://example.com/repo.git", "-"}, completionWord: 4, want: "--ref\n"},
-		{name: "new template name", words: []string{"autofeat", "new", "feature/new", "--template", "f"}, completionWord: 4, want: "full-stack\n"},
-		{name: "template subcommand", words: []string{"autofeat", "template", "sh"}, completionWord: 2, want: "show\n"},
-		{name: "template show name", words: []string{"autofeat", "template", "show", "b"}, completionWord: 3, want: "backend\n"},
-		{name: "template save from", words: []string{"autofeat", "template", "save", "new-template", "-"}, completionWord: 4, want: "--from\n"},
-		{name: "template save feature", words: []string{"autofeat", "template", "save", "new-template", "--from", "feature/t"}, completionWord: 5, want: "feature/team/nested\n"},
-		{name: "af alias", words: []string{"af", "st"}, completionWord: 1, want: "status\n"},
-		{name: "afl alias", words: []string{"afl", ""}, completionWord: 1, want: ""},
-		{name: "endpoint failure", words: []string{"autofeat", "status", ""}, completionWord: 2, failEndpoint: true, want: ""},
+	powershellPath := ""
+	for _, name := range []string{"pwsh", "powershell", "powershell.exe"} {
+		path, err := exec.LookPath(name)
+		if err == nil {
+			powershellPath = path
+			break
+		}
+	}
+	if powershellPath == "" {
+		t.Skip("PowerShell is not available")
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stubDir := t.TempDir()
-			stubPath := filepath.Join(stubDir, "autofeat")
-			stub := `#!/usr/bin/env bash
-if [[ "${FAIL_ENDPOINT:-false}" == true ]]; then
-    exit 1
-fi
-if [[ "$1" == "__complete" && "$2" == "features" ]]; then
-    printf '%s\n' 'bug/fix' 'feature/alpha' 'feature/team/nested'
-    exit
-fi
-if [[ "$1" == "__complete" && "$2" == "templates" ]]; then
-	printf '%s\n' 'backend' 'full-stack'
-	exit
-fi
-exit 1
-`
-			if err := os.WriteFile(stubPath, []byte(stub), 0o755); err != nil {
-				t.Fatal(err)
-			}
+	command := exec.Command(powershellPath, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-")
+	command.Stdin = strings.NewReader(completion.String())
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("PowerShell completion error = %v\n%s", err, output)
+	}
+}
 
-			script := bashCompletion + `
-COMP_WORDS=("$@")
-COMP_CWORD="$COMPLETION_WORD"
-_autofeat_completion
-if (( ${#COMPREPLY[@]} > 0 )); then
-    printf '%s\n' "${COMPREPLY[@]}"
-fi
-`
-			command := exec.Command(bashPath, "-c", script, "completion-test")
-			command.Args = append(command.Args, test.words...)
-			command.Env = append(os.Environ(),
-				fmt.Sprintf("COMPLETION_WORD=%d", test.completionWord),
-				fmt.Sprintf("FAIL_ENDPOINT=%t", test.failEndpoint),
-				fmt.Sprintf("PATH=%s%c%s", stubDir, os.PathListSeparator, os.Getenv("PATH")),
-			)
-			output, err := command.CombinedOutput()
-			if err != nil {
-				t.Fatalf("bash completion error = %v\n%s", err, output)
-			}
-			if got := string(output); got != test.want {
-				t.Errorf("completion output = %q, want %q", got, test.want)
-			}
-		})
+func TestCobraCompletionProtocol(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"feature/zulu", "bug/fix", "feature/team/nested"} {
+		if err := state.SaveSession(name, state.Session{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var output bytes.Buffer
+	var errorOutput bytes.Buffer
+	command := newRootCommand()
+	command.SetOut(&output)
+	command.SetErr(&errorOutput)
+	command.SetArgs([]string{"__complete", "sync", "bug/fix", "feature/"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Cobra completion error = %v", err)
+	}
+	if got, want := output.String(), "feature/team/nested\nfeature/zulu\n:4\n"; got != want {
+		t.Errorf("Cobra completion output = %q, want %q", got, want)
+	}
+
+	output.Reset()
+	errorOutput.Reset()
+	command = newRootCommand()
+	command.SetOut(&output)
+	command.SetErr(&errorOutput)
+	command.SetArgs([]string{"__complete", "new", "feature/new", "--template", "full-stack", "-"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Cobra flag completion error = %v", err)
+	}
+	if strings.Contains(output.String(), "--ref") {
+		t.Errorf("Cobra completion offered mutually exclusive --ref:\n%s", output.String())
+	}
+
+	for _, args := range [][]string{
+		{"__complete", "list", ""},
+		{"__complete", "config", ""},
+		{"__complete", "version", ""},
+		{"__complete", "template", "list", ""},
+		{"__complete", "completion", "bash", ""},
+		{"__complete", "completion", "powershell", ""},
+	} {
+		output.Reset()
+		errorOutput.Reset()
+		command = newRootCommand()
+		command.SetOut(&output)
+		command.SetErr(&errorOutput)
+		command.SetArgs(args)
+		if err := command.Execute(); err != nil {
+			t.Fatalf("Cobra completion for %q error = %v", args, err)
+		}
+		if got, want := output.String(), ":4\n"; got != want {
+			t.Errorf("Cobra completion for %q = %q, want %q", args, got, want)
+		}
+	}
+}
+
+func TestTemplateCompletions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"full-stack", "backend", "frontend"} {
+		template := templates.Template{Repositories: []templates.Repository{{
+			Kind:   templates.RemoteRepository,
+			Source: "https://example.com/repository.git",
+		}}}
+		if err := templates.Put(name, template); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, directive := completeTemplateNames(nil, nil, "f")
+	want := []string{"frontend", "full-stack"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("completeTemplateNames() = %q, want %q", got, want)
+	}
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("completeTemplateNames() directive = %v, want NoFileComp", directive)
 	}
 }
 
@@ -310,15 +321,15 @@ func TestRunCommandDispatch(t *testing.T) {
 	}
 
 	gotFeatureNames = nil
-	if err := run([]string{"run", "feature/*", "-task", "write tests"}); err != nil {
-		t.Fatalf("run(run feature/* -task) error = %v", err)
+	if err := run([]string{"run", "feature/*", "--task", "write tests"}); err != nil {
+		t.Fatalf("run(run feature/* --task) error = %v", err)
 	}
 	if len(gotFeatureNames) != 2 || gotFeatureNames[0] != "feature/a" || gotFeatureNames[1] != "feature/b" || gotTask != "write tests" {
 		t.Errorf("run wildcard = (%q, %q), want sorted features and task", gotFeatureNames, gotTask)
 	}
 
-	if err := run([]string{"run", "feature/a", "-task"}); err == nil {
-		t.Error("run(run feature/a -task) error = nil, want usage error")
+	if err := run([]string{"run", "feature/a", "-task", "write tests"}); err == nil {
+		t.Error("run(run feature/a -task) error = nil, want unsupported legacy flag")
 	}
 }
 
@@ -349,9 +360,6 @@ func TestOpenCommandCopilotDispatch(t *testing.T) {
 	}
 	if openedWith != "copilot" {
 		t.Errorf("open command = %q, want copilot", openedWith)
-	}
-	if err := run([]string{"open", "feature/copilot", "--copilot", "--copilot"}); err == nil {
-		t.Error("run(open with duplicate --copilot) error = nil, want usage error")
 	}
 }
 
@@ -1064,8 +1072,8 @@ func TestNewRefAcceptsAndRemembersAnyGitReference(t *testing.T) {
 	abbreviatedCommit := mainCommit[:12]
 	t.Chdir(repoPath)
 
-	if err := runNewCommand([]string{"feature/tag", "--ref", "v1.2.3"}); err != nil {
-		t.Fatalf("runNewCommand() tag ref error = %v", err)
+	if err := run([]string{"new", "feature/tag", "--ref", "v1.2.3"}); err != nil {
+		t.Fatalf("run(new feature/tag --ref) error = %v", err)
 	}
 	tagSession, err := state.GetSession("feature/tag")
 	if err != nil {
@@ -1086,8 +1094,8 @@ func TestNewRefAcceptsAndRemembersAnyGitReference(t *testing.T) {
 		t.Errorf("remembered base reference = %q, want v1.2.3", got)
 	}
 
-	if err := runNewCommand([]string{"feature/remembered"}); err != nil {
-		t.Fatalf("runNewCommand() remembered ref error = %v", err)
+	if err := run([]string{"new", "feature/remembered"}); err != nil {
+		t.Fatalf("run(new feature/remembered) error = %v", err)
 	}
 	rememberedSession, err := state.GetSession("feature/remembered")
 	if err != nil {
@@ -1100,8 +1108,8 @@ func TestNewRefAcceptsAndRemembersAnyGitReference(t *testing.T) {
 		t.Errorf("remembered worktree HEAD = %q, want tagged commit %q", got, developCommit)
 	}
 
-	if err := runNewCommand([]string{"feature/commit", "--ref", abbreviatedCommit}); err != nil {
-		t.Fatalf("runNewCommand() commit ref error = %v", err)
+	if err := run([]string{"new", "feature/commit", "--ref", abbreviatedCommit}); err != nil {
+		t.Fatalf("run(new feature/commit --ref) error = %v", err)
 	}
 	commitSession, err := state.GetSession("feature/commit")
 	if err != nil {

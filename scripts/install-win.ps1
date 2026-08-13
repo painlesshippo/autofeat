@@ -3,7 +3,15 @@ param(
     [string]$InstallDir = $(
         if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $HOME "bin" }
     ),
-    [string]$BinaryPath = $env:BINARY_PATH
+    [string]$BinaryPath = $env:BINARY_PATH,
+    [string]$ProfilePath = $(
+        if ($env:PROFILE_PATH) {
+            $env:PROFILE_PATH
+        }
+        else {
+            Join-Path ([Environment]::GetFolderPath("MyDocuments")) "PowerShell\profile.ps1"
+        }
+    )
 )
 
 $ErrorActionPreference = "Stop"
@@ -67,6 +75,27 @@ if (($UserPath -split ";") -notcontains $InstallDir) {
     Write-Host "Added $InstallDir to the user PATH."
 }
 $env:Path = "$InstallDir;$env:Path"
+
+$CompletionSource = '(& autofeat completion powershell) -join "`n" | Invoke-Expression'
+$ProfileLines = if (Test-Path -LiteralPath $ProfilePath -PathType Leaf) {
+    @(Get-Content -LiteralPath $ProfilePath)
+}
+else {
+    @()
+}
+if ($ProfileLines -notcontains $CompletionSource) {
+    $ProfileDirectory = Split-Path -Parent $ProfilePath
+    if ($ProfileDirectory) {
+        New-Item -ItemType Directory -Force -Path $ProfileDirectory | Out-Null
+    }
+    Add-Content -LiteralPath $ProfilePath -Value @(
+        ""
+        "# Added by autofeat install"
+        $CompletionSource
+    )
+    Write-Host "Added autofeat PowerShell completion in $ProfilePath"
+    Write-Host "Run: . '$ProfilePath'"
+}
 
 Write-Host "Installed $(Join-Path $InstallDir 'autofeat.exe')"
 & (Join-Path $InstallDir "autofeat.exe") version

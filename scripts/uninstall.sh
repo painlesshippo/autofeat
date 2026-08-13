@@ -6,8 +6,6 @@ install_dir="${INSTALL_DIR:-$HOME/.local/bin}"
 shell_rc="${SHELL_RC:-$HOME/.bashrc}"
 path_export="export PATH=\"$install_dir:\$PATH\""
 completion_source="source <(autofeat completion bash)"
-alias_af="alias af='autofeat'"
-alias_afl="alias afl='autofeat list'"
 
 rm -f "$install_dir/autofeat"
 
@@ -16,14 +14,12 @@ if [[ -f "$shell_rc" ]] && grep -Fqx "# Added by autofeat install" "$shell_rc"; 
     awk \
         -v marker="# Added by autofeat install" \
         -v path_export="$path_export" \
-        -v completion_source="$completion_source" \
-        -v alias_af="$alias_af" \
-        -v alias_afl="$alias_afl" '
+        -v completion_source="$completion_source" '
         $0 == marker {
             managed_block = 1
             next
         }
-        managed_block && ($0 == path_export || $0 == completion_source || $0 == alias_af || $0 == alias_afl) {
+        managed_block && ($0 == path_export || $0 == completion_source) {
             next
         }
         managed_block {

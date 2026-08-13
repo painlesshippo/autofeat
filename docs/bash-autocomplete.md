@@ -2,10 +2,9 @@
 
 ## Overview
 
-The feature is split into two parts:
-
-* Go provides the completion script and authoritative feature names.
-* Bash examines the partially typed command and decides which candidates to show.
+The Cobra command tree defines commands, flags, and dynamic completion
+callbacks. Cobra generates the Bash integration script and handles completion
+requests at runtime.
 
 ```mermaid
 sequenceDiagram
@@ -15,35 +14,23 @@ sequenceDiagram
     participant State as ~/.autofeat/state.json
 
     User->>Bash: autofeat teardown feature/<Tab>
-    Bash->>Bash: Run _autofeat_completion
-    Bash->>Autofeat: autofeat __complete features
+    Bash->>Autofeat: Request Cobra completions
     Autofeat->>State: Load sessions
     State-->>Autofeat: Session map
-    Autofeat-->>Bash: Sorted names, one per line
-    Bash->>Bash: Filter by context and prefix
+    Autofeat-->>Bash: Matching names and completion directive
     Bash-->>User: feature/alpha feature/potato
 ```
 
-## Embedding The Script
+## Generating The Script
 
-The Bash code lives in completion.bash, but it is compiled into the Go binary:
-
-```go
-//go:embed completion.bash
-var bashCompletion string
-```
-
-This is in main.go. The blank import of Go’s `embed` package enables that directive.
-
-Consequently, the installed binary remains self-contained. It does not need a separate completion file at runtime.
-
-Running:
+Generate the integration script with:
 
 ```bash
 autofeat completion bash
 ```
 
-dispatches through main.go and writes the embedded script to standard output through `writeBashCompletion`.
+Cobra derives the script from the same command tree used to execute commands.
+There is no separately maintained Bash parser or embedded completion asset.
 
 ## Shell Startup
 
@@ -57,58 +44,20 @@ That behavior is implemented in `install-linux.sh`.
 
 When Bash starts:
 
-1. `autofeat completion bash` prints the embedded script.
+1. `autofeat completion bash` asks Cobra to generate the script.
 2. `<(...)` exposes that output as a temporary readable stream.
 3. `source` evaluates it in the current shell.
-4. The script registers `_autofeat_completion` for four commands:
-
-```bash
-complete -F _autofeat_completion autofeat af afl
-```
-
-The function must run inside the current shell because Bash supplies completion state through special variables.
-
-## Bash Completion State
-
-When Tab is pressed, Bash calls `_autofeat_completion` from completion.bash.
-
-The important Bash variables are:
-
-* `COMP_WORDS`: all words currently on the command line.
-* `COMP_CWORD`: index of the word being completed.
-* `COMPREPLY`: array that the function fills with suggestions.
-
-For example:
-
-```text
-autofeat teardown feature/
-```
-
-roughly produces:
-
-```bash
-COMP_WORDS=(autofeat teardown feature/)
-COMP_CWORD=2
-```
-
-The function reads `feature/` as the current prefix and eventually fills `COMPREPLY` with matching active features.
+4. Cobra's generated function registers completion for `autofeat`.
 
 ## Finding Feature Names
 
-The Bash function runs:
-
-```bash
-command autofeat __complete features
-```
-
-`command` bypasses aliases and shell functions, ensuring the real executable is called.
-
-The hidden `__complete features` command dispatches to `writeFeatureCompletions` in main.go. That function:
+The generated script sends the partially typed command to Cobra's hidden
+completion protocol. The matching command's completion callback:
 
 1. Calls `state.ListSessions()`.
-2. Extracts the session-map keys.
-3. Sorts them.
-4. Prints one feature name per line.
+2. Removes feature names already selected on the command line.
+3. Filters by the current prefix.
+4. Sorts and returns the remaining names with a no-file-completion directive.
 
 `state.ListSessions()` reads `$HOME/.autofeat/state.json` through state.go. A missing state file represents an empty
 session map.
@@ -124,13 +73,8 @@ The Bash function understands these contexts:
 * Feature names for `open`, `run`, `sync`, `status`, and `teardown`.
 * `--copilot` for `open`.
 * `--force` for `teardown`.
-* `-task` for `run`.
-* `bash` after `autofeat completion`.
-
-It also handles aliases specially:
-
-* `af` behaves like `autofeat`.
-* `afl` starts in `list` context.
+* `--task` for `run`.
+* `bash` and `powershell` after `autofeat completion`.
 
 Already-selected feature names are removed. Thus:
 
@@ -140,22 +84,17 @@ autofeat teardown feature/alpha <Tab>
 
 will not suggest `feature/alpha` again.
 
-When the cursor is immediately after `-task`, the function returns no feature
+When the cursor is immediately after `--task`, the callback returns no feature
 suggestions because that position expects a free-form value.
 
 ## Failure Behavior
 
-The feature lookup redirects errors:
-
-```bash
-command autofeat __complete features 2>/dev/null
-```
-
-Therefore:
+Dynamic callbacks intentionally convert state or template loading failures into
+an empty completion result. Therefore:
 
 * Missing state produces no feature candidates.
 * Malformed or unreadable state also produces no candidates or terminal noise.
-* Command-specific options may still be offered independently.
+* Cobra may still offer command-specific options independently.
 
 Completion is advisory only. When Enter is pressed, the normal command path reloads state and validates selectors
 through `runSelectedFeatures` and `selectFeatureNames` in main.go. Wildcard selectors such as `"feature/*"` are resolved
@@ -165,12 +104,8 @@ there, not by the completion script.
 
 Coverage in main_test.go verifies:
 
-* Sorted feature output.
+* Sorted feature callbacks and duplicate filtering.
 * Empty and malformed state.
 * Generated Bash syntax using `bash -n`.
-* Prefix completion.
-* Slash-containing feature names.
-* Multiple selectors and duplicate filtering.
-* Contextual options.
-* Aliases.
-* Silent endpoint failures.
+* Cobra's hidden completion protocol and directives.
+* Template prefix completion.

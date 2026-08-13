@@ -2,7 +2,6 @@
 package main
 
 import (
-	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -32,9 +31,6 @@ var (
 
 const headlessPrompt = "Please execute the objectives defined in TASK.md"
 
-//go:embed completion.bash
-var bashCompletion string
-
 var (
 	statusCommand      = statusSessions
 	openConfigCommand  = openConfig
@@ -53,102 +49,9 @@ func main() {
 }
 
 func run(args []string) error {
-	if len(args) == 0 {
-		return usageError()
-	}
-
-	switch args[0] {
-	case "completion":
-		if len(args) != 2 || args[1] != "bash" {
-			return usageError()
-		}
-		return writeBashCompletion(os.Stdout)
-	case "__complete":
-		if len(args) != 2 {
-			return usageError()
-		}
-		switch args[1] {
-		case "features":
-			return writeFeatureCompletions(os.Stdout)
-		case "templates":
-			return writeTemplateCompletions(os.Stdout)
-		default:
-			return usageError()
-		}
-	case "list":
-		if len(args) != 1 {
-			return usageError()
-		}
-		return listSessions()
-	case "config":
-		if len(args) != 1 {
-			return usageError()
-		}
-		return openConfigCommand()
-	case "version":
-		if len(args) != 1 {
-			return usageError()
-		}
-		fmt.Printf("autofeat %s\ncommit: %s\nbuilt: %s\ngo: %s\n", version, commit, buildDatetime, goVersion)
-		return nil
-	case "new":
-		return runNewCommand(args[1:])
-	case "template":
-		return runTemplateCommand(args[1:])
-	case "open":
-		selectors, copilot, err := openArguments(args[1:])
-		if err != nil {
-			return usageError()
-		}
-		command := openFeatureCommand
-		if copilot {
-			command = openCopilotCommand
-		}
-		return runSelectedFeatures(selectors, command)
-	case "run":
-		selectors, task, err := runArguments(args[1:])
-		if err != nil {
-			return usageError()
-		}
-		return runSelectedFeatures(selectors, func(featureName string) error {
-			return runFeatureCommand(featureName, task)
-		})
-	case "sync":
-		return runSelectedFeatures(args[1:], syncFeatureCommand)
-	case "status":
-		selectors, err := statusArguments(args[1:])
-		if err != nil {
-			return usageError()
-		}
-		return statusCommand(selectors)
-	case "teardown":
-		selectors, force, err := teardownArguments(args[1:])
-		if err != nil {
-			return usageError()
-		}
-		return runSelectedFeatures(selectors, func(featureName string) error {
-			return teardownCommand(featureName, force)
-		})
-	default:
-		return usageError()
-	}
-}
-
-func runNewCommand(args []string) error {
-	arguments, err := parseNewArguments(args)
-	if err != nil {
-		return err
-	}
-	if err := validateFeatureName(arguments.featureName); err != nil {
-		return err
-	}
-	if arguments.templateName != "" {
-		return instantiateTemplate(arguments.featureName, arguments.templateName)
-	}
-	if arguments.remoteURL != "" {
-		return addRemoteRepositoryWithRef(arguments.featureName, arguments.remoteURL, arguments.baseBranch)
-	}
-	return addRepositoryWithRef(arguments.featureName, arguments.baseBranch)
+	command := newRootCommand()
+	command.SetArgs(args)
+	return command.Execute()
 }
 
 type newArguments struct {
@@ -156,100 +59,6 @@ type newArguments struct {
 	remoteURL    string
 	templateName string
 	baseBranch   string
-}
-
-func parseNewArguments(args []string) (newArguments, error) {
-	if len(args) == 0 {
-		return newArguments{}, usageError()
-	}
-
-	arguments := newArguments{featureName: args[0]}
-	for index := 1; index < len(args); index++ {
-		switch args[index] {
-		case "--template":
-			if arguments.templateName != "" || index+1 >= len(args) || args[index+1] == "" {
-				return newArguments{}, usageError()
-			}
-			arguments.templateName = args[index+1]
-			index++
-		case "--ref":
-			if arguments.baseBranch != "" || index+1 >= len(args) || args[index+1] == "" {
-				return newArguments{}, usageError()
-			}
-			arguments.baseBranch = args[index+1]
-			index++
-		default:
-			if arguments.remoteURL != "" || !isRemoteURL(args[index]) {
-				return newArguments{}, usageError()
-			}
-			arguments.remoteURL = args[index]
-		}
-	}
-	if arguments.templateName != "" && (arguments.remoteURL != "" || arguments.baseBranch != "") {
-		return newArguments{}, usageError()
-	}
-
-	return arguments, nil
-}
-
-func runTemplateCommand(args []string) error {
-	if len(args) == 1 && args[0] == "list" {
-		return listTemplatesTo(os.Stdout)
-	}
-	if len(args) == 2 && args[0] == "show" {
-		return showTemplateTo(os.Stdout, args[1])
-	}
-	if len(args) == 4 && args[0] == "save" && args[2] == "--from" {
-		return saveTemplateFromSession(args[1], args[3])
-	}
-	return usageError()
-}
-
-func runArguments(args []string) ([]string, string, error) {
-	if len(args) == 0 {
-		return nil, "", errors.New("feature selector is required")
-	}
-	for index, arg := range args {
-		if arg != "-task" {
-			continue
-		}
-		if index == 0 || index != len(args)-2 || args[index+1] == "" {
-			return nil, "", errors.New("invalid run arguments")
-		}
-		return args[:index], args[index+1], nil
-	}
-	return args, "", nil
-}
-
-func statusArguments(args []string) ([]string, error) {
-	for _, arg := range args {
-		if arg == "" || strings.HasPrefix(arg, "-") {
-			return nil, errors.New("invalid status arguments")
-		}
-	}
-	if len(args) == 0 || shellExpandedWildcard(args) {
-		return []string{"*"}, nil
-	}
-	return args, nil
-}
-
-func openArguments(args []string) ([]string, bool, error) {
-	selectors := make([]string, 0, len(args))
-	copilot := false
-	for _, arg := range args {
-		if arg != "--copilot" {
-			selectors = append(selectors, arg)
-			continue
-		}
-		if copilot {
-			return nil, false, errors.New("duplicate --copilot")
-		}
-		copilot = true
-	}
-	if len(selectors) == 0 {
-		return nil, false, errors.New("feature selector is required")
-	}
-	return selectors, copilot, nil
 }
 
 func shellExpandedWildcard(selectors []string) bool {
@@ -265,25 +74,6 @@ func shellExpandedWildcard(selectors []string) bool {
 		}
 	}
 	return true
-}
-
-func teardownArguments(args []string) ([]string, bool, error) {
-	selectors := make([]string, 0, len(args))
-	force := false
-	for _, arg := range args {
-		if arg != "--force" {
-			selectors = append(selectors, arg)
-			continue
-		}
-		if force {
-			return nil, false, errors.New("duplicate --force")
-		}
-		force = true
-	}
-	if len(selectors) == 0 {
-		return nil, false, errors.New("feature selector is required")
-	}
-	return selectors, force, nil
 }
 
 func runSelectedFeatures(selectors []string, command func(string) error) error {
@@ -363,35 +153,6 @@ func isRemoteURL(value string) bool {
 	return strings.HasPrefix(value, "http://") ||
 		strings.HasPrefix(value, "https://") ||
 		strings.HasPrefix(value, "git@")
-}
-
-func listSessions() error {
-	return listSessionsTo(os.Stdout)
-}
-
-func writeBashCompletion(output io.Writer) error {
-	_, err := io.WriteString(output, bashCompletion)
-	return err
-}
-
-func writeFeatureCompletions(output io.Writer) error {
-	sessions, err := state.ListSessions()
-	if err != nil {
-		return err
-	}
-
-	names := make([]string, 0, len(sessions))
-	for name := range sessions {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		if _, err := fmt.Fprintln(output, name); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func listSessionsTo(output io.Writer) error {
@@ -1005,17 +766,6 @@ func showTemplateTo(output io.Writer, templateName string) error {
 		fmt.Fprintf(writer, "%s\t%s\n", repository.Kind, repository.Source)
 	}
 	return writer.Flush()
-}
-
-func writeTemplateCompletions(output io.Writer) error {
-	names, err := templates.Names()
-	if err != nil {
-		return err
-	}
-	for _, name := range names {
-		fmt.Fprintln(output, name)
-	}
-	return nil
 }
 
 func instantiateTemplate(featureName, templateName string) error {

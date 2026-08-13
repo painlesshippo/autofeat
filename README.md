@@ -11,6 +11,7 @@ and open them together in one VS Code workspace.
   command. Another editor command can be configured instead.
 * GitHub Copilot CLI's `copilot` command on `PATH` to use `open --copilot` or
   the default headless-agent command.
+* PowerShell 7 to use PowerShell argument completion on Windows.
 
 On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
 
@@ -72,8 +73,8 @@ verify its SHA-256 checksum, install it, and add its directory to `PATH`.
 curl -fsSL https://raw.githubusercontent.com/painlesshippo/autofeat/master/scripts/install-linux.sh | bash
 ```
 
-The script installs to `$HOME/.local/bin` and configures Bash aliases and
-completion. Append `-s -- --version 0.2.0` to install a specific version.
+The script installs to `$HOME/.local/bin` and configures Bash completion.
+Append `-s -- --version 0.2.0` to install a specific version.
 
 ### Install a release on Windows
 
@@ -82,7 +83,11 @@ irm https://raw.githubusercontent.com/painlesshippo/autofeat/master/scripts/inst
 ```
 
 The script installs to `$HOME\bin` and adds that directory to the user `PATH`.
-Set the `VERSION` environment variable to install a specific version.
+It also enables argument completion in the current user's PowerShell 7 profile,
+even when the installer is launched from Windows PowerShell 5.1. Set the
+`VERSION` environment variable to install a specific version. Restart
+PowerShell 7 or reload the profile path printed by the installer to activate
+the new `PATH` and completion settings.
 
 ### Install from source on Linux or WSL
 
@@ -146,15 +151,49 @@ commands accept exact feature names, multiple selectors, `"*"` for every
 feature, and patterns such as `"feature/*"`. Quote wildcard selectors so the
 shell passes them to `autofeat` instead of expanding them as file names.
 
+| Command | Description |
+| --- | --- |
+| `autofeat new FEATURE [REMOTE_URL] [--ref REF]` | Create a feature session or add a repository to one. |
+| `autofeat new FEATURE --template NAME` | Create a feature session from a saved template. |
+| `autofeat open SELECTOR... [--copilot]` | Open matching sessions in the editor or Copilot CLI. |
+| `autofeat run SELECTOR... [--task TEXT]` | Run the configured headless agent for matching sessions. |
+| `autofeat sync SELECTOR...` | Fetch and rebase matching sessions onto their base references. |
+| `autofeat status [SELECTOR...]` | Inspect repository health; defaults to every session. |
+| `autofeat teardown SELECTOR... [--force]` | Remove matching sessions and their worktrees. |
+| `autofeat list` | List active sessions and their cached base drift. |
+| `autofeat template list` | List saved templates. |
+| `autofeat template show NAME` | Show the repositories in a template. |
+| `autofeat template save NAME --from FEATURE` | Save an active session as a template. |
+| `autofeat config` | Open the global configuration in the configured editor. |
+| `autofeat version` | Print build version information. |
+| `autofeat completion bash` | Generate the Bash completion script. |
+| `autofeat completion powershell` | Generate the PowerShell completion script. |
+
 Open the global configuration in the configured editor:
 
 ```sh
 autofeat config
 ```
 
-Bash completion suggests active feature names for `open`, `run`, `sync`,
-`status`, and `teardown`, including subsequent selector positions.
-It omits names already selected and includes each command's supported options.
+Bash and PowerShell completion suggest active feature names for `open`, `run`,
+`sync`, `status`, and `teardown`, including subsequent selector positions. They
+omit names already selected and include each command's supported options.
+
+Print a completion script for manual shell setup with:
+
+```sh
+autofeat completion bash
+autofeat completion powershell
+```
+
+In PowerShell, evaluate the second command with:
+
+```powershell
+(& autofeat completion powershell) -join "`n" | Invoke-Expression
+```
+
+See [PowerShell Autocomplete](docs/powershell-autocomplete.md) for profile
+setup, behavior, and troubleshooting details.
 
 Save an active session's ordered repository group as a reusable template:
 
@@ -273,7 +312,7 @@ autofeat run feature/potato
 Append an objective to the feature's `TASK.md` before starting the agent:
 
 ```sh
-autofeat run feature/potato -task "Implement the potato feature and add tests"
+autofeat run feature/potato --task "Implement the potato feature and add tests"
 ```
 
 Synchronize each repository with its configured base reference:

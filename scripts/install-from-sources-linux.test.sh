@@ -31,8 +31,10 @@ grep -Eq '^built: [0-9]{4}-[0-9]{2}-[0-9]{2}T' <<<"$version_output"
 grep -Eq '^go: go[0-9]+\.' <<<"$version_output"
 
 grep -Fqx "export PATH=\"$install_dir:\$PATH\"" "$shell_rc"
-grep -Fqx "alias af='autofeat'" "$shell_rc"
-grep -Fqx "alias afl='autofeat list'" "$shell_rc"
 grep -Fqx "source <(autofeat completion bash)" "$shell_rc"
+if grep -Eq '^alias (af|afl)=' "$shell_rc"; then
+    echo "Installer unexpectedly added autofeat aliases." >&2
+    exit 1
+fi
 
 echo "PASS: install-from-sources-linux.sh"
