@@ -14,7 +14,7 @@ _autofeat_completion() {
 		*)
 			if ((COMP_CWORD == 1)); then
 				local candidate
-				for candidate in new open run sync status teardown list config version completion; do
+				for candidate in new open run sync status teardown list template config version completion; do
 					if [[ "$candidate" == "$current"* ]]; then
 						COMPREPLY+=("$candidate")
 					fi
@@ -28,6 +28,54 @@ _autofeat_completion() {
 	if [[ "$command" == "completion" ]]; then
 		if [[ "bash" == "$current"* ]]; then
 			COMPREPLY=(bash)
+		fi
+		return
+	fi
+	if [[ "$command" == "new" ]]; then
+		if [[ "${COMP_WORDS[COMP_CWORD - 1]}" == "--template" ]]; then
+			local -a templates=()
+			mapfile -t templates < <(command autofeat __complete templates 2>/dev/null)
+			local template_name
+			for template_name in "${templates[@]}"; do
+				if [[ "$template_name" == "$current"* ]]; then
+					COMPREPLY+=("$template_name")
+				fi
+			done
+		elif ((COMP_CWORD == 3)) && [[ "--template" == "$current"* ]]; then
+			COMPREPLY=(--template)
+		fi
+		return
+	fi
+	if [[ "$command" == "template" ]]; then
+		if ((COMP_CWORD == 2)); then
+			local candidate
+			for candidate in list show save; do
+				if [[ "$candidate" == "$current"* ]]; then
+					COMPREPLY+=("$candidate")
+				fi
+			done
+		elif [[ "${COMP_WORDS[2]}" == "show" ]] && ((COMP_CWORD == 3)); then
+			local -a templates=()
+			mapfile -t templates < <(command autofeat __complete templates 2>/dev/null)
+			local template_name
+			for template_name in "${templates[@]}"; do
+				if [[ "$template_name" == "$current"* ]]; then
+					COMPREPLY+=("$template_name")
+				fi
+			done
+		elif [[ "${COMP_WORDS[2]}" == "save" ]] && ((COMP_CWORD == 4)); then
+			if [[ "--from" == "$current"* ]]; then
+				COMPREPLY=(--from)
+			fi
+		elif [[ "${COMP_WORDS[2]}" == "save" && "${COMP_WORDS[COMP_CWORD - 1]}" == "--from" ]]; then
+			local -a features=()
+			mapfile -t features < <(command autofeat __complete features 2>/dev/null)
+			local feature
+			for feature in "${features[@]}"; do
+				if [[ "$feature" == "$current"* ]]; then
+					COMPREPLY+=("$feature")
+				fi
+			done
 		fi
 		return
 	fi

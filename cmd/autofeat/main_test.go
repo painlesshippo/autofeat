@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/painlesshippo/autofeat/internal/hooks"
 	"github.com/painlesshippo/autofeat/internal/state"
+	"github.com/painlesshippo/autofeat/internal/templates"
 )
 
 func TestVersionCommand(t *testing.T) {
@@ -104,6 +106,22 @@ func TestCompletionCommandArguments(t *testing.T) {
 	}
 }
 
+func TestTemplateCommandArguments(t *testing.T) {
+	invalid := [][]string{
+		{"template"},
+		{"template", "unknown"},
+		{"template", "show"},
+		{"template", "save", "full-stack", "feature/source"},
+		{"new", "feature/test", "--template"},
+		{"new", "feature/test", "--unknown", "full-stack"},
+	}
+	for _, args := range invalid {
+		if err := run(args); err == nil {
+			t.Errorf("run(%q) error = nil, want usage error", args)
+		}
+	}
+}
+
 func TestBashCompletionSyntax(t *testing.T) {
 	bashPath, err := exec.LookPath("bash")
 	if err != nil {
@@ -130,7 +148,7 @@ func TestBashCompletionBehavior(t *testing.T) {
 		failEndpoint   bool
 		want           string
 	}{
-		{name: "command", words: []string{"autofeat", "te"}, completionWord: 1, want: "teardown\n"},
+		{name: "command", words: []string{"autofeat", "te"}, completionWord: 1, want: "teardown\ntemplate\n"},
 		{name: "config command", words: []string{"autofeat", "con"}, completionWord: 1, want: "config\n"},
 		{name: "teardown features and option", words: []string{"autofeat", "teardown", ""}, completionWord: 2, want: "bug/fix\nfeature/alpha\nfeature/team/nested\n--force\n"},
 		{name: "slash prefix", words: []string{"autofeat", "open", "feature/t"}, completionWord: 2, want: "feature/team/nested\n"},
@@ -141,6 +159,12 @@ func TestBashCompletionBehavior(t *testing.T) {
 		{name: "run option", words: []string{"autofeat", "run", "feature/alpha", "-"}, completionWord: 3, want: "-task\n"},
 		{name: "run task value", words: []string{"autofeat", "run", "feature/alpha", "-task", ""}, completionWord: 4, want: ""},
 		{name: "run task terminates command", words: []string{"autofeat", "run", "feature/alpha", "-task", "write tests", ""}, completionWord: 5, want: ""},
+		{name: "new template option", words: []string{"autofeat", "new", "feature/new", "-"}, completionWord: 3, want: "--template\n"},
+		{name: "new template name", words: []string{"autofeat", "new", "feature/new", "--template", "f"}, completionWord: 4, want: "full-stack\n"},
+		{name: "template subcommand", words: []string{"autofeat", "template", "sh"}, completionWord: 2, want: "show\n"},
+		{name: "template show name", words: []string{"autofeat", "template", "show", "b"}, completionWord: 3, want: "backend\n"},
+		{name: "template save from", words: []string{"autofeat", "template", "save", "new-template", "-"}, completionWord: 4, want: "--from\n"},
+		{name: "template save feature", words: []string{"autofeat", "template", "save", "new-template", "--from", "feature/t"}, completionWord: 5, want: "feature/team/nested\n"},
 		{name: "af alias", words: []string{"af", "st"}, completionWord: 1, want: "status\n"},
 		{name: "afl alias", words: []string{"afl", ""}, completionWord: 1, want: ""},
 		{name: "endpoint failure", words: []string{"autofeat", "status", ""}, completionWord: 2, failEndpoint: true, want: ""},
@@ -157,6 +181,10 @@ fi
 if [[ "$1" == "__complete" && "$2" == "features" ]]; then
     printf '%s\n' 'bug/fix' 'feature/alpha' 'feature/team/nested'
     exit
+fi
+if [[ "$1" == "__complete" && "$2" == "templates" ]]; then
+	printf '%s\n' 'backend' 'full-stack'
+	exit
 fi
 exit 1
 `
@@ -963,6 +991,101 @@ func TestAddRepositoryCreatesSessionWorktreeAndWorkspace(t *testing.T) {
 		if !strings.Contains(string(workspaceContents), repository.Name) {
 			t.Errorf("workspace file does not reference %q:\n%s", repository.Name, workspaceContents)
 		}
+	}
+}
+
+func TestSaveTemplateFromSessionPreservesRepositorySources(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	session := state.Session{Repos: []state.Repository{
+		{Name: "api", OriginalPath: "/sources/api", WorktreePath: "/worktrees/api"},
+		{Name: "web", OriginalPath: "git@example.com:team/web.git", WorktreePath: "/worktrees/web", IsRemoteClone: true},
+	}}
+	if err := state.SaveSession("feature/source", session); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveTemplateFromSession("full-stack", "feature/source"); err != nil {
+		t.Fatalf("saveTemplateFromSession() error = %v", err)
+	}
+
+	got, err := templates.Get("full-stack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []templates.Repository{
+		{Kind: templates.LocalRepository, Source: "/sources/api"},
+		{Kind: templates.RemoteRepository, Source: "git@example.com:team/web.git"},
+	}
+	if !reflect.DeepEqual(got.Repositories, want) {
+		t.Errorf("template repositories = %+v, want %+v", got.Repositories, want)
+	}
+}
+
+func TestInstantiateTemplateCreatesOrderedLocalRepositories(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	writeMainConfig(t, "code", "copilot")
+
+	repositories := []string{createMainRepository(t), createMainRepository(t)}
+	entries := make([]templates.Repository, 0, len(repositories))
+	for _, repositoryPath := range repositories {
+		runMainGit(t, repositoryPath, "branch", "-M", "main")
+		entries = append(entries, templates.Repository{Kind: templates.LocalRepository, Source: repositoryPath})
+	}
+	if err := templates.Put("full-stack", templates.Template{Repositories: entries}); err != nil {
+		t.Fatal(err)
+	}
+	if err := instantiateTemplate("feature/template", "full-stack"); err != nil {
+		t.Fatalf("instantiateTemplate() error = %v", err)
+	}
+
+	session, err := state.GetSession("feature/template")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.Repos) != len(repositories) {
+		t.Fatalf("session repositories = %+v, want %d", session.Repos, len(repositories))
+	}
+	for index, repository := range session.Repos {
+		if repository.OriginalPath != repositories[index] {
+			t.Errorf("repository %d source = %q, want %q", index, repository.OriginalPath, repositories[index])
+		}
+		branch, err := gitcmd.CurrentBranch(repository.WorktreePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if branch != "feature/template" {
+			t.Errorf("repository %d branch = %q, want feature/template", index, branch)
+		}
+	}
+}
+
+func TestInstantiateTemplateRollsBackEarlierRepositories(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	writeMainConfig(t, "code", "copilot")
+
+	firstRepository := createMainRepository(t)
+	secondRepository := createMainRepository(t)
+	for _, repositoryPath := range []string{firstRepository, secondRepository} {
+		runMainGit(t, repositoryPath, "branch", "-M", "main")
+	}
+	runMainGit(t, secondRepository, "branch", "feature/rollback")
+	if err := templates.Put("rollback", templates.Template{Repositories: []templates.Repository{
+		{Kind: templates.LocalRepository, Source: firstRepository},
+		{Kind: templates.LocalRepository, Source: secondRepository},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := instantiateTemplate("feature/rollback", "rollback"); err == nil {
+		t.Fatal("instantiateTemplate() error = nil, want branch collision error")
+	}
+	if _, err := state.GetSession("feature/rollback"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() error = %v, want ErrSessionNotFound", err)
+	}
+	command := exec.Command("git", "-C", firstRepository, "show-ref", "--verify", "--quiet", "refs/heads/feature/rollback")
+	if err := command.Run(); err == nil {
+		t.Error("first repository feature branch remains after rollback")
 	}
 }
 

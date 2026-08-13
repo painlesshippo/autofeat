@@ -44,11 +44,12 @@ file. By default, autofeat trusts and installs Mise projects after adding them.
 Set `hooks` to `[]` to disable all hooks. If a hook fails, subsequent hooks do
 not run and the new repository is removed so the operation can be retried.
 
-Both `config.json` and `state.json` include an independent `schema_version`.
-Existing unversioned files are accepted and upgraded to version 1 the next time
-autofeat writes them. A file created by a newer, unsupported schema requires a
-newer autofeat binary. Unknown fields are rejected so manual editing mistakes
-do not silently discard data on the next write.
+`config.json`, `state.json`, and `templates.json` each include an independent
+`schema_version`. Existing unversioned files are accepted and upgraded to
+version 1 the next time autofeat writes them. A file created by a newer,
+unsupported schema requires a newer autofeat binary. Unknown fields are
+rejected so manual editing mistakes do not silently discard data on the next
+write.
 
 `$HOME/.autofeat/state.json` stores `default_base_branch`, which defaults to
 `master`. When a repository is added, `autofeat` detects `master` or `main`
@@ -150,6 +151,34 @@ autofeat config
 Bash completion suggests active feature names for `open`, `run`, `sync`,
 `status`, and `teardown`, including subsequent selector positions.
 It omits names already selected and includes each command's supported options.
+
+Save an active session's ordered repository group as a reusable template:
+
+```sh
+autofeat template save full-stack --from feature/potato
+```
+
+Templates retain each repository's local source path or remote URL, but not its
+generated worktree path, base branch, or feature name. They are stored in
+`$HOME/.autofeat/templates.json`. List templates or inspect their sources with:
+
+```sh
+autofeat template list
+autofeat template show full-stack
+```
+
+Create a new session containing every repository in a template:
+
+```sh
+autofeat new feature/new-checkout --template full-stack
+```
+
+Local repositories receive worktrees and remote repositories are cloned in the
+stored order. Base branches are detected when the new session is created, and
+normal `post-add` hooks run for every repository. All sources are checked before
+creation begins. If adding a later repository fails, autofeat removes the
+worktrees, clones, and branches it already created for that session. Template
+creation requires a new feature name and does not append to an existing session.
 
 Create a feature session from inside a Git repository. The command creates a
 branch with the supplied feature name, adds a worktree, records the session,

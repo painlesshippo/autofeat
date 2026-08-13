@@ -54,6 +54,16 @@ func GetRepoRoot() (string, error) {
 	return strings.TrimSpace(output), nil
 }
 
+// GetRepoRootAt returns the repository root containing path.
+func GetRepoRootAt(path string) (string, error) {
+	output, err := run("-C", path, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("get repository root for %q: %w", path, err)
+	}
+
+	return strings.TrimSpace(output), nil
+}
+
 // ValidateBranchName reports whether branchName is a valid local Git branch
 // name. Git is the authority for ref-name syntax, including slash-delimited
 // branch hierarchies.
@@ -69,6 +79,15 @@ func ValidateBranchName(branchName string) error {
 // starting from baseRef.
 func AddWorktree(branchName, destPath, baseRef string) error {
 	if _, err := run("worktree", "add", "--no-track", destPath, "-b", branchName, baseRef); err != nil {
+		return fmt.Errorf("add worktree %q: %w", destPath, err)
+	}
+
+	return nil
+}
+
+// AddWorktreeAt creates a worktree from the repository at repoPath.
+func AddWorktreeAt(repoPath, branchName, destPath, baseRef string) error {
+	if _, err := run("-C", repoPath, "worktree", "add", "--no-track", destPath, "-b", branchName, baseRef); err != nil {
 		return fmt.Errorf("add worktree %q: %w", destPath, err)
 	}
 

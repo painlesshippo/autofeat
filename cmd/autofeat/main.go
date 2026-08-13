@@ -18,6 +18,7 @@ import (
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/painlesshippo/autofeat/internal/hooks"
 	"github.com/painlesshippo/autofeat/internal/state"
+	"github.com/painlesshippo/autofeat/internal/templates"
 	"github.com/painlesshippo/autofeat/internal/workspace"
 )
 
@@ -63,10 +64,17 @@ func run(args []string) error {
 		}
 		return writeBashCompletion(os.Stdout)
 	case "__complete":
-		if len(args) != 2 || args[1] != "features" {
+		if len(args) != 2 {
 			return usageError()
 		}
-		return writeFeatureCompletions(os.Stdout)
+		switch args[1] {
+		case "features":
+			return writeFeatureCompletions(os.Stdout)
+		case "templates":
+			return writeTemplateCompletions(os.Stdout)
+		default:
+			return usageError()
+		}
 	case "list":
 		if len(args) != 1 {
 			return usageError()
@@ -85,6 +93,8 @@ func run(args []string) error {
 		return nil
 	case "new":
 		return runNewCommand(args[1:])
+	case "template":
+		return runTemplateCommand(args[1:])
 	case "open":
 		selectors, copilot, err := openArguments(args[1:])
 		if err != nil {
@@ -125,12 +135,18 @@ func run(args []string) error {
 }
 
 func runNewCommand(args []string) error {
-	if len(args) < 1 || len(args) > 2 {
+	if len(args) < 1 || len(args) > 3 {
 		return usageError()
 	}
 	featureName := args[0]
 	if err := validateFeatureName(featureName); err != nil {
 		return err
+	}
+	if len(args) == 3 {
+		if args[1] != "--template" || args[2] == "" {
+			return usageError()
+		}
+		return instantiateTemplate(featureName, args[2])
 	}
 	if len(args) == 2 {
 		if !isRemoteURL(args[1]) {
@@ -139,6 +155,19 @@ func runNewCommand(args []string) error {
 		return addRemoteRepository(featureName, args[1])
 	}
 	return addRepository(featureName)
+}
+
+func runTemplateCommand(args []string) error {
+	if len(args) == 1 && args[0] == "list" {
+		return listTemplatesTo(os.Stdout)
+	}
+	if len(args) == 2 && args[0] == "show" {
+		return showTemplateTo(os.Stdout, args[1])
+	}
+	if len(args) == 4 && args[0] == "save" && args[2] == "--from" {
+		return saveTemplateFromSession(args[1], args[3])
+	}
+	return usageError()
 }
 
 func runArguments(args []string) ([]string, string, error) {
@@ -601,15 +630,19 @@ func statusDetail(status repositoryStatus) string {
 }
 
 func addRepository(featureName string) error {
+	repoRoot, err := gitcmd.GetRepoRoot()
+	if err != nil {
+		return err
+	}
+	return addRepositoryAt(featureName, repoRoot)
+}
+
+func addRepositoryAt(featureName, repoRoot string) error {
 	configuration, err := config.Load()
 	if err != nil {
 		return err
 	}
 
-	repoRoot, err := gitcmd.GetRepoRoot()
-	if err != nil {
-		return err
-	}
 	baseBranch, err := detectBaseBranch(repoRoot)
 	if err != nil {
 		return err
@@ -642,7 +675,7 @@ func addRepository(featureName string) error {
 	if err := os.MkdirAll(featureDir, 0o755); err != nil {
 		return fmt.Errorf("create feature directory: %w", err)
 	}
-	if err := gitcmd.AddWorktree(featureBranchName(featureName), worktreePath, baseRef); err != nil {
+	if err := gitcmd.AddWorktreeAt(repoRoot, featureBranchName(featureName), worktreePath, baseRef); err != nil {
 		return err
 	}
 	if err := hooks.Run(configuration.Hooks, hooks.PostAdd, worktreePath); err != nil {
@@ -868,6 +901,144 @@ func ensureRepositoryAdded(featureName string) error {
 	}
 
 	return addRepository(featureName)
+}
+
+func saveTemplateFromSession(templateName, featureName string) error {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return err
+	}
+
+	repositories := make([]templates.Repository, 0, len(session.Repos))
+	for _, repository := range session.Repos {
+		kind := templates.LocalRepository
+		if repository.IsRemoteClone {
+			kind = templates.RemoteRepository
+		}
+		repositories = append(repositories, templates.Repository{Kind: kind, Source: repository.OriginalPath})
+	}
+	if err := templates.Put(templateName, templates.Template{Repositories: repositories}); err != nil {
+		return err
+	}
+	fmt.Printf("Saved template %s from feature %s\n", templateName, featureName)
+	return nil
+}
+
+func listTemplatesTo(output io.Writer) error {
+	store, err := templates.Load()
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(store.Templates))
+	for name := range store.Templates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "NAME\tREPOSITORIES")
+	for _, name := range names {
+		fmt.Fprintf(writer, "%s\t%d\n", name, len(store.Templates[name].Repositories))
+	}
+	return writer.Flush()
+}
+
+func showTemplateTo(output io.Writer, templateName string) error {
+	template, err := templates.Get(templateName)
+	if err != nil {
+		return err
+	}
+	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "KIND\tSOURCE")
+	for _, repository := range template.Repositories {
+		fmt.Fprintf(writer, "%s\t%s\n", repository.Kind, repository.Source)
+	}
+	return writer.Flush()
+}
+
+func writeTemplateCompletions(output io.Writer) error {
+	names, err := templates.Names()
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		fmt.Fprintln(output, name)
+	}
+	return nil
+}
+
+func instantiateTemplate(featureName, templateName string) error {
+	if _, err := state.GetSession(featureName); err == nil {
+		return fmt.Errorf("feature session already exists: %s", featureName)
+	} else if !errors.Is(err, state.ErrSessionNotFound) {
+		return err
+	}
+	template, err := templates.Get(templateName)
+	if err != nil {
+		return err
+	}
+
+	localRoots := make(map[string]string)
+	for _, repository := range template.Repositories {
+		switch repository.Kind {
+		case templates.LocalRepository:
+			root, err := gitcmd.GetRepoRootAt(repository.Source)
+			if err != nil {
+				return err
+			}
+			if filepath.Clean(root) != filepath.Clean(repository.Source) {
+				return fmt.Errorf("template %q local source is not a repository root: %s", templateName, repository.Source)
+			}
+			localRoots[repository.Source] = root
+		case templates.RemoteRepository:
+			if !isRemoteURL(repository.Source) {
+				return fmt.Errorf("template %q has invalid remote URL %q", templateName, repository.Source)
+			}
+		}
+	}
+
+	for _, repository := range template.Repositories {
+		if repository.Kind == templates.LocalRepository {
+			err = addRepositoryAt(featureName, localRoots[repository.Source])
+		} else {
+			err = addRemoteRepository(featureName, repository.Source)
+		}
+		if err != nil {
+			return errors.Join(err, rollbackTemplateSession(featureName))
+		}
+	}
+	return nil
+}
+
+func rollbackTemplateSession(featureName string) error {
+	session, err := state.GetSession(featureName)
+	if errors.Is(err, state.ErrSessionNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	var cleanupErr error
+	for index := len(session.Repos) - 1; index >= 0; index-- {
+		repository := session.Repos[index]
+		if repository.IsRemoteClone {
+			cleanupErr = errors.Join(cleanupErr, os.RemoveAll(repository.WorktreePath))
+			continue
+		}
+		removeErr := gitcmd.RemoveWorktree(repository.WorktreePath, true)
+		cleanupErr = errors.Join(cleanupErr, removeErr)
+		if removeErr == nil {
+			cleanupErr = errors.Join(cleanupErr, gitcmd.DeleteBranch(repository.OriginalPath, featureBranchName(featureName)))
+		}
+	}
+	if cleanupErr != nil {
+		return fmt.Errorf("roll back feature %q: %w", featureName, cleanupErr)
+	}
+	if err := os.RemoveAll(session.FeatureDir); err != nil {
+		return fmt.Errorf("roll back feature directory: %w", err)
+	}
+	return state.DeleteSession(featureName)
 }
 
 func runHeadless(featureName, task string) error {
@@ -1161,5 +1332,5 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat <new|open|run|sync|status|teardown|list|config|version|completion> [feature-selector ...] [options]")
+	return errors.New("usage: autofeat <new|open|run|sync|status|teardown|list|template|config|version|completion> [feature-selector ...] [options]")
 }
