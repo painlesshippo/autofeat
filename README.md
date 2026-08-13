@@ -56,11 +56,29 @@ in the state file to use a different persistent base branch, while preserving
 its `schema_version`.
 
 ## Installation
-Install the latest released version:
+Install the latest released version with Go:
 
 ```sh
 go install github.com/painlesshippo/autofeat/cmd/autofeat@latest
 ```
+
+Prebuilt binaries are available from
+[GitHub Releases](https://github.com/painlesshippo/autofeat/releases/latest).
+For WSL, download the Linux amd64 archive, extract it, and place `autofeat` on
+the Linux `PATH`:
+
+```sh
+VERSION=1.2.3
+curl -LO "https://github.com/painlesshippo/autofeat/releases/download/v${VERSION}/autofeat_${VERSION}_linux_amd64.tar.gz"
+tar -xzf "autofeat_${VERSION}_linux_amd64.tar.gz"
+mkdir -p "$HOME/.local/bin"
+install -m 0755 autofeat "$HOME/.local/bin/autofeat"
+```
+
+On Windows, download `autofeat_<version>_windows_amd64.zip` from the same
+release, extract `autofeat.exe`, and place its directory on the Windows
+`PATH`. Each release also includes `checksums.txt` with SHA-256 checksums for
+both archives.
 
 Or build from a local clone:
 
@@ -112,9 +130,18 @@ mise run release
 
 The command uses `svu next` to derive the next version from Conventional
 Commits, runs the full test suite, creates and verifies an annotated
-`vMAJOR.MINOR.PATCH` release tag, and pushes it to `origin`. It aborts before
-creating a tag when the working tree is dirty, the current branch is not
-`master`, or remote authentication fails.
+`vMAJOR.MINOR.PATCH` release tag, and pushes it to `origin`. The pushed tag
+starts the GitHub Actions release workflow, which tests the tagged commit and
+publishes Linux amd64 and Windows amd64 archives, generated release notes, and
+`checksums.txt` to GitHub Releases. No additional GitHub secret is required.
+
+The command aborts before creating a tag when the working tree is dirty, the
+current branch is not `master`, or remote authentication fails. Validate the
+packaging locally without publishing anything with:
+
+```sh
+mise run release-check
+```
 
 ## Usage
 Commands use `autofeat <command> [feature-selector ...]`. Existing-session

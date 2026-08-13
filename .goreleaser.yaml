@@ -1,0 +1,40 @@
+version: 2
+
+project_name: autofeat
+
+builds:
+  - id: autofeat
+    main: ./cmd/autofeat
+    binary: autofeat
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+    goarch:
+      - amd64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.buildDatetime={{ .Date }}
+      - -X main.goVersion={{ .Env.GOVERSION }}
+
+archives:
+  - ids:
+      - autofeat
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github

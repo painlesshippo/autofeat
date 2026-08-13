@@ -21,7 +21,7 @@ import (
 	"github.com/painlesshippo/autofeat/internal/workspace"
 )
 
-// Build metadata is set with Go linker flags by scripts/build.sh.
+// Build metadata is set with Go linker flags during builds.
 var (
 	version       = "dev"
 	commit        = "unknown"
