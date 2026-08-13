@@ -142,11 +142,6 @@ func runNewCommand(args []string) error {
 	if err := validateFeatureName(arguments.featureName); err != nil {
 		return err
 	}
-	if arguments.baseBranch != "" {
-		if err := gitcmd.ValidateBranchName(arguments.baseBranch); err != nil {
-			return err
-		}
-	}
 	if arguments.templateName != "" {
 		return instantiateTemplate(arguments.featureName, arguments.templateName)
 	}
@@ -704,6 +699,7 @@ func addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch string) error
 	if err != nil {
 		return err
 	}
+	sessionBaseRef := sessionBaseReference(baseBranch, baseRef)
 	repoName := filepath.Base(filepath.Clean(repoRoot))
 	featureDirName := featureDirectoryName(featureName)
 	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
@@ -740,7 +736,7 @@ func addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch string) error
 		Name:         repoName,
 		OriginalPath: repoRoot,
 		WorktreePath: worktreePath,
-		BaseBranch:   baseBranch,
+		BaseBranch:   sessionBaseRef,
 	})
 	currentState.Sessions[featureName] = session
 	if requestedBaseBranch != "" {
@@ -815,6 +811,7 @@ func addRemoteRepositoryWithRef(featureName, remoteURL, requestedBaseBranch stri
 	if err != nil {
 		return err
 	}
+	sessionBaseRef := sessionBaseReference(baseBranch, baseRef)
 
 	if err := gitcmd.CheckoutNewBranch(worktreePath, featureBranchName(featureName), baseRef); err != nil {
 		return err
@@ -828,7 +825,7 @@ func addRemoteRepositoryWithRef(featureName, remoteURL, requestedBaseBranch stri
 		OriginalPath:  remoteURL,
 		WorktreePath:  worktreePath,
 		IsRemoteClone: true,
-		BaseBranch:    baseBranch,
+		BaseBranch:    sessionBaseRef,
 	})
 
 	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
@@ -1127,8 +1124,9 @@ func runHeadless(featureName, task string) error {
 }
 
 type syncRepository struct {
-	repository state.Repository
-	hasOrigin  bool
+	repository  state.Repository
+	baseRef     string
+	fetchBranch string
 }
 
 func syncFeature(featureName string) error {
@@ -1174,27 +1172,30 @@ func syncFeature(featureName string) error {
 				return err
 			}
 		}
-		if _, err := gitcmd.ResolveBaseRef(repository.WorktreePath, repository.BaseBranch); err != nil {
-			return err
-		}
-		hasOrigin, err := gitcmd.HasOrigin(repository.WorktreePath)
-		if err != nil {
-			return err
-		}
-		repositories = append(repositories, syncRepository{repository: repository, hasOrigin: hasOrigin})
-	}
-
-	for _, syncRepo := range repositories {
-		repository := syncRepo.repository
-		if syncRepo.hasOrigin {
-			if err := gitcmd.FetchBase(repository.WorktreePath, repository.BaseBranch); err != nil {
-				return err
-			}
-		}
 		baseRef, err := gitcmd.ResolveBaseRef(repository.WorktreePath, repository.BaseBranch)
 		if err != nil {
 			return err
 		}
+		fetchBranch := ""
+		const originPrefix = "refs/remotes/origin/"
+		if strings.HasPrefix(baseRef, originPrefix) {
+			fetchBranch = strings.TrimPrefix(baseRef, originPrefix)
+		}
+		repositories = append(repositories, syncRepository{
+			repository:  repository,
+			baseRef:     baseRef,
+			fetchBranch: fetchBranch,
+		})
+	}
+
+	for _, syncRepo := range repositories {
+		repository := syncRepo.repository
+		if syncRepo.fetchBranch != "" {
+			if err := gitcmd.FetchBase(repository.WorktreePath, syncRepo.fetchBranch); err != nil {
+				return err
+			}
+		}
+		baseRef := syncRepo.baseRef
 		ahead, behind, err := gitcmd.AheadBehind(repository.WorktreePath, baseRef)
 		if err != nil {
 			return err
@@ -1262,6 +1263,16 @@ func selectBaseBranch(repositoryPath, repositoryKey, requestedBaseBranch string,
 		return baseBranch, nil
 	}
 	return currentState.DefaultBaseBranch, nil
+}
+
+func sessionBaseReference(requestedRef, resolvedRef string) string {
+	if strings.HasPrefix(resolvedRef, "refs/tags/") {
+		return resolvedRef
+	}
+	if strings.HasPrefix(resolvedRef, "refs/") {
+		return requestedRef
+	}
+	return resolvedRef
 }
 
 func teardownSession(featureName string, force bool) error {

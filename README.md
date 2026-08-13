@@ -53,11 +53,13 @@ are rejected so manual editing mistakes do not silently discard data on the
 next write.
 
 `$HOME/.autofeat/state.json` stores `default_base_branch`, which defaults to
-`master`, and `repository_base_branches`, which remembers base branches selected
-with `new --ref`. When a repository is added without a remembered branch,
-`autofeat` detects `master` or `main` and records the result in the session as
-that repository's `base_branch`. Change these values in the state file to use a
-different persistent base branch, while preserving its `schema_version`.
+`master`, and `repository_base_branches`, which remembers base references
+selected with `new --ref`. Despite their compatibility-preserving names, these
+fields may contain any Git reference that resolves to a commit. When a
+repository is added without a remembered reference, `autofeat` detects `master`
+or `main` and records the result in the session as that repository's
+`base_branch`. Change these values in the state file to use a different
+persistent base reference, while preserving its `schema_version`.
 
 ## Installation
 The release installers download the latest amd64 binary from
@@ -176,7 +178,7 @@ autofeat new feature/new-checkout --template full-stack
 ```
 
 Local repositories receive worktrees and remote repositories are cloned in the
-stored order. Remembered base branches are reused where available; otherwise,
+stored order. Remembered base references are reused where available; otherwise,
 base branches are detected when the new session is created. Normal `post-add`
 hooks run for every repository. All sources are checked before creation begins.
 If adding a later repository fails, autofeat removes the worktrees, clones, and
@@ -189,22 +191,29 @@ and regenerates its VS Code workspace. Feature names use valid Git branch
 syntax, so hierarchical names such as `feature/potato` and `bug/f321s-aaa` are
 supported.
 
-The feature branch starts from the repository's cached `origin/<base>` when an
-`origin` remote exists, or from the local base branch otherwise. Repository
-addition does not fetch, so it remains available offline and uses the most
-recently fetched base commit.
+For an unqualified branch name, the feature branch starts from the repository's
+cached `origin/<branch>` when it exists, or from the local branch otherwise.
+Repository addition does not fetch, so it remains available offline and uses
+the most recently fetched commit.
 
-Select and remember a different base branch for the current repository with
-`--ref`:
+Select and remember a different base reference for the current repository with
+`--ref`. Branches, tags, commit SHAs, full refs, and Git revision expressions
+are accepted when they resolve to a commit:
 
 ```sh
 autofeat new feature/potato --ref develop
+autofeat new feature/from-release --ref v1.2.3
+autofeat new feature/from-commit --ref 8d13fc2
+autofeat new feature/from-tag --ref refs/tags/v1.2.3
 ```
 
 Future sessions created from the same canonical repository path reuse
-`develop`. Another explicit `--ref` replaces the remembered branch. Base branch
+the reference. Another explicit `--ref` replaces the remembered value. Base
 selection uses an explicit ref first, then the remembered repository ref, then
-detected `master` or `main`, and finally `default_base_branch`.
+detected `master` or `main`, and finally `default_base_branch`. When a tag and
+branch have the same unqualified name, the branch wins; use a full tag ref to
+disambiguate it. Session state stores selected tags as full tag refs and expands
+abbreviated commit IDs so an existing session's base remains stable.
 
 ```sh
 cd ~/sources/repo1
@@ -267,7 +276,7 @@ Append an objective to the feature's `TASK.md` before starting the agent:
 autofeat run feature/potato -task "Implement the potato feature and add tests"
 ```
 
-Fetch each repository's configured base branch and rebase the feature onto it:
+Synchronize each repository with its configured base reference:
 
 ```sh
 autofeat sync feature/potato
@@ -278,7 +287,9 @@ unstaged, or untracked changes before synchronization begins. Repositories are
 then synchronized sequentially. If a rebase conflicts, synchronization stops
 and leaves the rebase in progress so it can be continued or aborted with the
 Git commands printed by `autofeat`. Repositories without an `origin` remote
-rebase onto their local base branch without fetching.
+rebase onto their local base branch without fetching. Origin branches are
+fetched before rebasing; tags, commit SHAs, and other immutable references are
+resolved locally and are not fetched.
 
 Running the feature command outside a Git repository also opens an existing
 session:

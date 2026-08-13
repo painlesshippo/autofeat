@@ -115,7 +115,6 @@ func TestTemplateCommandArguments(t *testing.T) {
 		{"new", "feature/test", "--template"},
 		{"new", "feature/test", "--unknown", "full-stack"},
 		{"new", "feature/test", "--template", "full-stack", "--ref", "develop"},
-		{"new", "feature/test", "--ref", "bad..branch"},
 	}
 	for _, args := range invalid {
 		if err := run(args); err == nil {
@@ -510,6 +509,27 @@ func TestSyncFeatureFetchesAndRebases(t *testing.T) {
 	}
 	if status.Ahead != 1 || status.Behind != 0 {
 		t.Errorf("status after sync = (%d ahead, %d behind), want (1, 0)", status.Ahead, status.Behind)
+	}
+}
+
+func TestSyncFeatureAcceptsTagBaseWithoutFetchingBranch(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	sourcePath, remotePath := createRemoteMainRepository(t)
+	runMainGit(t, sourcePath, "tag", "v1.2.3")
+	runMainGit(t, sourcePath, "push", "-q", "origin", "v1.2.3")
+	worktreePath := filepath.Join(t.TempDir(), "clone")
+	runMainGit(t, t.TempDir(), "clone", "-q", remotePath, worktreePath)
+	runMainGit(t, worktreePath, "checkout", "-qb", "feature/tag", "v1.2.3")
+
+	if err := state.SaveSession("feature/tag", state.Session{Repos: []state.Repository{{
+		Name: "repository", WorktreePath: worktreePath, BaseBranch: "v1.2.3",
+	}}}); err != nil {
+		t.Fatalf("SaveSession() error = %v", err)
+	}
+	if err := syncFeature("feature/tag"); err != nil {
+		t.Fatalf("syncFeature() tag error = %v", err)
 	}
 }
 
@@ -1029,7 +1049,7 @@ func TestAddRepositoryCreatesSessionWorktreeAndWorkspace(t *testing.T) {
 	}
 }
 
-func TestNewRefSelectsAndRemembersRepositoryBaseBranch(t *testing.T) {
+func TestNewRefAcceptsAndRemembersAnyGitReference(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
 
@@ -1038,29 +1058,32 @@ func TestNewRefSelectsAndRemembersRepositoryBaseBranch(t *testing.T) {
 	runMainGit(t, repoPath, "checkout", "-qb", "develop")
 	writeAndCommitMainFile(t, repoPath, "develop.txt", "develop\n", "develop commit")
 	developCommit := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD"))
+	runMainGit(t, repoPath, "tag", "-am", "release", "v1.2.3")
 	runMainGit(t, repoPath, "checkout", "-q", "main")
+	mainCommit := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD"))
+	abbreviatedCommit := mainCommit[:12]
 	t.Chdir(repoPath)
 
-	if err := runNewCommand([]string{"feature/explicit", "--ref", "develop"}); err != nil {
-		t.Fatalf("runNewCommand() explicit ref error = %v", err)
+	if err := runNewCommand([]string{"feature/tag", "--ref", "v1.2.3"}); err != nil {
+		t.Fatalf("runNewCommand() tag ref error = %v", err)
 	}
-	explicitSession, err := state.GetSession("feature/explicit")
+	tagSession, err := state.GetSession("feature/tag")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := explicitSession.Repos[0].BaseBranch; got != "develop" {
-		t.Errorf("explicit session base branch = %q, want develop", got)
+	if got := tagSession.Repos[0].BaseBranch; got != "refs/tags/v1.2.3" {
+		t.Errorf("tag session base reference = %q, want refs/tags/v1.2.3", got)
 	}
-	if got := strings.TrimSpace(mainGitOutput(t, explicitSession.Repos[0].WorktreePath, "rev-parse", "HEAD")); got != developCommit {
-		t.Errorf("explicit worktree HEAD = %q, want develop commit %q", got, developCommit)
+	if got := strings.TrimSpace(mainGitOutput(t, tagSession.Repos[0].WorktreePath, "rev-parse", "HEAD")); got != developCommit {
+		t.Errorf("tag worktree HEAD = %q, want tagged commit %q", got, developCommit)
 	}
 
 	currentState, err := state.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := currentState.RepositoryBaseBranches[filepath.Clean(repoPath)]; got != "develop" {
-		t.Errorf("remembered base branch = %q, want develop", got)
+	if got := currentState.RepositoryBaseBranches[filepath.Clean(repoPath)]; got != "v1.2.3" {
+		t.Errorf("remembered base reference = %q, want v1.2.3", got)
 	}
 
 	if err := runNewCommand([]string{"feature/remembered"}); err != nil {
@@ -1070,11 +1093,32 @@ func TestNewRefSelectsAndRemembersRepositoryBaseBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := rememberedSession.Repos[0].BaseBranch; got != "develop" {
-		t.Errorf("remembered session base branch = %q, want develop", got)
+	if got := rememberedSession.Repos[0].BaseBranch; got != "refs/tags/v1.2.3" {
+		t.Errorf("remembered session base reference = %q, want refs/tags/v1.2.3", got)
 	}
 	if got := strings.TrimSpace(mainGitOutput(t, rememberedSession.Repos[0].WorktreePath, "rev-parse", "HEAD")); got != developCommit {
-		t.Errorf("remembered worktree HEAD = %q, want develop commit %q", got, developCommit)
+		t.Errorf("remembered worktree HEAD = %q, want tagged commit %q", got, developCommit)
+	}
+
+	if err := runNewCommand([]string{"feature/commit", "--ref", abbreviatedCommit}); err != nil {
+		t.Fatalf("runNewCommand() commit ref error = %v", err)
+	}
+	commitSession, err := state.GetSession("feature/commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := commitSession.Repos[0].BaseBranch; got != mainCommit {
+		t.Errorf("commit session base reference = %q, want %q", got, mainCommit)
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, commitSession.Repos[0].WorktreePath, "rev-parse", "HEAD")); got != mainCommit {
+		t.Errorf("commit worktree HEAD = %q, want %q", got, mainCommit)
+	}
+	currentState, err = state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := currentState.RepositoryBaseBranches[filepath.Clean(repoPath)]; got != abbreviatedCommit {
+		t.Errorf("updated remembered base reference = %q, want %q", got, abbreviatedCommit)
 	}
 }
 

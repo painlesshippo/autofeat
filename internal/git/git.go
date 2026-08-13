@@ -203,24 +203,40 @@ func DetectBaseBranch(destPath string) (string, error) {
 	return "", nil
 }
 
-// ResolveBaseRef returns the cached ref for baseBranch. Repositories with an
-// origin remote use its remote-tracking branch; repositories without origin
-// use the local branch.
-func ResolveBaseRef(destPath, baseBranch string) (string, error) {
+// ResolveBaseRef resolves reference to a commit. Unqualified branch names
+// prefer their cached origin branch, then a local branch or tag. Full refs,
+// commit IDs, and revision expressions are resolved directly.
+func ResolveBaseRef(destPath, reference string) (string, error) {
 	hasOrigin, err := HasOrigin(destPath)
 	if err != nil {
 		return "", err
 	}
 
-	baseRef := "refs/heads/" + baseBranch
-	if hasOrigin {
-		baseRef = "refs/remotes/origin/" + baseBranch
-	}
-	if _, err := run("-C", destPath, "rev-parse", "--verify", "--quiet", baseRef+"^{commit}"); err != nil {
-		return "", fmt.Errorf("resolve base branch %q in repository %q: %w", baseBranch, destPath, err)
+	candidates := make([]string, 0, 4)
+	if strings.HasPrefix(reference, "refs/") {
+		candidates = append(candidates, reference)
+	} else if strings.HasPrefix(reference, "origin/") {
+		candidates = append(candidates, "refs/remotes/"+reference, reference)
+	} else if exec.Command("git", "check-ref-format", "--branch", reference).Run() == nil {
+		if hasOrigin {
+			candidates = append(candidates, "refs/remotes/origin/"+reference)
+		}
+		candidates = append(candidates, "refs/heads/"+reference, "refs/tags/"+reference, reference)
+	} else {
+		candidates = append(candidates, reference)
 	}
 
-	return baseRef, nil
+	for _, candidate := range candidates {
+		commit, err := run("-C", destPath, "rev-parse", "--verify", "--quiet", "--end-of-options", candidate+"^{commit}")
+		if err == nil && candidate == reference && !strings.HasPrefix(candidate, "refs/") {
+			return strings.TrimSpace(commit), nil
+		}
+		if err == nil {
+			return candidate, nil
+		}
+	}
+
+	return "", fmt.Errorf("resolve base reference %q in repository %q", reference, destPath)
 }
 
 // HasOrigin reports whether the repository at destPath has an origin remote.

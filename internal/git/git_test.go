@@ -158,6 +158,32 @@ func TestResolveBaseRefPrefersOriginAndFallsBackWithoutIt(t *testing.T) {
 	if baseRef != "refs/remotes/origin/main" {
 		t.Errorf("ResolveBaseRef() origin = %q, want refs/remotes/origin/main", baseRef)
 	}
+
+	runGit(t, localPath, "tag", "v1.2.3")
+	baseRef, err = ResolveBaseRef(localPath, "v1.2.3")
+	if err != nil {
+		t.Fatalf("ResolveBaseRef() tag error = %v", err)
+	}
+	if baseRef != "refs/tags/v1.2.3" {
+		t.Errorf("ResolveBaseRef() tag = %q, want refs/tags/v1.2.3", baseRef)
+	}
+
+	commit := strings.TrimSpace(runGitOutput(t, localPath, "rev-parse", "HEAD"))
+	baseRef, err = ResolveBaseRef(localPath, commit)
+	if err != nil {
+		t.Fatalf("ResolveBaseRef() commit error = %v", err)
+	}
+	if baseRef != commit {
+		t.Errorf("ResolveBaseRef() commit = %q, want %q", baseRef, commit)
+	}
+
+	baseRef, err = ResolveBaseRef(localPath, "HEAD~0")
+	if err != nil {
+		t.Fatalf("ResolveBaseRef() revision expression error = %v", err)
+	}
+	if baseRef != commit {
+		t.Errorf("ResolveBaseRef() revision expression = %q, want commit %q", baseRef, commit)
+	}
 }
 
 func TestCheckoutNewBranchDoesNotTrackBaseRef(t *testing.T) {
