@@ -15,6 +15,10 @@ run = "bash ./scripts/build.sh"
 description = "Run the test suite"
 run = "go test -v ./..."
 
+[tasks.test-integration]
+description = "Run the compiled CLI integration tests"
+run = "go test -v ./integration"
+
 [tasks.test-install]
 description = "Run all installer integration tests"
 run = """

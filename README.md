@@ -114,6 +114,17 @@ The pre-commit hook verifies that staged Go, Markdown, shell, Go template, and
 TOML files are formatted with `gofmt`, `rumdl`, `shfmt`, `gotmplfmt`, and
 `taplo` through Mise. The commit-message hook enforces Conventional Commits.
 
+Run the unit tests and compiled CLI integration test together:
+
+```sh
+mise run test
+```
+
+The integration test builds a temporary `autofeat` executable and exercises a
+complete local feature lifecycle against an isolated Git repository. Run only
+that test with `mise run test-integration`. Installer and package validation is
+kept separate in `mise run test-install`.
+
 ## Releasing
 The build uses `svu` to derive the current `MAJOR.MINOR.PATCH` version from Git
 tags. Builds outside `master` append the branch name as a SemVer prerelease
