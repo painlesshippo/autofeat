@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 )
+
+var autofeatBinaryPath string
 
 type commandResult struct {
 	stdout string
@@ -29,17 +32,43 @@ type persistedSession struct {
 }
 
 type persistedRepository struct {
-	Name         string `json:"name"`
-	WorktreePath string `json:"worktree_path"`
+	Name          string `json:"name"`
+	WorktreePath  string `json:"worktree_path"`
+	IsRemoteClone bool   `json:"is_remote_clone"`
+	BaseBranch    string `json:"base_branch"`
+}
+
+func TestMain(m *testing.M) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "locate integration test source")
+		os.Exit(1)
+	}
+	rootDir := filepath.Dir(filepath.Dir(filename))
+	binaryDir, err := os.MkdirTemp("", "autofeat-integration-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create integration binary directory: %v\n", err)
+		os.Exit(1)
+	}
+	autofeatBinaryPath = filepath.Join(binaryDir, "autofeat")
+	command := exec.Command("go", "build", "-o", autofeatBinaryPath, "./cmd/autofeat")
+	command.Dir = rootDir
+	if output, err := command.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "build autofeat integration binary: %v\n%s", err, output)
+		_ = os.RemoveAll(binaryDir)
+		os.Exit(1)
+	}
+
+	exitCode := m.Run()
+	if err := os.RemoveAll(binaryDir); err != nil && exitCode == 0 {
+		fmt.Fprintf(os.Stderr, "remove integration binary directory: %v\n", err)
+		exitCode = 1
+	}
+	os.Exit(exitCode)
 }
 
 func TestLocalFeatureLifecycle(t *testing.T) {
 	requireCommand(t, "git")
-	requireCommand(t, "go")
-
-	rootDir := moduleRoot(t)
-	binaryPath := filepath.Join(t.TempDir(), "autofeat")
-	runRequiredCommand(t, rootDir, os.Environ(), "go", "build", "-o", binaryPath, "./cmd/autofeat")
 
 	homeDir := t.TempDir()
 	environment := environmentWithHome(homeDir)
@@ -50,7 +79,7 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 	initializeRepository(t, repositoryPath, environment)
 
 	const featureName = "feature/integration"
-	result := runAutofeat(binaryPath, repositoryPath, environment, "new", featureName)
+	result := runAutofeat(autofeatBinaryPath, repositoryPath, environment, "new", featureName)
 	requireSuccess(t, result)
 
 	statePath := filepath.Join(homeDir, ".autofeat", "state.json")
@@ -82,11 +111,11 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 	}
 
 	outsideRepository := t.TempDir()
-	result = runAutofeat(binaryPath, outsideRepository, environment, "list")
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "list")
 	requireSuccess(t, result)
 	requireOutputContains(t, result.stdout, "FEATURE", "REPOSITORIES", featureName)
 
-	result = runAutofeat(binaryPath, outsideRepository, environment, "status", featureName)
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "status", featureName)
 	requireSuccess(t, result)
 	requireOutputContains(t, result.stdout, "FEATURE", "REPOSITORY", "WORKTREE", "STATE", featureName, repository.Name, "clean")
 
@@ -94,7 +123,7 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 	if err := os.WriteFile(dirtyPath, []byte("dirty\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	result = runAutofeat(binaryPath, outsideRepository, environment, "teardown", featureName)
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "teardown", featureName)
 	if result.err == nil {
 		t.Fatalf("teardown succeeded for dirty worktree; stdout:\n%s\nstderr:\n%s", result.stdout, result.stderr)
 	}
@@ -106,7 +135,7 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 		t.Fatalf("session %q was removed after rejected teardown", featureName)
 	}
 
-	result = runAutofeat(binaryPath, outsideRepository, environment, "teardown", featureName, "--force")
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "teardown", featureName, "--force")
 	requireSuccess(t, result)
 	if _, err := os.Stat(wantFeatureDir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("feature directory still exists after forced teardown: %v", err)
@@ -116,13 +145,76 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 	}
 }
 
-func moduleRoot(t *testing.T) string {
-	t.Helper()
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locate integration test source")
+func TestRemoteFeatureSyncLifecycle(t *testing.T) {
+	requireCommand(t, "git")
+
+	homeDir := t.TempDir()
+	environment := environmentWithHome(homeDir)
+	sourcePath := filepath.Join(t.TempDir(), "source")
+	if err := os.Mkdir(sourcePath, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	return filepath.Dir(filepath.Dir(filename))
+	initializeRepository(t, sourcePath, environment)
+
+	remotePath := filepath.Join(t.TempDir(), "repository.git")
+	runRequiredCommand(t, sourcePath, environment, "git", "init", "--bare", "-q", remotePath)
+	runRequiredCommand(t, remotePath, environment, "git", "symbolic-ref", "HEAD", "refs/heads/main")
+	runRequiredCommand(t, sourcePath, environment, "git", "remote", "add", "origin", remotePath)
+	runRequiredCommand(t, sourcePath, environment, "git", "push", "-qu", "origin", "main")
+
+	const remoteURL = "https://example.invalid/repository.git"
+	localRemoteURL := "file://" + filepath.ToSlash(remotePath)
+	runRequiredCommand(t, sourcePath, environment, "git", "config", "--global", "url."+localRemoteURL+".insteadOf", remoteURL)
+
+	const featureName = "feature/remote-sync"
+	outsideRepository := t.TempDir()
+	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, remoteURL)
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "Cloned remote repo", "repository", featureName)
+
+	statePath := filepath.Join(homeDir, ".autofeat", "state.json")
+	session, ok := loadState(t, statePath).Sessions[featureName]
+	if !ok {
+		t.Fatalf("state does not contain session %q", featureName)
+	}
+	if len(session.Repos) != 1 {
+		t.Fatalf("session repositories = %+v, want one repository", session.Repos)
+	}
+	repository := session.Repos[0]
+	if !repository.IsRemoteClone {
+		t.Errorf("repository is_remote_clone = false, want true")
+	}
+	if repository.BaseBranch != "main" {
+		t.Errorf("repository base branch = %q, want main", repository.BaseBranch)
+	}
+	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "branch", "--show-current")); got != featureName {
+		t.Errorf("worktree branch = %q, want %q", got, featureName)
+	}
+
+	runRequiredCommand(t, repository.WorktreePath, environment, "git", "config", "user.email", "integration@example.com")
+	runRequiredCommand(t, repository.WorktreePath, environment, "git", "config", "user.name", "Integration Test")
+	writeAndCommitFile(t, repository.WorktreePath, environment, "feature.txt", "feature\n", "feature change")
+	writeAndCommitFile(t, sourcePath, environment, "base.txt", "base\n", "base change")
+	runRequiredCommand(t, sourcePath, environment, "git", "push", "-q", "origin", "main")
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "sync", featureName)
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "1 ahead, 1 behind", "synchronized (1 ahead, 0 behind)")
+	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "rev-list", "--count", "origin/main..HEAD")); got != "1" {
+		t.Errorf("feature commits ahead of origin/main = %q, want 1", got)
+	}
+	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "rev-list", "--count", "HEAD..origin/main")); got != "0" {
+		t.Errorf("feature commits behind origin/main = %q, want 0", got)
+	}
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "teardown", featureName)
+	requireSuccess(t, result)
+	if _, err := os.Stat(session.FeatureDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("remote feature directory still exists after teardown: %v", err)
+	}
+	if _, ok := loadState(t, statePath).Sessions[featureName]; ok {
+		t.Errorf("session %q remains after teardown", featureName)
+	}
 }
 
 func requireCommand(t *testing.T, name string) {
@@ -153,6 +245,15 @@ func initializeRepository(t *testing.T, repositoryPath string, environment []str
 	runRequiredCommand(t, repositoryPath, environment, "git", "add", "README.md")
 	runRequiredCommand(t, repositoryPath, environment, "git", "commit", "-qm", "initial commit")
 	runRequiredCommand(t, repositoryPath, environment, "git", "branch", "-M", "main")
+}
+
+func writeAndCommitFile(t *testing.T, repositoryPath string, environment []string, name, contents, message string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repositoryPath, name), []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runRequiredCommand(t, repositoryPath, environment, "git", "add", name)
+	runRequiredCommand(t, repositoryPath, environment, "git", "commit", "-qm", message)
 }
 
 func runAutofeat(binaryPath, directory string, environment []string, args ...string) commandResult {
