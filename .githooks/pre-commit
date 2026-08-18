@@ -29,6 +29,11 @@ report_formatting_failure() {
 check_formatting() {
     printf '%s\n' '[pre-commit] Checking staged file formatting...'
 
+    project_root="$(git rev-parse --show-toplevel)"
+    rumdl="$($mise which rumdl)"
+    staged_root="$(mktemp -d)"
+    trap 'rm -rf "$staged_root"' EXIT HUP INT TERM
+
     git diff --cached --name-only --diff-filter=ACMR |
         while IFS= read -r file; do
             [ -n "$file" ] || continue
@@ -42,13 +47,10 @@ check_formatting() {
                 fi
                 ;;
             *.md | *.markdown)
-                original="$(git show ":$file")"
-                if ! formatted="$(printf '%s\n' "$original" | "$mise" exec -- rumdl fmt --silent --stdin --stdin-filename "$file" 2>&1)"; then
-                    report_formatting_failure "$file" rumdl "$formatted"
-                    return 1
-                fi
-                if [ "$original" != "$formatted" ]; then
-                    report_formatting_failure "$file" rumdl
+                mkdir -p "$staged_root/$(dirname "$file")"
+                git show ":$file" >"$staged_root/$file"
+                if ! details="$(cd "$staged_root" && "$rumdl" --config "$project_root/.rumdl.toml" fmt --check --quiet "$file" 2>&1)"; then
+                    report_formatting_failure "$file" rumdl "$details"
                     return 1
                 fi
                 ;;

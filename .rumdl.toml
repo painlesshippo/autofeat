@@ -1,5 +1,6 @@
 [global]
 respect-gitignore = true
+exclude = [".github/**"]
 
 [MD003]
 style = "atx" # Heading style (atx, atx_closed, setext)
