@@ -178,6 +178,70 @@ func TestExplicitLocalRepositoryCreatesWorktree(t *testing.T) {
 	requireSuccess(t, result)
 }
 
+func TestRemoveLocalRepositoryLifecycle(t *testing.T) {
+	requireCommand(t, "git")
+
+	homeDir := t.TempDir()
+	environment := environmentWithHome(homeDir)
+	repositoryPaths := []string{
+		filepath.Join(t.TempDir(), "first"),
+		filepath.Join(t.TempDir(), "second"),
+	}
+	for _, repositoryPath := range repositoryPaths {
+		if err := os.Mkdir(repositoryPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		initializeRepository(t, repositoryPath, environment)
+	}
+
+	const featureName = "feature/remove-integration"
+	outsideRepository := t.TempDir()
+	for _, repositoryPath := range repositoryPaths {
+		result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, "--local", repositoryPath)
+		requireSuccess(t, result)
+	}
+
+	statePath := filepath.Join(homeDir, ".autofeat", "state.json")
+	before := loadState(t, statePath).Sessions[featureName]
+	if len(before.Repos) != 2 {
+		t.Fatalf("session repositories = %+v, want two repositories", before.Repos)
+	}
+	removedRepository := before.Repos[0]
+	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "remove", featureName, "--local", repositoryPaths[0])
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "Removed", removedRepository.Name, featureName)
+
+	if _, err := os.Stat(removedRepository.WorktreePath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("removed worktree still exists: %v", err)
+	}
+	if branch := strings.TrimSpace(runRequiredCommand(t, repositoryPaths[0], environment, "git", "branch", "--list", featureName)); branch == "" {
+		t.Error("removed repository feature branch was deleted")
+	}
+	after := loadState(t, statePath).Sessions[featureName]
+	if len(after.Repos) != 1 || after.Repos[0].WorktreePath != before.Repos[1].WorktreePath {
+		t.Fatalf("remaining repositories = %+v, want only second repository", after.Repos)
+	}
+	workspaceContents, err := os.ReadFile(after.WorkspaceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(workspaceContents, []byte(filepath.Base(removedRepository.WorktreePath))) {
+		t.Errorf("workspace still contains removed repository:\n%s", workspaceContents)
+	}
+	if !bytes.Contains(workspaceContents, []byte(filepath.Base(after.Repos[0].WorktreePath))) {
+		t.Errorf("workspace does not contain remaining repository:\n%s", workspaceContents)
+	}
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "remove", featureName, "--local", repositoryPaths[1])
+	requireSuccess(t, result)
+	if _, err := os.Stat(after.FeatureDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("feature directory still exists after final removal: %v", err)
+	}
+	if _, ok := loadState(t, statePath).Sessions[featureName]; ok {
+		t.Errorf("session %q remains after final removal", featureName)
+	}
+}
+
 func TestRemoteFeatureSyncLifecycle(t *testing.T) {
 	requireCommand(t, "git")
 

@@ -70,7 +70,8 @@ therefore remain inexpensive and offline.
 The Bash function understands these contexts:
 
 * Top-level command names.
-* Feature names for `open`, `run`, `sync`, `status`, and `teardown`.
+* Feature names for `remove`, `open`, `run`, `sync`, `status`, and `teardown`.
+* `--local`, `--remote`, and `--force` for `remove`.
 * `--copilot` for `open`.
 * `--force` for `teardown`.
 * `--task` for `run`.
@@ -99,6 +100,9 @@ an empty completion result. Therefore:
 Completion is advisory only. When Enter is pressed, the normal command path reloads state and validates selectors
 through `runSelectedFeatures` and `selectFeatureNames` in main.go. Wildcard selectors such as `"feature/*"` are resolved
 there, not by the completion script.
+
+`remove` accepts one exact feature name instead of a selector. Its command path
+then resolves the required local path or remote URL against that session.
 
 ## Tests
 

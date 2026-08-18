@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 
+	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/spf13/cobra"
 )
 
@@ -19,6 +21,7 @@ func newRootCommand() *cobra.Command {
 	rootCommand.CompletionOptions.DisableDefaultCmd = true
 	rootCommand.AddCommand(
 		newFeatureCommand(),
+		newRemoveCommand(),
 		newOpenCommand(),
 		newRunCommand(),
 		newSyncCommand(),
@@ -72,6 +75,38 @@ func newFeatureCommand() *cobra.Command {
 	registerFlagCompletion(command, "remote", completeNothing)
 	registerFlagCompletion(command, "template", completeTemplateNames)
 	registerFlagCompletion(command, "ref", completeNothing)
+	return command
+}
+
+func newRemoveCommand() *cobra.Command {
+	var localPath string
+	var remoteURL string
+	var force bool
+	command := &cobra.Command{
+		Use:  "remove FEATURE",
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			if remoteURL != "" && !isRemoteURL(remoteURL) {
+				return usageError()
+			}
+			if localPath != "" {
+				repositoryRoot, err := gitcmd.GetRepoRootAt(localPath)
+				if err != nil {
+					return err
+				}
+				return removeRepositoryCommand(args[0], filepath.Clean(repositoryRoot), false, force)
+			}
+			return removeRepositoryCommand(args[0], normalizeRemoteRepositoryURL(remoteURL), true, force)
+		},
+	}
+	command.Flags().StringVar(&localPath, "local", "", "local repository path")
+	command.Flags().StringVar(&remoteURL, "remote", "", "remote repository URL")
+	command.Flags().BoolVar(&force, "force", false, "discard uncommitted changes")
+	command.MarkFlagsMutuallyExclusive("local", "remote")
+	command.MarkFlagsOneRequired("local", "remote")
+	command.ValidArgsFunction = completeFeatureName
+	registerFlagCompletion(command, "local", completeDirectories)
+	registerFlagCompletion(command, "remote", completeNothing)
 	return command
 }
 

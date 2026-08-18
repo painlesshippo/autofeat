@@ -32,13 +32,14 @@ var (
 const headlessPrompt = "Please execute the objectives defined in TASK.md"
 
 var (
-	statusCommand      = statusSessions
-	openConfigCommand  = openConfig
-	openFeatureCommand = openSession
-	openCopilotCommand = openCopilotSession
-	runFeatureCommand  = runFeature
-	syncFeatureCommand = syncFeature
-	teardownCommand    = teardownSession
+	statusCommand           = statusSessions
+	openConfigCommand       = openConfig
+	openFeatureCommand      = openSession
+	openCopilotCommand      = openCopilotSession
+	runFeatureCommand       = runFeature
+	syncFeatureCommand      = syncFeature
+	teardownCommand         = teardownSession
+	removeRepositoryCommand = removeRepositoryFromSession
 )
 
 func main() {
@@ -1092,6 +1093,76 @@ func teardownSession(featureName string, force bool) error {
 	return nil
 }
 
+func removeRepositoryFromSession(featureName, repositorySource string, remote, force bool) error {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return err
+	}
+
+	repositoryIndex := -1
+	for index, repository := range session.Repos {
+		if repository.IsRemoteClone != remote {
+			continue
+		}
+		candidateSource := filepath.Clean(repository.OriginalPath)
+		if remote {
+			candidateSource = normalizeRemoteRepositoryURL(repository.OriginalPath)
+		}
+		if candidateSource == repositorySource {
+			repositoryIndex = index
+			break
+		}
+	}
+	if repositoryIndex < 0 {
+		return fmt.Errorf("repository %q is not attached to feature %q", repositorySource, featureName)
+	}
+	if len(session.Repos) == 1 {
+		return teardownSession(featureName, force)
+	}
+
+	repository := session.Repos[repositoryIndex]
+	if !force {
+		dirty, err := gitcmd.HasUncommittedChanges(repository.WorktreePath)
+		if err != nil {
+			return err
+		}
+		if dirty {
+			fmt.Fprintf(os.Stderr, "Warning: %s has uncommitted changes; removal aborted. Use --force to discard them.\n", repository.Name)
+			return errors.New("cannot remove dirty worktree")
+		}
+	}
+
+	if repository.IsRemoteClone {
+		branchName, err := gitcmd.CurrentBranch(repository.WorktreePath)
+		if err != nil {
+			return err
+		}
+		unpushed, err := gitcmd.HasUnpushedCommits(repository.WorktreePath, branchName)
+		if err != nil {
+			return err
+		}
+		if unpushed {
+			fmt.Fprintf(os.Stderr, "Warning: %s has unpushed feature commits that will be deleted.\n", repository.Name)
+		}
+		if err := os.RemoveAll(repository.WorktreePath); err != nil {
+			return fmt.Errorf("remove cloned repository %q: %w", repository.WorktreePath, err)
+		}
+	} else if err := gitcmd.RemoveWorktree(repository.WorktreePath, force); err != nil {
+		return err
+	}
+
+	session.Repos = append(session.Repos[:repositoryIndex], session.Repos[repositoryIndex+1:]...)
+	if err := state.UpdateSession(featureName, session); err != nil {
+		return err
+	}
+	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
+		return err
+	}
+
+	fmt.Printf("Removed %s from feature %s\n", repository.Name, featureName)
+	return nil
+}
+
 func validateFeatureName(name string) error {
 	if name == "" {
 		return fmt.Errorf("invalid feature name %q", name)
@@ -1154,7 +1225,7 @@ func repositoryParentName(repositoryPath string) string {
 }
 
 func remoteRepositoryName(remoteURL string) (string, error) {
-	trimmedURL := strings.TrimSuffix(strings.TrimSpace(remoteURL), "/")
+	trimmedURL := normalizeRemoteRepositoryURL(remoteURL)
 	repoName := strings.TrimSuffix(filepath.Base(trimmedURL), ".git")
 	if repoName == "" || repoName == "." || repoName == ".." || filepath.Base(repoName) != repoName {
 		return "", fmt.Errorf("invalid remote repository URL %q", remoteURL)
@@ -1163,6 +1234,10 @@ func remoteRepositoryName(remoteURL string) (string, error) {
 	return repoName, nil
 }
 
+func normalizeRemoteRepositoryURL(remoteURL string) string {
+	return strings.TrimSuffix(strings.TrimSpace(remoteURL), "/")
+}
+
 func usageError() error {
-	return errors.New("usage: autofeat <new|open|run|sync|status|teardown|list|template|config|version|completion> [feature-selector ...] [options]")
+	return errors.New("usage: autofeat <new|remove|open|run|sync|status|teardown|list|template|config|version|completion> [feature-selector ...] [options]")
 }

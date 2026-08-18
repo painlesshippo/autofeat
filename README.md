@@ -157,20 +157,24 @@ See [Release Implementation](docs/releases.md) for the complete tagging,
 GitHub Actions, packaging, installer-validation, and recovery flow.
 
 ## Usage
-Commands use `autofeat <command> [feature-selector ...]`. Existing-session
-commands accept exact feature names, multiple selectors, `"*"` for every
-feature, and patterns such as `"feature/*"`. Quote wildcard selectors so the
-shell passes them to `autofeat` instead of expanding them as file names.
+Commands use `autofeat <command> [feature-selector ...]`. Selector-based
+existing-session commands accept exact feature names, multiple selectors,
+`"*"` for every feature, and patterns such as `"feature/*"`. Quote wildcard
+selectors so the shell passes them to `autofeat` instead of expanding them as
+file names. `remove` instead accepts one exact feature name and one repository
+source.
 
 Primary targets remain positional: feature names, feature selectors, template
 names, and completion shells. Named flags specify sources, modes, secondary
 inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
-`--template`, and `--ref`; `run` uses `--task`; and `teardown` uses `--force`.
+`--template`, and `--ref`; `remove` uses `--local` or `--remote`; `run` uses
+`--task`; and `remove` and `teardown` use `--force`.
 
 | Command | Description |
 | --- | --- |
 | `autofeat new FEATURE [--local PATH \| --remote URL] [--ref REF]` | Create a feature session or add a repository to one. |
 | `autofeat new FEATURE --template NAME` | Create a feature session from a saved template. |
+| `autofeat remove FEATURE (--local PATH \| --remote URL) [--force]` | Remove one repository from a feature session. |
 | `autofeat open SELECTOR... [--copilot]` | Open matching sessions in the editor or Copilot CLI. |
 | `autofeat run SELECTOR... [--task TEXT]` | Run the configured headless agent for matching sessions. |
 | `autofeat sync SELECTOR...` | Fetch and rebase matching sessions onto their base references. |
@@ -191,9 +195,10 @@ Open the global configuration in the configured editor:
 autofeat config
 ```
 
-Bash and PowerShell completion suggest active feature names for `open`, `run`,
-`sync`, `status`, and `teardown`, including subsequent selector positions. They
-omit names already selected and include each command's supported options.
+Bash and PowerShell completion suggest active feature names for `remove`,
+`open`, `run`, `sync`, `status`, and `teardown`. Commands that accept multiple
+selectors omit names already selected. Completion also includes each command's
+supported options.
 
 Print a completion script for manual shell setup with:
 
@@ -421,6 +426,21 @@ Print the build version, commit, and timestamp:
 ```sh
 autofeat version
 ```
+
+Remove one local or remote repository from a feature by specifying the same
+source used to add it:
+
+```sh
+autofeat remove feature/potato --local ~/sources/repo1
+autofeat remove feature/potato --remote https://github.com/example/repo3.git
+```
+
+A local path may point anywhere inside the original repository. Removal stops
+when the selected worktree has uncommitted changes; use `--force` to discard
+them. Before deleting a remote clone, `autofeat` warns about commits that have
+not been pushed. Local feature branches are retained. Removing the final
+repository tears down the complete feature session and runs normal
+`post-teardown` hooks.
 
 Tear down a session after confirming all worktrees are clean:
 

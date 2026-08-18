@@ -228,6 +228,34 @@ func TestCobraCompletionProtocol(t *testing.T) {
 	command = newRootCommand()
 	command.SetOut(&output)
 	command.SetErr(&errorOutput)
+	command.SetArgs([]string{"__complete", "remove", "feature/"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Cobra remove feature completion error = %v", err)
+	}
+	if got, want := output.String(), "feature/team/nested\nfeature/zulu\n:4\n"; got != want {
+		t.Errorf("Cobra remove feature completion = %q, want %q", got, want)
+	}
+
+	output.Reset()
+	errorOutput.Reset()
+	command = newRootCommand()
+	command.SetOut(&output)
+	command.SetErr(&errorOutput)
+	command.SetArgs([]string{"__complete", "remove", "feature/zulu", "--local", "/tmp", "-"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Cobra remove flag completion error = %v", err)
+	}
+	for _, flag := range []string{"--local", "--remote"} {
+		if strings.Contains(output.String(), flag) {
+			t.Errorf("Cobra remove completion offered mutually exclusive %s:\n%s", flag, output.String())
+		}
+	}
+
+	output.Reset()
+	errorOutput.Reset()
+	command = newRootCommand()
+	command.SetOut(&output)
+	command.SetErr(&errorOutput)
 	command.SetArgs([]string{"__complete", "new", "feature/new", "--local", "/tmp", "-"})
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Cobra local flag completion error = %v", err)
@@ -316,6 +344,61 @@ func TestStatusCommandDispatch(t *testing.T) {
 
 	if err := run([]string{"status", "--json"}); err == nil {
 		t.Error("run(status --json) error = nil, want usage error")
+	}
+}
+
+func TestRemoveCommandDispatch(t *testing.T) {
+	requireMainGit(t)
+	repositoryPath := createMainRepository(t)
+	nestedPath := filepath.Join(repositoryPath, "nested")
+	if err := os.Mkdir(nestedPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalRemoveRepositoryCommand := removeRepositoryCommand
+	t.Cleanup(func() {
+		removeRepositoryCommand = originalRemoveRepositoryCommand
+	})
+
+	var gotFeatureName string
+	var gotRepositorySource string
+	var gotRemote bool
+	var gotForce bool
+	removeRepositoryCommand = func(featureName, repositorySource string, remote, force bool) error {
+		gotFeatureName = featureName
+		gotRepositorySource = repositorySource
+		gotRemote = remote
+		gotForce = force
+		return nil
+	}
+
+	if err := run([]string{"remove", "feature/remove", "--local", nestedPath, "--force"}); err != nil {
+		t.Fatalf("run(remove --local) error = %v", err)
+	}
+	if gotFeatureName != "feature/remove" || gotRepositorySource != repositoryPath || gotRemote || !gotForce {
+		t.Errorf("local remove dispatch = (%q, %q, %t, %t), want feature, repository root, local, force", gotFeatureName, gotRepositorySource, gotRemote, gotForce)
+	}
+
+	if err := run([]string{"remove", "feature/remove", "--remote", "https://example.com/repository.git/"}); err != nil {
+		t.Fatalf("run(remove --remote) error = %v", err)
+	}
+	if gotRepositorySource != "https://example.com/repository.git" || !gotRemote || gotForce {
+		t.Errorf("remote remove dispatch = (%q, %t, %t), want normalized remote without force", gotRepositorySource, gotRemote, gotForce)
+	}
+}
+
+func TestRemoveCommandArguments(t *testing.T) {
+	invalid := [][]string{
+		{"remove"},
+		{"remove", "feature/remove"},
+		{"remove", "feature/remove", "--local", ".", "--remote", "https://example.com/repository.git"},
+		{"remove", "feature/remove", "--remote", "/tmp/repository"},
+		{"remove", "feature/remove", "extra", "--remote", "https://example.com/repository.git"},
+	}
+	for _, args := range invalid {
+		if err := run(args); err == nil {
+			t.Errorf("run(%q) error = nil, want usage error", args)
+		}
 	}
 }
 
@@ -1861,6 +1944,204 @@ func TestTeardownSessionRemovesRemoteCloneWithUnpublishedBranch(t *testing.T) {
 	}
 	if _, err := state.GetSession("feature/unpublished"); !errors.Is(err, state.ErrSessionNotFound) {
 		t.Errorf("GetSession() after teardown error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestRemoveRepositoryFromSessionUpdatesStateAndWorkspace(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repositoryRoot := t.TempDir()
+	repositoryPaths := []string{
+		filepath.Join(repositoryRoot, "first", "repository"),
+		filepath.Join(repositoryRoot, "second", "repository"),
+		filepath.Join(repositoryRoot, "third", "repository"),
+	}
+	for _, repositoryPath := range repositoryPaths {
+		if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runMainGit(t, repositoryPath, "init", "-q")
+		runMainGit(t, repositoryPath, "config", "user.email", "test@example.com")
+		runMainGit(t, repositoryPath, "config", "user.name", "Test User")
+		writeAndCommitMainFile(t, repositoryPath, "README.md", "initial\n", "initial commit")
+		runMainGit(t, repositoryPath, "branch", "-M", "main")
+		if _, err := addRepositoryAt("feature/remove", repositoryPath); err != nil {
+			t.Fatalf("addRepositoryAt(%q) error = %v", repositoryPath, err)
+		}
+	}
+
+	before, err := state.GetSession("feature/remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedWorktree := before.Repos[1].WorktreePath
+	if err := removeRepositoryFromSession("feature/remove", repositoryPaths[1], false, false); err != nil {
+		t.Fatalf("removeRepositoryFromSession() error = %v", err)
+	}
+
+	after, err := state.GetSession("feature/remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Repos) != 2 || after.Repos[0].OriginalPath != repositoryPaths[0] || after.Repos[1].OriginalPath != repositoryPaths[2] {
+		t.Fatalf("remaining repositories = %+v, want first and third in their original order", after.Repos)
+	}
+	if _, err := os.Stat(removedWorktree); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("removed worktree still exists: Stat() error = %v", err)
+	}
+	if branch := strings.TrimSpace(mainGitOutput(t, repositoryPaths[1], "branch", "--list", "feature/remove")); branch == "" {
+		t.Error("removed repository feature branch was deleted")
+	}
+	workspaceContents, err := os.ReadFile(after.WorkspaceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(workspaceContents), filepath.Base(removedWorktree)) {
+		t.Errorf("workspace still references removed repository:\n%s", workspaceContents)
+	}
+	for _, repository := range after.Repos {
+		if !strings.Contains(string(workspaceContents), filepath.Base(repository.WorktreePath)) {
+			t.Errorf("workspace does not reference %q:\n%s", repository.WorktreePath, workspaceContents)
+		}
+	}
+}
+
+func TestRemoveRepositoryFromSessionDirtyWorktree(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repositoryPaths := []string{createMainRepository(t), createMainRepository(t)}
+	for _, repositoryPath := range repositoryPaths {
+		runMainGit(t, repositoryPath, "branch", "-M", "main")
+		if _, err := addRepositoryAt("feature/dirty-remove", repositoryPath); err != nil {
+			t.Fatalf("addRepositoryAt() error = %v", err)
+		}
+	}
+	session, err := state.GetSession("feature/dirty-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedWorktree := session.Repos[0].WorktreePath
+	if err := os.WriteFile(filepath.Join(removedWorktree, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeRepositoryFromSession("feature/dirty-remove", repositoryPaths[0], false, false); err == nil {
+		t.Fatal("removeRepositoryFromSession() error = nil, want dirty worktree error")
+	}
+	if _, err := os.Stat(removedWorktree); err != nil {
+		t.Fatalf("dirty worktree was removed without --force: %v", err)
+	}
+	if err := removeRepositoryFromSession("feature/dirty-remove", repositoryPaths[0], false, true); err != nil {
+		t.Fatalf("removeRepositoryFromSession(force) error = %v", err)
+	}
+	if _, err := os.Stat(removedWorktree); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("forced removal left worktree: Stat() error = %v", err)
+	}
+}
+
+func TestRemoveRepositoryFromSessionFinalRepositoryTearsDownSession(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repositoryPath := createMainRepository(t)
+	runMainGit(t, repositoryPath, "branch", "-M", "main")
+	if _, err := addRepositoryAt("feature/final-remove", repositoryPath); err != nil {
+		t.Fatalf("addRepositoryAt() error = %v", err)
+	}
+	session, err := state.GetSession("feature/final-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeRepositoryFromSession("feature/final-remove", repositoryPath, false, false); err != nil {
+		t.Fatalf("removeRepositoryFromSession() error = %v", err)
+	}
+	if _, err := os.Stat(session.FeatureDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("feature directory still exists: Stat() error = %v", err)
+	}
+	if _, err := state.GetSession("feature/final-remove"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestRemoveRepositoryFromSessionRemovesRemoteClone(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	localPath := createMainRepository(t)
+	runMainGit(t, localPath, "branch", "-M", "main")
+	if _, err := addRepositoryAt("feature/remove-remote", localPath); err != nil {
+		t.Fatalf("addRepositoryAt() error = %v", err)
+	}
+	_, remotePath := createRemoteMainRepository(t)
+	if err := addRemoteRepository("feature/remove-remote", remotePath); err != nil {
+		t.Fatalf("addRemoteRepository() error = %v", err)
+	}
+	session, err := state.GetSession("feature/remove-remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteWorktree := session.Repos[1].WorktreePath
+
+	if err := removeRepositoryFromSession("feature/remove-remote", remotePath, true, false); err != nil {
+		t.Fatalf("removeRepositoryFromSession() error = %v", err)
+	}
+	if _, err := os.Stat(remoteWorktree); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("remote clone still exists: Stat() error = %v", err)
+	}
+	after, err := state.GetSession("feature/remove-remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Repos) != 1 || after.Repos[0].OriginalPath != localPath {
+		t.Errorf("remaining repositories = %+v, want only local repository", after.Repos)
+	}
+}
+
+func TestRemoveRepositoryFromSessionRejectsUnknownSource(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repositoryPaths := []string{createMainRepository(t), createMainRepository(t)}
+	for _, repositoryPath := range repositoryPaths {
+		runMainGit(t, repositoryPath, "branch", "-M", "main")
+		if _, err := addRepositoryAt("feature/unknown-remove", repositoryPath); err != nil {
+			t.Fatalf("addRepositoryAt() error = %v", err)
+		}
+	}
+	before, err := state.GetSession("feature/unknown-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name   string
+		source string
+		remote bool
+	}{
+		{name: "unknown local source", source: filepath.Join(t.TempDir(), "missing")},
+		{name: "source kind mismatch", source: repositoryPaths[0], remote: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := removeRepositoryFromSession("feature/unknown-remove", test.source, test.remote, false); err == nil {
+				t.Fatal("removeRepositoryFromSession() error = nil, want unknown source error")
+			}
+		})
+	}
+	after, err := state.GetSession("feature/unknown-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after.Repos, before.Repos) {
+		t.Errorf("repositories changed after rejected removals: got %+v, want %+v", after.Repos, before.Repos)
+	}
+	for _, repository := range after.Repos {
+		if _, err := os.Stat(repository.WorktreePath); err != nil {
+			t.Errorf("worktree changed after rejected removals: %v", err)
+		}
 	}
 }
 
