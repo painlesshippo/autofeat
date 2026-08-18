@@ -118,6 +118,11 @@ func TestTemplateCommandArguments(t *testing.T) {
 		{"template", "unknown"},
 		{"template", "show"},
 		{"template", "save", "full-stack", "feature/source"},
+		{"new", "feature/test", "https://example.com/repository.git"},
+		{"new", "feature/test", "--local", "/tmp/repository", "--remote", "https://example.com/repository.git"},
+		{"new", "feature/test", "--local", "/tmp/repository", "--template", "full-stack"},
+		{"new", "feature/test", "--remote", "https://example.com/repository.git", "--template", "full-stack"},
+		{"new", "feature/test", "--remote", "/tmp/repository"},
 		{"new", "feature/test", "--template"},
 		{"new", "feature/test", "--unknown", "full-stack"},
 		{"new", "feature/test", "--template", "full-stack", "--ref", "develop"},
@@ -216,6 +221,26 @@ func TestCobraCompletionProtocol(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "--ref") {
 		t.Errorf("Cobra completion offered mutually exclusive --ref:\n%s", output.String())
+	}
+
+	output.Reset()
+	errorOutput.Reset()
+	command = newRootCommand()
+	command.SetOut(&output)
+	command.SetErr(&errorOutput)
+	command.SetArgs([]string{"__complete", "new", "feature/new", "--local", "/tmp", "-"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Cobra local flag completion error = %v", err)
+	}
+	for _, flag := range []string{"--local", "--remote", "--template"} {
+		if strings.Contains(output.String(), flag) {
+			t.Errorf("Cobra completion offered mutually exclusive %s:\n%s", flag, output.String())
+		}
+	}
+
+	_, directive := completeDirectories(nil, nil, "")
+	if directive != cobra.ShellCompDirectiveFilterDirs {
+		t.Errorf("completeDirectories() directive = %v, want FilterDirs", directive)
 	}
 
 	for _, args := range [][]string{
@@ -1178,6 +1203,90 @@ func TestNewRefAcceptsAndRemembersAnyGitReference(t *testing.T) {
 	}
 	if got := currentState.RepositoryBaseBranches[filepath.Clean(repoPath)]; got != abbreviatedCommit {
 		t.Errorf("updated remembered base reference = %q, want %q", got, abbreviatedCommit)
+	}
+}
+
+func TestNewLocalPathResolvesRepositoryRootAndRef(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	parentPath := t.TempDir()
+	repoPath := filepath.Join(parentPath, "repository")
+	if err := os.Mkdir(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runMainGit(t, repoPath, "init", "-q")
+	runMainGit(t, repoPath, "config", "user.email", "test@example.com")
+	runMainGit(t, repoPath, "config", "user.name", "Test User")
+	writeAndCommitMainFile(t, repoPath, "README.md", "main\n", "main commit")
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "checkout", "-qb", "develop")
+	writeAndCommitMainFile(t, repoPath, "develop.txt", "develop\n", "develop commit")
+	developCommit := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD"))
+	runMainGit(t, repoPath, "checkout", "-q", "main")
+	subdirectory := filepath.Join(repoPath, "nested")
+	if err := os.Mkdir(subdirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(parentPath)
+
+	if err := run([]string{"new", "feature/local-path", "--local", filepath.Join("repository", "nested"), "--ref", "develop"}); err != nil {
+		t.Fatalf("run(new --local --ref) error = %v", err)
+	}
+	session, err := state.GetSession("feature/local-path")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := session.Repos[0]
+	if repository.OriginalPath != repoPath || repository.IsRemoteClone || repository.BaseBranch != "develop" {
+		t.Errorf("repository = %+v, want local repository rooted at %q on develop", repository, repoPath)
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, repository.WorktreePath, "rev-parse", "HEAD")); got != developCommit {
+		t.Errorf("worktree HEAD = %q, want develop commit %q", got, developCommit)
+	}
+	currentState, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := currentState.RepositoryBaseBranches[filepath.Clean(repoPath)]; got != "develop" {
+		t.Errorf("remembered base reference = %q, want develop", got)
+	}
+}
+
+func TestNewRemoteURLUsesRequestedBranch(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	sourcePath, remotePath := createRemoteMainRepository(t)
+	runMainGit(t, sourcePath, "checkout", "-qb", "develop")
+	writeAndCommitMainFile(t, sourcePath, "develop.txt", "develop\n", "develop commit")
+	developCommit := strings.TrimSpace(mainGitOutput(t, sourcePath, "rev-parse", "HEAD"))
+	runMainGit(t, sourcePath, "push", "-qu", "origin", "develop")
+	remoteURL := "https://example.invalid/repository.git"
+	localRemoteURL := "file://" + filepath.ToSlash(remotePath)
+	runMainGit(t, sourcePath, "config", "--global", "url."+localRemoteURL+".insteadOf", remoteURL)
+	t.Chdir(t.TempDir())
+
+	if err := run([]string{"new", "feature/remote-ref", "--remote", remoteURL, "--ref", "develop"}); err != nil {
+		t.Fatalf("run(new --remote --ref) error = %v", err)
+	}
+	session, err := state.GetSession("feature/remote-ref")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := session.Repos[0]
+	if repository.OriginalPath != remoteURL || !repository.IsRemoteClone || repository.BaseBranch != "develop" {
+		t.Errorf("repository = %+v, want remote clone %q on develop", repository, remoteURL)
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, repository.WorktreePath, "rev-parse", "HEAD")); got != developCommit {
+		t.Errorf("clone HEAD = %q, want develop commit %q", got, developCommit)
+	}
+	currentState, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := currentState.RepositoryBaseBranches[remoteURL]; got != "develop" {
+		t.Errorf("remembered remote base reference = %q, want develop", got)
 	}
 }
 

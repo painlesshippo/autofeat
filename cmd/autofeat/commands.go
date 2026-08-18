@@ -34,42 +34,42 @@ func newRootCommand() *cobra.Command {
 }
 
 func newFeatureCommand() *cobra.Command {
+	var localPath string
+	var remoteURL string
 	var templateName string
 	var baseBranch string
 	command := &cobra.Command{
-		Use:  "new FEATURE [REMOTE_URL]",
-		Args: cobra.RangeArgs(1, 2),
+		Use:  "new FEATURE",
+		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			arguments := newArguments{
-				featureName:  args[0],
-				templateName: templateName,
-				baseBranch:   baseBranch,
-			}
-			if len(args) == 2 {
-				if !isRemoteURL(args[1]) {
-					return usageError()
-				}
-				arguments.remoteURL = args[1]
-			}
-			if arguments.templateName != "" && (arguments.remoteURL != "" || arguments.baseBranch != "") {
+			featureName := args[0]
+			if remoteURL != "" && !isRemoteURL(remoteURL) {
 				return usageError()
 			}
-			if err := validateFeatureName(arguments.featureName); err != nil {
+			if err := validateFeatureName(featureName); err != nil {
 				return err
 			}
-			if arguments.templateName != "" {
-				return instantiateTemplate(arguments.featureName, arguments.templateName)
+			if templateName != "" {
+				return instantiateTemplate(featureName, templateName)
 			}
-			if arguments.remoteURL != "" {
-				return addRemoteRepositoryWithRef(arguments.featureName, arguments.remoteURL, arguments.baseBranch)
+			if localPath != "" {
+				return addLocalRepositoryWithRef(featureName, localPath, baseBranch)
 			}
-			return addRepositoryWithRef(arguments.featureName, arguments.baseBranch)
+			if remoteURL != "" {
+				return addRemoteRepositoryWithRef(featureName, remoteURL, baseBranch)
+			}
+			return addRepositoryWithRef(featureName, baseBranch)
 		},
 	}
+	command.Flags().StringVar(&localPath, "local", "", "local repository path")
+	command.Flags().StringVar(&remoteURL, "remote", "", "remote repository URL")
 	command.Flags().StringVar(&templateName, "template", "", "create the feature from a template")
 	command.Flags().StringVar(&baseBranch, "ref", "", "base Git reference")
+	command.MarkFlagsMutuallyExclusive("local", "remote", "template")
 	command.MarkFlagsMutuallyExclusive("template", "ref")
 	command.ValidArgsFunction = completeNothing
+	registerFlagCompletion(command, "local", completeDirectories)
+	registerFlagCompletion(command, "remote", completeNothing)
 	registerFlagCompletion(command, "template", completeTemplateNames)
 	registerFlagCompletion(command, "ref", completeNothing)
 	return command

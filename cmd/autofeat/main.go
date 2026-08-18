@@ -54,13 +54,6 @@ func run(args []string) error {
 	return command.Execute()
 }
 
-type newArguments struct {
-	featureName  string
-	remoteURL    string
-	templateName string
-	baseBranch   string
-}
-
 func shellExpandedWildcard(selectors []string) bool {
 	if len(selectors) < 2 {
 		return false
@@ -431,6 +424,15 @@ func addRepository(featureName string) error {
 
 func addRepositoryWithRef(featureName, requestedBaseBranch string) error {
 	repoRoot, err := gitcmd.GetRepoRoot()
+	if err != nil {
+		return err
+	}
+	_, err = addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch)
+	return err
+}
+
+func addLocalRepositoryWithRef(featureName, localPath, requestedBaseBranch string) error {
+	repoRoot, err := gitcmd.GetRepoRootAt(localPath)
 	if err != nil {
 		return err
 	}

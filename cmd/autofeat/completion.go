@@ -61,6 +61,10 @@ func completeNothing(*cobra.Command, []string, string) ([]string, cobra.ShellCom
 	return nil, cobra.ShellCompDirectiveNoFileComp
 }
 
+func completeDirectories(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	return nil, cobra.ShellCompDirectiveFilterDirs
+}
+
 func registerFlagCompletion(command *cobra.Command, flagName string, completion cobra.CompletionFunc) {
 	if err := command.RegisterFlagCompletionFunc(flagName, completion); err != nil {
 		panic(err)

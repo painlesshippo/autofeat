@@ -145,6 +145,39 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 	}
 }
 
+func TestExplicitLocalRepositoryCreatesWorktree(t *testing.T) {
+	requireCommand(t, "git")
+
+	homeDir := t.TempDir()
+	environment := environmentWithHome(homeDir)
+	repositoryPath := filepath.Join(t.TempDir(), "repository")
+	if err := os.Mkdir(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initializeRepository(t, repositoryPath, environment)
+
+	const featureName = "feature/explicit-local"
+	outsideRepository := t.TempDir()
+	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, "--local", repositoryPath)
+	requireSuccess(t, result)
+
+	statePath := filepath.Join(homeDir, ".autofeat", "state.json")
+	session := loadState(t, statePath).Sessions[featureName]
+	if len(session.Repos) != 1 {
+		t.Fatalf("session repositories = %+v, want one repository", session.Repos)
+	}
+	repository := session.Repos[0]
+	if repository.IsRemoteClone {
+		t.Error("explicit local repository was recorded as a remote clone")
+	}
+	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "branch", "--show-current")); got != featureName {
+		t.Errorf("worktree branch = %q, want %q", got, featureName)
+	}
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "teardown", featureName)
+	requireSuccess(t, result)
+}
+
 func TestRemoteFeatureSyncLifecycle(t *testing.T) {
 	requireCommand(t, "git")
 
@@ -161,6 +194,9 @@ func TestRemoteFeatureSyncLifecycle(t *testing.T) {
 	runRequiredCommand(t, remotePath, environment, "git", "symbolic-ref", "HEAD", "refs/heads/main")
 	runRequiredCommand(t, sourcePath, environment, "git", "remote", "add", "origin", remotePath)
 	runRequiredCommand(t, sourcePath, environment, "git", "push", "-qu", "origin", "main")
+	runRequiredCommand(t, sourcePath, environment, "git", "checkout", "-qb", "develop")
+	writeAndCommitFile(t, sourcePath, environment, "develop.txt", "develop\n", "develop commit")
+	runRequiredCommand(t, sourcePath, environment, "git", "push", "-qu", "origin", "develop")
 
 	const remoteURL = "https://example.invalid/repository.git"
 	localRemoteURL := "file://" + filepath.ToSlash(remotePath)
@@ -168,7 +204,7 @@ func TestRemoteFeatureSyncLifecycle(t *testing.T) {
 
 	const featureName = "feature/remote-sync"
 	outsideRepository := t.TempDir()
-	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, remoteURL)
+	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, "--remote", remoteURL, "--ref", "develop")
 	requireSuccess(t, result)
 	requireOutputContains(t, result.stdout, "Cloned remote repo", "repository", featureName)
 
@@ -184,8 +220,8 @@ func TestRemoteFeatureSyncLifecycle(t *testing.T) {
 	if !repository.IsRemoteClone {
 		t.Errorf("repository is_remote_clone = false, want true")
 	}
-	if repository.BaseBranch != "main" {
-		t.Errorf("repository base branch = %q, want main", repository.BaseBranch)
+	if repository.BaseBranch != "develop" {
+		t.Errorf("repository base branch = %q, want develop", repository.BaseBranch)
 	}
 	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "branch", "--show-current")); got != featureName {
 		t.Errorf("worktree branch = %q, want %q", got, featureName)
@@ -195,16 +231,16 @@ func TestRemoteFeatureSyncLifecycle(t *testing.T) {
 	runRequiredCommand(t, repository.WorktreePath, environment, "git", "config", "user.name", "Integration Test")
 	writeAndCommitFile(t, repository.WorktreePath, environment, "feature.txt", "feature\n", "feature change")
 	writeAndCommitFile(t, sourcePath, environment, "base.txt", "base\n", "base change")
-	runRequiredCommand(t, sourcePath, environment, "git", "push", "-q", "origin", "main")
+	runRequiredCommand(t, sourcePath, environment, "git", "push", "-q", "origin", "develop")
 
 	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "sync", featureName)
 	requireSuccess(t, result)
 	requireOutputContains(t, result.stdout, "1 ahead, 1 behind", "synchronized (1 ahead, 0 behind)")
-	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "rev-list", "--count", "origin/main..HEAD")); got != "1" {
-		t.Errorf("feature commits ahead of origin/main = %q, want 1", got)
+	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "rev-list", "--count", "origin/develop..HEAD")); got != "1" {
+		t.Errorf("feature commits ahead of origin/develop = %q, want 1", got)
 	}
-	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "rev-list", "--count", "HEAD..origin/main")); got != "0" {
-		t.Errorf("feature commits behind origin/main = %q, want 0", got)
+	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "rev-list", "--count", "HEAD..origin/develop")); got != "0" {
+		t.Errorf("feature commits behind origin/develop = %q, want 0", got)
 	}
 
 	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "teardown", featureName)

@@ -162,9 +162,14 @@ commands accept exact feature names, multiple selectors, `"*"` for every
 feature, and patterns such as `"feature/*"`. Quote wildcard selectors so the
 shell passes them to `autofeat` instead of expanding them as file names.
 
+Primary targets remain positional: feature names, feature selectors, template
+names, and completion shells. Named flags specify sources, modes, secondary
+inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
+`--template`, and `--ref`; `run` uses `--task`; and `teardown` uses `--force`.
+
 | Command | Description |
 | --- | --- |
-| `autofeat new FEATURE [REMOTE_URL] [--ref REF]` | Create a feature session or add a repository to one. |
+| `autofeat new FEATURE [--local PATH \| --remote URL] [--ref REF]` | Create a feature session or add a repository to one. |
 | `autofeat new FEATURE --template NAME` | Create a feature session from a saved template. |
 | `autofeat open SELECTOR... [--copilot]` | Open matching sessions in the editor or Copilot CLI. |
 | `autofeat run SELECTOR... [--task TEXT]` | Run the configured headless agent for matching sessions. |
@@ -241,6 +246,18 @@ session, and regenerates its VS Code workspace. Feature names use valid Git
 branch syntax, so hierarchical names such as `feature/potato` and
 `bug/f321s-aaa` are supported.
 
+With no repository source flag, `new` uses the Git repository containing the
+current directory. Use `--local` to select another local repository without
+changing directories. The path may be the repository root or a directory
+inside it:
+
+```sh
+autofeat new feature/potato --local ~/sources/repo1
+autofeat new feature/potato --local ../repo2/packages/api --ref develop
+```
+
+Local repositories always use Git worktrees; they are not cloned.
+
 An existing local feature branch is reused at its current tip. If no local
 branch exists but a cached `origin/<feature>` branch does, autofeat creates the
 local feature branch from that cached commit without configuring an upstream.
@@ -280,13 +297,13 @@ cd ~/sources/repo2
 autofeat new feature/potato
 ```
 
-Add a remote repository to a feature from any directory by passing its HTTP(S)
-or Git SSH URL. `autofeat` clones it into the feature directory and creates
-the supplied feature branch:
+Add a remote repository to a feature from any directory with `--remote` and an
+HTTP(S) or Git SSH URL. `autofeat` always clones it into the feature directory,
+even when another local clone exists, and creates the supplied feature branch:
 
 ```sh
-autofeat new feature/potato https://github.com/example/repo3.git
-autofeat new feature/other https://github.com/example/repo3.git --ref develop
+autofeat new feature/potato --remote https://github.com/example/repo3.git
+autofeat new feature/other --remote https://github.com/example/repo3.git --ref develop
 ```
 
 Remote repository preferences are remembered by their normalized URL.
