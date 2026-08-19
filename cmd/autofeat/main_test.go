@@ -215,6 +215,19 @@ func TestCobraCompletionProtocol(t *testing.T) {
 	command = newRootCommand()
 	command.SetOut(&output)
 	command.SetErr(&errorOutput)
+	command.SetArgs([]string{"__complete", "new", "feature/"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("Cobra new feature completion error = %v", err)
+	}
+	if got, want := output.String(), "feature/team/nested\nfeature/zulu\n:4\n"; got != want {
+		t.Errorf("Cobra new feature completion = %q, want %q", got, want)
+	}
+
+	output.Reset()
+	errorOutput.Reset()
+	command = newRootCommand()
+	command.SetOut(&output)
+	command.SetErr(&errorOutput)
 	command.SetArgs([]string{"__complete", "new", "feature/new", "--template", "full-stack", "-"})
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Cobra flag completion error = %v", err)

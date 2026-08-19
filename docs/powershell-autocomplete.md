@@ -69,7 +69,8 @@ Loading failures are suppressed and produce no dynamic candidates.
 The completer supports:
 
 * Top-level commands and completion shell names.
-* Active feature names for `remove`, `open`, `run`, `sync`, `status`, and `teardown`.
+* Active feature names for `new`, `remove`, `open`, `run`, `sync`, `status`,
+  and `teardown`; new names remain free-form until the feature exists.
 * Template names and template subcommands.
 * Contextual `--local`, `--remote`, `--template`, `--ref`, `--copilot`,
   `--force`, and `--task` options.

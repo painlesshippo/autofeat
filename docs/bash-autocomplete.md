@@ -70,7 +70,8 @@ therefore remain inexpensive and offline.
 The Bash function understands these contexts:
 
 * Top-level command names.
-* Feature names for `remove`, `open`, `run`, `sync`, `status`, and `teardown`.
+* Active feature names for `new`, `remove`, `open`, `run`, `sync`, `status`,
+  and `teardown`.
 * `--local`, `--remote`, and `--force` for `remove`.
 * `--copilot` for `open`.
 * `--force` for `teardown`.
@@ -84,6 +85,10 @@ autofeat teardown feature/alpha <Tab>
 ```
 
 will not suggest `feature/alpha` again.
+
+For `new`, active names support adding another repository to an existing
+feature. A feature name that has not been created yet remains free-form and is
+not available as a completion candidate.
 
 When the cursor is immediately after `--task`, the callback returns no feature
 suggestions because that position expects a free-form value.

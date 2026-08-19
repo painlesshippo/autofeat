@@ -198,10 +198,11 @@ Open the global configuration in the configured editor:
 autofeat config
 ```
 
-Bash and PowerShell completion suggest active feature names for `remove`,
-`open`, `run`, `sync`, `status`, and `teardown`. Commands that accept multiple
-selectors omit names already selected. Completion also includes each command's
-supported options.
+Bash and PowerShell completion suggest active feature names for `new`,
+`remove`, `open`, `run`, `sync`, `status`, and `teardown`. This lets `new` add
+a repository to an existing feature; a feature name that does not exist yet
+remains free-form. Commands that accept multiple selectors omit names already
+selected. Completion also includes each command's supported options.
 
 Print a completion script for manual shell setup with:
 

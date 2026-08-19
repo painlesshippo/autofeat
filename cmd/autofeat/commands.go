@@ -70,7 +70,7 @@ func newFeatureCommand() *cobra.Command {
 	command.Flags().StringVar(&baseBranch, "ref", "", "base Git reference")
 	command.MarkFlagsMutuallyExclusive("local", "remote", "template")
 	command.MarkFlagsMutuallyExclusive("template", "ref")
-	command.ValidArgsFunction = completeNothing
+	command.ValidArgsFunction = completeFeatureName
 	registerFlagCompletion(command, "local", completeDirectories)
 	registerFlagCompletion(command, "remote", completeNothing)
 	registerFlagCompletion(command, "template", completeTemplateNames)
