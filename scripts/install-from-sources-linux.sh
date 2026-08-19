@@ -12,4 +12,6 @@ fi
 
 mise install
 mise exec -- bash ./scripts/build.sh
-BINARY_PATH="$project_root/bin/autofeat" bash ./scripts/install-linux.sh
+BINARY_PATH="$project_root/bin/autofeat" \
+    SKILL_PATH="$project_root/.github/skills/autofeat" \
+    bash ./scripts/install-linux.sh

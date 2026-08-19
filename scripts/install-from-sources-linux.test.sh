@@ -5,6 +5,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 test_dir="$(mktemp -d)"
 install_dir="$test_dir/bin"
+skill_dir="$test_dir/skills"
 shell_rc="$test_dir/bashrc"
 
 cleanup() {
@@ -12,12 +13,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-INSTALL_DIR="$install_dir" SHELL_RC="$shell_rc" \
+INSTALL_DIR="$install_dir" SKILL_DIR="$skill_dir" SHELL_RC="$shell_rc" \
     bash "$script_dir/install-from-sources-linux.sh"
 
 binary="$install_dir/autofeat"
 if [[ ! -x "$binary" ]]; then
     echo "Expected executable at $binary." >&2
+    exit 1
+fi
+
+skill="$skill_dir/autofeat"
+if [[ ! -f "$skill/SKILL.md" || ! -f "$skill/references/session-lifecycle.md" ]]; then
+    echo "Expected agent skill at $skill." >&2
     exit 1
 fi
 

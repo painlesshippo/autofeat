@@ -65,7 +65,10 @@ persistent base reference, while preserving its `schema_version`.
 ## Installation
 The release installers download the latest amd64 binary from
 [GitHub Releases](https://github.com/painlesshippo/autofeat/releases/latest),
-verify its SHA-256 checksum, install it, and add its directory to `PATH`.
+verify its SHA-256 checksum, install it, and add its directory to `PATH`. They
+also install the bundled `autofeat` agent skill to
+`$HOME/.agents/skills/autofeat`, where compatible agents can discover the
+session lifecycle, safety, recovery, template, and configuration workflows.
 
 ### Install a release on Linux or WSL
 

@@ -8,6 +8,8 @@ Set-StrictMode -Version Latest
 $ScriptDir = $PSScriptRoot
 $TestDir = Join-Path ([IO.Path]::GetTempPath()) "autofeat-test-$([guid]::NewGuid())"
 $InstallDir = Join-Path $TestDir "bin"
+$SkillDir = Join-Path $TestDir "skills"
+$SkillPath = Join-Path (Split-Path -Parent $ScriptDir) ".github\skills\autofeat"
 $ProfilePath = Join-Path $TestDir "PowerShell\profile.ps1"
 $OriginalUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $OriginalProcessPath = $env:Path
@@ -15,6 +17,8 @@ $OriginalProcessPath = $env:Path
 try {
     $Arguments = @{
         InstallDir = $InstallDir
+        SkillDir = $SkillDir
+        SkillPath = $SkillPath
         ProfilePath = $ProfilePath
     }
     if ($Version) {
@@ -26,6 +30,12 @@ try {
     $Binary = Join-Path $InstallDir "autofeat.exe"
     if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
         throw "Expected executable at $Binary."
+    }
+
+    $InstalledSkill = Join-Path $SkillDir "autofeat"
+    if (-not (Test-Path -LiteralPath (Join-Path $InstalledSkill "SKILL.md") -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $InstalledSkill "references\session-lifecycle.md") -PathType Leaf)) {
+        throw "Expected agent skill at $InstalledSkill."
     }
 
     $VersionOutput = (& $Binary version) -join "`n"

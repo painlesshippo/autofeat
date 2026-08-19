@@ -29,6 +29,11 @@ cleanup() {
 trap cleanup EXIT
 
 binary_path="${BINARY_PATH:-}"
+skill_path="${SKILL_PATH:-}"
+skill_path_required=false
+if [[ -n "$skill_path" ]]; then
+    skill_path_required=true
+fi
 if [[ -z "$binary_path" ]]; then
     repository_url="https://github.com/painlesshippo/autofeat"
     if [[ -z "$version" ]]; then
@@ -59,18 +64,37 @@ if [[ -z "$binary_path" ]]; then
     (cd "$temporary_dir" && printf '%s\n' "$checksum_line" | sha256sum -c -)
     tar -xzf "$temporary_dir/$archive" -C "$temporary_dir" autofeat
     binary_path="$temporary_dir/autofeat"
+    if [[ -z "$skill_path" ]]; then
+        if tar -tzf "$temporary_dir/$archive" skills/autofeat/SKILL.md >/dev/null 2>&1; then
+            tar -xzf "$temporary_dir/$archive" -C "$temporary_dir" skills/autofeat
+            skill_path="$temporary_dir/skills/autofeat"
+        else
+            echo "Agent skill is not bundled with autofeat $version; skipping skill installation." >&2
+        fi
+    fi
 elif [[ ! -f "$binary_path" ]]; then
     echo "Binary not found: $binary_path" >&2
     exit 1
 fi
+if [[ "$skill_path_required" == true && ! -f "$skill_path/SKILL.md" ]]; then
+    echo "Agent skill not found: $skill_path" >&2
+    exit 1
+fi
 
 install_dir="${INSTALL_DIR:-$HOME/.local/bin}"
+skill_dir="${SKILL_DIR:-$HOME/.agents/skills}"
+skill_target="$skill_dir/autofeat"
 shell_rc="${SHELL_RC:-$HOME/.bashrc}"
 path_export="export PATH=\"$install_dir:\$PATH\""
 completion_source="source <(autofeat completion bash)"
 
 mkdir -p "$install_dir"
 install -m 0755 "$binary_path" "$install_dir/autofeat"
+if [[ -n "$skill_path" ]]; then
+    mkdir -p "$skill_dir"
+    rm -rf "$skill_target"
+    cp -R "$skill_path" "$skill_target"
+fi
 
 add_path=false
 case ":$PATH:" in
@@ -108,3 +132,6 @@ if [[ "$add_path" == true || "$add_completion" == true ]]; then
 fi
 
 echo "Installed $install_dir/autofeat"
+if [[ -n "$skill_path" ]]; then
+    echo "Installed $skill_target"
+fi

@@ -19,6 +19,7 @@ making every published Linux and Windows artifact traceable to a tagged commit.
 | `scripts/build.sh` | Builds the local verification binary in `bin/autofeat`. |
 | `.github/workflows/release.yml` | Runs the server-side test and publication job for pushed `v*` tags. |
 | `.goreleaser.yaml` | Defines release targets, metadata, archive names, checksums, and release notes. |
+| `.github/skills/autofeat` | Contains the agent skill bundled with every release archive. |
 | `scripts/install-linux.sh` | Downloads and verifies the Linux release archive. |
 | `scripts/install-win.ps1` | Downloads and verifies the Windows release archive. |
 
@@ -70,6 +71,11 @@ GoReleaser cross-compiles with `CGO_ENABLED=0` for two amd64 targets:
 | Linux, including WSL | `autofeat_<version>_linux_amd64.tar.gz` | `autofeat` |
 | Windows | `autofeat_<version>_windows_amd64.zip` | `autofeat.exe` |
 
+Both archives also contain `skills/autofeat`, including its `SKILL.md` manifest
+and progressively loaded references. The installers copy that directory to
+`$HOME/.agents/skills/autofeat` independently of the executable installation
+directory.
+
 Each GitHub Release also includes `checksums.txt` containing SHA-256 checksums
 for both archives. GoReleaser generates release notes from GitHub commit
 history.
@@ -106,6 +112,8 @@ Windows test restores the user `PATH` when it finishes.
 `release-check` validates `.goreleaser.yaml` and creates a non-publishing
 snapshot in `dist/`. The `dist/` directory is ignored by Git. A successful
 snapshot contains one Linux archive, one Windows archive, and `checksums.txt`.
+Each archive contains the platform executable and the installable `autofeat`
+agent skill.
 
 ## Failure Recovery
 

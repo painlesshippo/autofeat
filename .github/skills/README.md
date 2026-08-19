@@ -1,4 +1,12 @@
-# Go agent skills
+# Agent skills
+
+## Autofeat
+
+The [`autofeat`](autofeat/SKILL.md) skill teaches compatible agents how to use
+the installed CLI across project workspaces. Release and source installers copy
+it to `$HOME/.agents/skills/autofeat`.
+
+## Go development
 
 Vendored from [samber/cc-skills-golang](https://github.com/samber/cc-skills-golang)
 at commit `30cdf15cde8db8730c42a2918d7cdb4505f5ff54`.

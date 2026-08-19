@@ -4,6 +4,10 @@ param(
         if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $HOME "bin" }
     ),
     [string]$BinaryPath = $env:BINARY_PATH,
+    [string]$SkillPath = $env:SKILL_PATH,
+    [string]$SkillDir = $(
+        if ($env:SKILL_DIR) { $env:SKILL_DIR } else { Join-Path $HOME ".agents\skills" }
+    ),
     [string]$ProfilePath = $(
         if ($env:PROFILE_PATH) {
             $env:PROFILE_PATH
@@ -18,6 +22,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $TemporaryDir = $null
+$SkillPathRequired = [bool]$SkillPath
 try {
     if (-not $BinaryPath) {
         $RepositoryUrl = "https://github.com/painlesshippo/autofeat"
@@ -54,13 +59,32 @@ try {
         $ExtractDir = Join-Path $TemporaryDir "extract"
         Expand-Archive -Path $ArchivePath -DestinationPath $ExtractDir
         $BinaryPath = Join-Path $ExtractDir "autofeat.exe"
+        if (-not $SkillPath) {
+            $BundledSkillPath = Join-Path $ExtractDir "skills\autofeat"
+            if (Test-Path -LiteralPath (Join-Path $BundledSkillPath "SKILL.md") -PathType Leaf) {
+                $SkillPath = $BundledSkillPath
+            }
+            else {
+                Write-Warning "Agent skill is not bundled with autofeat $Version; skipping skill installation."
+            }
+        }
     }
     elseif (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
         throw "Binary not found: $BinaryPath"
     }
+    if ($SkillPathRequired -and -not (Test-Path -LiteralPath (Join-Path $SkillPath "SKILL.md") -PathType Leaf)) {
+        throw "Agent skill not found: $SkillPath"
+    }
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     Copy-Item $BinaryPath $InstallDir -Force
+
+    if ($SkillPath) {
+        $SkillTarget = Join-Path $SkillDir "autofeat"
+        New-Item -ItemType Directory -Force -Path $SkillDir | Out-Null
+        Remove-Item $SkillTarget -Recurse -Force -ErrorAction SilentlyContinue
+        Copy-Item $SkillPath $SkillTarget -Recurse
+    }
 }
 finally {
     if ($TemporaryDir) {
@@ -98,4 +122,7 @@ if ($ProfileLines -notcontains $CompletionSource) {
 }
 
 Write-Host "Installed $(Join-Path $InstallDir 'autofeat.exe')"
+if ($SkillPath) {
+    Write-Host "Installed $(Join-Path $SkillDir 'autofeat')"
+}
 & (Join-Path $InstallDir "autofeat.exe") version

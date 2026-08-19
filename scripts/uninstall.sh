@@ -3,11 +3,14 @@
 set -euo pipefail
 
 install_dir="${INSTALL_DIR:-$HOME/.local/bin}"
+skill_dir="${SKILL_DIR:-$HOME/.agents/skills}"
+skill_target="$skill_dir/autofeat"
 shell_rc="${SHELL_RC:-$HOME/.bashrc}"
 path_export="export PATH=\"$install_dir:\$PATH\""
 completion_source="source <(autofeat completion bash)"
 
 rm -f "$install_dir/autofeat"
+rm -rf "$skill_target"
 
 if [[ -f "$shell_rc" ]] && grep -Fqx "# Added by autofeat install" "$shell_rc"; then
     temporary_rc="$(mktemp "${shell_rc}.XXXXXX")"
@@ -35,3 +38,4 @@ if [[ -f "$shell_rc" ]] && grep -Fqx "# Added by autofeat install" "$shell_rc"; 
 fi
 
 echo "Uninstalled $install_dir/autofeat"
+echo "Uninstalled $skill_target"

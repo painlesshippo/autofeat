@@ -32,6 +32,12 @@ archives:
         formats:
           - zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: .github/skills/autofeat/SKILL.md
+        dst: skills/autofeat/SKILL.md
+      - src: .github/skills/autofeat/references/*.md
+        dst: skills/autofeat/references
+        strip_parent: true
 
 checksum:
   name_template: checksums.txt
