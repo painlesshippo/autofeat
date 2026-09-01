@@ -6,6 +6,7 @@ rumdl = "0.2.38"
 shfmt = "3.13.1"
 svu = "3.4.1"
 taplo = "0.10.0"
+yq = "4.47.2"
 
 [tasks.build]
 description = "Build the autofeat CLI"
@@ -74,3 +75,16 @@ run = "bash ./scripts/install-from-sources-linux.sh"
 [tasks.uninstall]
 description = "Remove the installed CLI and PATH entry"
 run = "bash ./scripts/uninstall.sh"
+
+[tasks."herdr:check"]
+description = "Validate the project-local Herdr setup"
+run = [
+  "yq eval '.' .herdr/config.yml >/dev/null",
+  "yq eval --exit-status '.version == 1 and .project.base_branch != null and .workflow.repeat_until == \"review_accepted\" and .workflow.require_human_review == true and .workflow.merge_automatically == false and .project.push_url != null and (.workflow.open_pull_request_automatically | tag == \"!!bool\") and (.workflow.pull_request_draft | tag == \"!!bool\")' .herdr/config.yml >/dev/null",
+  "bash -n .herdr/scripts/create-workspace.sh .herdr/scripts/start-agent.sh .herdr/scripts/handoff-agent.sh",
+  "test -x .herdr/scripts/create-workspace.sh -a -x .herdr/scripts/start-agent.sh -a -x .herdr/scripts/handoff-agent.sh",
+  "yq eval --exit-status '.agents.[].instructions' .herdr/config.yml | xargs -I{} test -f {}",
+  "yq eval --exit-status '.workflow.sequence.[]' .herdr/config.yml | xargs -I{} yq eval --exit-status '.agents.{} != null' .herdr/config.yml >/dev/null",
+  "grep -q 'refs/herdr/base/' .herdr/scripts/create-workspace.sh",
+  "! grep -rn -e 'git fetch origin' -e 'refs/remotes/origin/' .herdr/scripts",
+]

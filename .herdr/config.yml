@@ -1,0 +1,51 @@
+version: 1
+
+project:
+  name: autofeat
+  base_branch: master
+  push_url: https://github.com/painlesshippo/autofeat.git
+
+workspace:
+  root: ../autofeat-workspaces
+  branch_prefix: herdr/
+  focus: false
+
+agents:
+  orchestrator:
+    instructions: .herdr/agents/orchestrator.md
+    runtime:
+      kind: null
+      args: []
+  coder:
+    instructions: .herdr/agents/coder.md
+    runtime:
+      kind: null
+      args: []
+  reviewer:
+    instructions: .herdr/agents/reviewer.md
+    runtime:
+      kind: null
+      args: []
+
+workflow:
+  sequence:
+    - coder
+    - reviewer
+  transitions:
+    coder_ready: reviewer
+    review_rejected: coder
+    review_accepted: human_review
+  repeat_until: review_accepted
+  require_checks_pass: true
+  require_full_diff_review: true
+  require_human_review: true
+  merge_automatically: false
+  delete_workspace_automatically: false
+  open_pull_request_automatically: true
+  pull_request_draft: false
+
+protocol:
+  runtime_directory: .herdr/runtime
+  verdicts:
+    accept: "VERDICT: ACCEPT"
+    reject: "VERDICT: REJECT"

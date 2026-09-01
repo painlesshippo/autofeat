@@ -35,3 +35,4 @@ fix = true # Convert emphasis-only section labels to headings
 # Proper names that should be capitalized correctly
 names = ["rumdl", "Markdown", "GitHub"]
 code-blocks = false                     # Check code blocks for proper names (default: false, skips code blocks)
+
