@@ -317,17 +317,21 @@ autofeat new feature/other --remote https://github.com/example/repo3.git --ref d
 
 Remote repository preferences are remembered by their normalized URL.
 
-Workspace directory names are flattened so they remain a directory.
-`/` is escaped as `%2F` (and literal `%` as `%25`) to avoid collisions. With
-the default configuration, this produces:
+Workspace directory names are flattened so they remain a single directory.
+Every character outside `A-Z`, `a-z`, `0-9`, `.`, `_` and `-` becomes `-`,
+repeated dashes collapse, and leading or trailing `-` and `.` are trimmed, so
+the name stays portable and free of percent escapes. This is lossy: if a new
+feature normalizes to a directory an existing session already uses, `autofeat`
+refuses to create it and asks for a different feature name. With the default
+configuration, `feature/potato` produces:
 
 ```text
 ~/.autofeat-workspaces/
-└── feature%2Fpotato/
+└── feature-potato/
     ├── repo1/
     ├── repo2/
     ├── repo3/
-      └── feature%2Fpotato.code-workspace
+      └── feature-potato.code-workspace
 ```
 
 Open a session explicitly from any directory:

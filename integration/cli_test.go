@@ -92,7 +92,7 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 		t.Fatalf("session repositories = %+v, want one repository", session.Repos)
 	}
 	repository := session.Repos[0]
-	wantFeatureDir := filepath.Join(homeDir, ".autofeat-workspaces", "feature%2Fintegration")
+	wantFeatureDir := filepath.Join(homeDir, ".autofeat-workspaces", "feature-integration")
 	if session.FeatureDir != wantFeatureDir {
 		t.Errorf("feature directory = %q, want %q", session.FeatureDir, wantFeatureDir)
 	}
