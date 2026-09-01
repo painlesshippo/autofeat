@@ -1139,7 +1139,7 @@ func TestAddRepositoryCreatesSessionWorktreeAndWorkspace(t *testing.T) {
 	if repository.BaseBranch != "main" || repository.IsRemoteClone {
 		t.Errorf("repository = %+v, want main base local worktree", repository)
 	}
-	wantWorktree := filepath.Join(mainWorkspaceDir(t), "feature%2Fpotato", filepath.Base(firstRepo))
+	wantWorktree := filepath.Join(mainWorkspaceDir(t), "feature-potato", filepath.Base(firstRepo))
 	if repository.WorktreePath != wantWorktree {
 		t.Errorf("WorktreePath = %q, want %q", repository.WorktreePath, wantWorktree)
 	}
@@ -1175,6 +1175,76 @@ func TestAddRepositoryCreatesSessionWorktreeAndWorkspace(t *testing.T) {
 		if !strings.Contains(string(workspaceContents), repository.Name) {
 			t.Errorf("workspace file does not reference %q:\n%s", repository.Name, workspaceContents)
 		}
+	}
+}
+
+func TestAddRepositoryRejectsCollidingFeatureDirectory(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	firstRepo := createMainRepository(t)
+	runMainGit(t, firstRepo, "branch", "-M", "main")
+	t.Chdir(firstRepo)
+	if err := addRepository("feature/potato"); err != nil {
+		t.Fatalf("addRepository() error = %v", err)
+	}
+
+	secondRepo := createMainRepository(t)
+	runMainGit(t, secondRepo, "branch", "-M", "main")
+	t.Chdir(secondRepo)
+	err := addRepository("feature-potato")
+	if err == nil {
+		t.Fatal("addRepository() error = nil, want collision error")
+	}
+	for _, want := range []string{"feature-potato", "feature/potato"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to mention %q", err, want)
+		}
+	}
+	if _, err := state.GetSession("feature-potato"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() error = %v, want ErrSessionNotFound", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(mainWorkspaceDir(t), "feature-potato"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("feature directory entries = %v, want only the first worktree and workspace file", entries)
+	}
+}
+
+func TestAddRepositoryReusesRecordedFeatureDirectory(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	legacyDir := filepath.Join(mainWorkspaceDir(t), "feature%2Flegacy")
+	if err := state.SaveSession("feature/legacy", state.Session{
+		FeatureDir:    legacyDir,
+		WorkspaceFile: filepath.Join(legacyDir, "feature%2Flegacy.code-workspace"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	t.Chdir(repoPath)
+	if err := addRepository("feature/legacy"); err != nil {
+		t.Fatalf("addRepository() error = %v", err)
+	}
+
+	session, err := state.GetSession("feature/legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.FeatureDir != legacyDir {
+		t.Errorf("FeatureDir = %q, want %q", session.FeatureDir, legacyDir)
+	}
+	wantWorktree := filepath.Join(legacyDir, filepath.Base(repoPath))
+	if session.Repos[0].WorktreePath != wantWorktree {
+		t.Errorf("WorktreePath = %q, want %q", session.Repos[0].WorktreePath, wantWorktree)
+	}
+	if _, err := os.Stat(session.WorkspaceFile); err != nil {
+		t.Errorf("workspace file missing: %v", err)
 	}
 }
 
@@ -1620,7 +1690,7 @@ func TestAddRepositoryCleansUpAfterPostAddHookFailure(t *testing.T) {
 	if _, err := state.GetSession("feature/hook-failure"); !errors.Is(err, state.ErrSessionNotFound) {
 		t.Errorf("GetSession() after failed command error = %v, want ErrSessionNotFound", err)
 	}
-	worktreePath := filepath.Join(mainWorkspaceDir(t), "feature%2Fhook-failure", filepath.Base(repoPath))
+	worktreePath := filepath.Join(mainWorkspaceDir(t), "feature-hook-failure", filepath.Base(repoPath))
 	if _, err := os.Stat(worktreePath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("failed worktree was not removed: Stat() error = %v", err)
 	}
@@ -1646,7 +1716,7 @@ func TestAddRepositoryHookFailurePreservesExistingBranch(t *testing.T) {
 	if got := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "feature/hook-failure")); got != existingCommit {
 		t.Errorf("existing branch commit = %q after hook failure, want %q", got, existingCommit)
 	}
-	worktreePath := filepath.Join(mainWorkspaceDir(t), "feature%2Fhook-failure", filepath.Base(repoPath))
+	worktreePath := filepath.Join(mainWorkspaceDir(t), "feature-hook-failure", filepath.Base(repoPath))
 	if _, err := os.Stat(worktreePath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("failed worktree was not removed: Stat() error = %v", err)
 	}
@@ -1800,7 +1870,7 @@ func TestAddRemoteRepositoryRemovesCloneOnFailure(t *testing.T) {
 	if err := addRemoteRepository("feature/remote", remotePath); err == nil {
 		t.Fatal("addRemoteRepository() error = nil, want base resolution error")
 	}
-	worktreePath := filepath.Join(mainWorkspaceDir(t), "feature%2Fremote", "trunk-only")
+	worktreePath := filepath.Join(mainWorkspaceDir(t), "feature-remote", "trunk-only")
 	if _, err := os.Stat(worktreePath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("failed clone was not removed: Stat() error = %v", err)
 	}
@@ -1850,7 +1920,7 @@ func TestTeardownSessionRunsPostTeardownHooksAfterRemoval(t *testing.T) {
 	t.Setenv("AUTOFEAT_TEST_STATE", statePath)
 	writeMainConfigWithHooks(t, "code", "copilot", []hooks.Definition{{
 		When: hooks.PostTeardown,
-		Run:  `test ! -e feature%2Fhooks && ! grep -q 'feature/hooks' "$AUTOFEAT_TEST_STATE" && pwd > "$POST_TEARDOWN_LOG"`,
+		Run:  `test ! -e feature-hooks && ! grep -q 'feature/hooks' "$AUTOFEAT_TEST_STATE" && pwd > "$POST_TEARDOWN_LOG"`,
 	}})
 	t.Chdir(repoPath)
 
@@ -2528,14 +2598,29 @@ func TestFeatureDirectoryName(t *testing.T) {
 
 	tests := map[string]string{
 		"flat-feature":           "flat-feature",
-		"feature/potato":         "feature%2Fpotato",
-		"feature/team/potato":    "feature%2Fteam%2Fpotato",
-		"feature%2Fpotato":       "feature%252Fpotato",
-		"feature/potato%2Fextra": "feature%2Fpotato%252Fextra",
+		"feature/potato":         "feature-potato",
+		"feature/team/potato":    "feature-team-potato",
+		"feature%2Fpotato":       "feature-2Fpotato",
+		"feature/potato%2Fextra": "feature-potato-2Fextra",
+		"feature//potato":        "feature-potato",
+		"feature--potato":        "feature-potato",
+		"/feature/potato/":       "feature-potato",
+		".hidden.":               "hidden",
+		"v1.2_x":                 "v1.2_x",
+		"caf\u00e9/potato":       "caf-potato",
+		"///":                    fallbackFeatureDirectoryName,
+		"..":                     fallbackFeatureDirectoryName,
 	}
 	for featureName, want := range tests {
-		if got := featureDirectoryName(featureName); got != want {
+		got := featureDirectoryName(featureName)
+		if got != want {
 			t.Errorf("featureDirectoryName(%q) = %q, want %q", featureName, got, want)
+		}
+		if strings.Contains(got, "%") {
+			t.Errorf("featureDirectoryName(%q) = %q, want no percent sign", featureName, got)
+		}
+		if got == "" {
+			t.Errorf("featureDirectoryName(%q) = %q, want non-empty", featureName, got)
 		}
 	}
 }

@@ -31,6 +31,9 @@ var (
 
 const headlessPrompt = "Please execute the objectives defined in TASK.md"
 
+// fallbackFeatureDirectoryName is used when normalization leaves nothing usable.
+const fallbackFeatureDirectoryName = "feature"
+
 var (
 	statusCommand           = statusSessions
 	openConfigCommand       = openConfig
@@ -466,9 +469,10 @@ func addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch string) (bool
 	}
 	sessionBaseRef := sessionBaseReference(baseBranch, baseRef)
 	repoName := filepath.Base(filepath.Clean(repoRoot))
-	featureDirName := featureDirectoryName(featureName)
-	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
-	workspaceFile := filepath.Join(featureDir, featureDirName+".code-workspace")
+	featureDir, workspaceFile, err := featureDirectoryPaths(featureName, currentState, configuration.WorkspaceBaseDir)
+	if err != nil {
+		return false, err
+	}
 
 	session, sessionExists := currentState.Sessions[featureName]
 	newSession := !sessionExists
@@ -535,15 +539,15 @@ func addRemoteRepositoryWithRef(featureName, remoteURL, requestedBaseBranch stri
 		return err
 	}
 
-	featureDirName := featureDirectoryName(featureName)
-	featureDir := filepath.Join(configuration.WorkspaceBaseDir, featureDirName)
-	workspaceFile := filepath.Join(featureDir, featureDirName+".code-workspace")
-
 	currentState, err := state.Load()
 	if err != nil {
 		return err
 	}
 	repositoryKey := strings.TrimSuffix(strings.TrimSpace(remoteURL), "/")
+	featureDir, workspaceFile, err := featureDirectoryPaths(featureName, currentState, configuration.WorkspaceBaseDir)
+	if err != nil {
+		return err
+	}
 	session, sessionExists := currentState.Sessions[featureName]
 	newSession := !sessionExists
 	if newSession {
@@ -1178,8 +1182,61 @@ func featureBranchName(featureName string) string {
 	return featureName
 }
 
+// featureDirectoryName flattens a feature name into a single directory name that
+// external tooling can handle: only ASCII letters, digits, '.', '_' and '-'
+// survive. The mapping is lossy, so callers must reject collisions.
 func featureDirectoryName(featureName string) string {
-	return strings.NewReplacer("%", "%25", "/", "%2F").Replace(featureName)
+	var builder strings.Builder
+	previousWasDash := false
+	for _, character := range featureName {
+		switch {
+		case character >= 'A' && character <= 'Z',
+			character >= 'a' && character <= 'z',
+			character >= '0' && character <= '9',
+			character == '.', character == '_':
+			builder.WriteRune(character)
+			previousWasDash = false
+		default:
+			if !previousWasDash {
+				builder.WriteByte('-')
+				previousWasDash = true
+			}
+		}
+	}
+
+	// Leading dots would hide the directory and trailing dots are rejected by
+	// Windows, so neither may bound the name.
+	directoryName := strings.Trim(builder.String(), "-.")
+	if directoryName == "" {
+		return fallbackFeatureDirectoryName
+	}
+	return directoryName
+}
+
+// featureDirectoryPaths resolves the feature directory and workspace file for a
+// session. Sessions already recorded in state keep the paths they were created
+// with, including names produced by earlier naming schemes.
+func featureDirectoryPaths(featureName string, currentState state.State, workspaceBaseDir string) (string, string, error) {
+	if session, exists := currentState.Sessions[featureName]; exists {
+		return session.FeatureDir, session.WorkspaceFile, nil
+	}
+
+	directoryName := featureDirectoryName(featureName)
+	featureDir := filepath.Join(workspaceBaseDir, directoryName)
+	existingNames := make([]string, 0, len(currentState.Sessions))
+	for existingName := range currentState.Sessions {
+		existingNames = append(existingNames, existingName)
+	}
+	sort.Strings(existingNames)
+	for _, existingName := range existingNames {
+		if currentState.Sessions[existingName].FeatureDir == featureDir {
+			return "", "", fmt.Errorf(
+				"feature %q maps to directory %s, which is already used by feature %q; pick a different feature name",
+				featureName, featureDir, existingName)
+		}
+	}
+
+	return featureDir, filepath.Join(featureDir, directoryName+".code-workspace"), nil
 }
 
 func repositoryDirectoryName(repoName, parentName string, repositories []state.Repository) string {
