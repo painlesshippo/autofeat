@@ -157,6 +157,19 @@ func CheckoutBranch(destPath, branchName, baseRef string) (bool, error) {
 	return true, nil
 }
 
+// CheckoutCommitAsBranch creates (or resets) branchName to point exactly at
+// commit and checks it out in the worktree at destPath. Unlike CheckoutBranch,
+// it never reuses an existing local branch or remote-tracking branch as the
+// start point, so the checkout is pinned to the given commit even when a branch
+// of the same name already exists in the clone.
+func CheckoutCommitAsBranch(destPath, branchName, commit string) error {
+	if _, err := run("-C", destPath, "checkout", "--no-track", "-B", branchName, "--end-of-options", commit, "--"); err != nil {
+		return fmt.Errorf("check out commit %q as branch %q in %q: %w", commit, branchName, destPath, err)
+	}
+
+	return nil
+}
+
 func refExists(repoPath, ref string) (bool, error) {
 	args := repositoryArgs(repoPath, "show-ref", "--verify", "--quiet", ref)
 	command := exec.Command("git", args...)
@@ -315,6 +328,32 @@ func HasOrigin(destPath string) (bool, error) {
 		}
 		return false, fmt.Errorf("detect origin remote in repository %q: %w", destPath, err)
 	}
+}
+
+// CommitPresent reports whether commit resolves to a commit object in the
+// repository at destPath without contacting a remote.
+func CommitPresent(destPath, commit string) (bool, error) {
+	command := exec.Command("git", "-C", destPath, "rev-parse", "--verify", "--quiet", "--end-of-options", commit+"^{commit}")
+	if err := command.Run(); err == nil {
+		return true, nil
+	} else {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return false, nil
+		}
+		return false, fmt.Errorf("resolve commit %q in repository %q: %w", commit, destPath, err)
+	}
+}
+
+// FetchRef fetches ref from origin into the repository at destPath. ref may be a
+// branch, a fully qualified ref such as refs/pull/1/merge, or a commit id when
+// the server allows fetching by object name.
+func FetchRef(destPath, ref string) error {
+	if _, err := run("-C", destPath, "fetch", "--quiet", "origin", ref); err != nil {
+		return fmt.Errorf("fetch %q in repository %q: %w", ref, destPath, err)
+	}
+
+	return nil
 }
 
 // FetchBase fetches baseBranch from origin into its remote-tracking ref.

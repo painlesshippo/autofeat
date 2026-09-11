@@ -177,6 +177,7 @@ inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
 | --- | --- |
 | `autofeat new FEATURE [--local PATH \| --remote URL] [--ref REF]` | Create a feature session or add a repository to one. |
 | `autofeat new FEATURE --template NAME` | Create a feature session from a saved template. |
+| `autofeat new FEATURE --azure-build (ID \| URL) [--azure-org ORG --azure-project PROJECT] [--azure-url URL]` | Create a feature session from the repositories an Azure DevOps build resolved. |
 | `autofeat remove FEATURE (--local PATH \| --remote URL) [--force]` | Remove one repository from a feature session. |
 | `autofeat open SELECTOR... [--copilot]` | Open matching sessions in the editor or Copilot CLI. |
 | `autofeat run SELECTOR... [--task TEXT]` | Run the configured headless agent for matching sessions. |
@@ -317,6 +318,57 @@ autofeat new feature/other --remote https://github.com/example/repo3.git --ref d
 ```
 
 Remote repository preferences are remembered by their normalized URL.
+
+Create a feature session from an Azure DevOps build with `--azure-build`.
+`autofeat` resolves the build's primary repository and its Git repository
+resources, then clones each one into the feature directory and pins the created
+feature branch to the exact commit that build used, rather than the current
+branch tip. Point at a build with either its numeric id plus `--azure-org` and
+`--azure-project`, or a build results URL:
+
+```sh
+autofeat new feature/repro --azure-build 4821 --azure-org contoso --azure-project Widgets
+autofeat new feature/repro --azure-build "https://dev.azure.com/contoso/Widgets/_build/results?buildId=4821"
+```
+
+Azure DevOps Server (on-premises) instances pass the collection as
+`--azure-org` and the server prefix as `--azure-url` with the numeric form, for
+example `--azure-org DefaultCollection --azure-url https://server/tfs`. Each
+repository is recorded as a normal remote clone whose `base_branch` is the
+resolved commit, so `list`, `status`, `open`, and `teardown` behave as they do
+for any other session. Repositories that the build references more than once,
+including overlap between the primary repository and a resource, are cloned
+once; a repository the build resolves to two different commits is an error.
+
+The exact commit for each repository always comes from the pipeline run, which
+is authoritative for the revision a build used. Repository identity and clone
+URL come from the Build API for the primary repository, and for repository
+resources from the run's expanded pipeline definition (its `finalYaml`), whose
+`resources.repositories` declarations name each repository. Because the YAML
+name carries the project, resources in other projects of the organization are
+supported. Classic (designer) builds have only their primary repository.
+
+Set `AZURE_DEVOPS_EXT_PAT` (or `AZURE_DEVOPS_PAT`) to an Azure DevOps personal
+access token with **Build (Read)** scope before running the command. That scope
+covers every REST call autofeat makes to resolve the build (build, definition,
+and pipeline run). The token is only ever sent as an Authorization header and is
+never written to session metadata, printed, or embedded in a stored clone URL.
+Cloning and fetching are separate and use Git's normal credential configuration,
+exactly like `--remote`, so configure a Git credential helper (or SSH keys) with
+read access to every repository the build uses. A personal access token reused
+as the Git password for Azure Repos over HTTPS needs **Code (Read)** scope for
+that clone step; the Build (Read) REST token does not clone.
+
+This command covers only Git repositories. Build artifacts and non-repository
+pipeline resources are out of scope. Repository resources of the Azure Repos
+(`git`), GitHub, and Bitbucket types are supported through their `finalYaml`
+declarations; a self-hosted type without a derivable clone host (for example
+GitHub Enterprise) or any non-Git type produces an actionable error rather than
+a silently incomplete workspace, as does a run whose resources cannot be
+resolved. A build revision that lives on a ref a default clone does not fetch,
+such as a pull request merge ref, is retrieved from the resolved ref name when
+the server exposes it; when the exact commit cannot be made available,
+`autofeat` reports an error and leaves no partial session behind.
 
 Workspace directory names are flattened so they remain a single directory.
 Every character outside `A-Z`, `a-z`, `0-9`, `.`, `_` and `-` becomes `-`,

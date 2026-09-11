@@ -721,6 +721,109 @@ func TestCachedBaseStatus(t *testing.T) {
 	}
 }
 
+func TestCommitPresent(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	head := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "HEAD"))
+
+	present, err := CommitPresent(repoPath, head)
+	if err != nil {
+		t.Fatalf("CommitPresent(head) error = %v", err)
+	}
+	if !present {
+		t.Error("CommitPresent(head) = false, want true")
+	}
+
+	present, err = CommitPresent(repoPath, "0000000000000000000000000000000000000000")
+	if err != nil {
+		t.Fatalf("CommitPresent(missing) error = %v", err)
+	}
+	if present {
+		t.Error("CommitPresent(missing) = true, want false")
+	}
+}
+
+func TestFetchRefRetrievesUnclonedPullRef(t *testing.T) {
+	requireGit(t)
+
+	// Build an origin whose target commit lives only under refs/pull/1/merge,
+	// which a default clone does not fetch, mirroring an Azure DevOps pull
+	// request build revision.
+	originPath := createRepository(t)
+	defaultBranch := strings.TrimSpace(runGitOutput(t, originPath, "branch", "--show-current"))
+	runGit(t, originPath, "checkout", "-qb", "pr")
+	if err := os.WriteFile(filepath.Join(originPath, "pr.txt"), []byte("pr\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, originPath, "add", "pr.txt")
+	runGit(t, originPath, "commit", "-qm", "pull request change")
+	prCommit := strings.TrimSpace(runGitOutput(t, originPath, "rev-parse", "HEAD"))
+	runGit(t, originPath, "update-ref", "refs/pull/1/merge", prCommit)
+	runGit(t, originPath, "checkout", "-q", defaultBranch)
+	runGit(t, originPath, "branch", "-D", "pr")
+
+	// Clone over file:// rather than a local path so Git uses the transport and
+	// copies only advertised refs instead of hardlinking the whole object store.
+	clonePath := filepath.Join(t.TempDir(), "clone")
+	runGit(t, t.TempDir(), "clone", "-q", "file://"+filepath.ToSlash(originPath), clonePath)
+
+	present, err := CommitPresent(clonePath, prCommit)
+	if err != nil {
+		t.Fatalf("CommitPresent() error = %v", err)
+	}
+	if present {
+		t.Fatal("pull request commit present before fetch, want absent")
+	}
+
+	if err := FetchRef(clonePath, "refs/pull/1/merge"); err != nil {
+		t.Fatalf("FetchRef() error = %v", err)
+	}
+	present, err = CommitPresent(clonePath, prCommit)
+	if err != nil {
+		t.Fatalf("CommitPresent() after fetch error = %v", err)
+	}
+	if !present {
+		t.Error("pull request commit absent after fetch, want present")
+	}
+
+	if err := FetchRef(clonePath, "refs/does/not/exist"); err == nil {
+		t.Error("FetchRef(missing ref) error = nil, want fetch error")
+	}
+}
+
+func TestCheckoutCommitAsBranchPinsExactCommit(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	first := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(repoPath, "second.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "second.txt")
+	runGit(t, repoPath, "commit", "-qm", "second commit")
+	defaultBranch := strings.TrimSpace(runGitOutput(t, repoPath, "branch", "--show-current"))
+
+	// A feature branch whose name collides with the checked-out default branch
+	// must still be pinned to the requested commit, not the branch tip.
+	if err := CheckoutCommitAsBranch(repoPath, defaultBranch, first); err != nil {
+		t.Fatalf("CheckoutCommitAsBranch(default branch) error = %v", err)
+	}
+	if head := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "HEAD")); head != first {
+		t.Errorf("HEAD = %q, want pinned commit %q", head, first)
+	}
+
+	if err := CheckoutCommitAsBranch(repoPath, "feature/pinned", first); err != nil {
+		t.Fatalf("CheckoutCommitAsBranch(new branch) error = %v", err)
+	}
+	if branch := strings.TrimSpace(runGitOutput(t, repoPath, "branch", "--show-current")); branch != "feature/pinned" {
+		t.Errorf("branch = %q, want feature/pinned", branch)
+	}
+	if head := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "HEAD")); head != first {
+		t.Errorf("HEAD = %q, want pinned commit %q", head, first)
+	}
+}
+
 func createRepository(t *testing.T) string {
 	t.Helper()
 

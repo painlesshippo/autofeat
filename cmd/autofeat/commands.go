@@ -41,6 +41,10 @@ func newFeatureCommand() *cobra.Command {
 	var remoteURL string
 	var templateName string
 	var baseBranch string
+	var azureBuild string
+	var azureOrg string
+	var azureProject string
+	var azureURL string
 	command := &cobra.Command{
 		Use:  "new FEATURE",
 		Args: cobra.ExactArgs(1),
@@ -49,11 +53,17 @@ func newFeatureCommand() *cobra.Command {
 			if remoteURL != "" && !isRemoteURL(remoteURL) {
 				return usageError()
 			}
+			if azureBuild == "" && (azureOrg != "" || azureProject != "" || azureURL != "") {
+				return usageError()
+			}
 			if err := validateFeatureName(featureName); err != nil {
 				return err
 			}
 			if templateName != "" {
 				return instantiateTemplate(featureName, templateName)
+			}
+			if azureBuild != "" {
+				return addAzureBuildWorkspace(featureName, azureBuild, azureOrg, azureProject, azureURL)
 			}
 			if localPath != "" {
 				return addLocalRepositoryWithRef(featureName, localPath, baseBranch)
@@ -68,13 +78,22 @@ func newFeatureCommand() *cobra.Command {
 	command.Flags().StringVar(&remoteURL, "remote", "", "remote repository URL")
 	command.Flags().StringVar(&templateName, "template", "", "create the feature from a template")
 	command.Flags().StringVar(&baseBranch, "ref", "", "base Git reference")
-	command.MarkFlagsMutuallyExclusive("local", "remote", "template")
+	command.Flags().StringVar(&azureBuild, "azure-build", "", "Azure DevOps build id or build results URL")
+	command.Flags().StringVar(&azureOrg, "azure-org", "", "Azure DevOps organization (with a numeric --azure-build)")
+	command.Flags().StringVar(&azureProject, "azure-project", "", "Azure DevOps project (with a numeric --azure-build)")
+	command.Flags().StringVar(&azureURL, "azure-url", "", "Azure DevOps instance base URL (default https://dev.azure.com)")
+	command.MarkFlagsMutuallyExclusive("local", "remote", "template", "azure-build")
 	command.MarkFlagsMutuallyExclusive("template", "ref")
+	command.MarkFlagsMutuallyExclusive("azure-build", "ref")
 	command.ValidArgsFunction = completeFeatureName
 	registerFlagCompletion(command, "local", completeDirectories)
 	registerFlagCompletion(command, "remote", completeNothing)
 	registerFlagCompletion(command, "template", completeTemplateNames)
 	registerFlagCompletion(command, "ref", completeNothing)
+	registerFlagCompletion(command, "azure-build", completeNothing)
+	registerFlagCompletion(command, "azure-org", completeNothing)
+	registerFlagCompletion(command, "azure-project", completeNothing)
+	registerFlagCompletion(command, "azure-url", completeNothing)
 	return command
 }
 
