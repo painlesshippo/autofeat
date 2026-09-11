@@ -28,6 +28,16 @@ resources:
     ref: refs/heads/main
 `
 
+// libOnlyResourcesYAML declares a single Azure Repos resource.
+const libOnlyResourcesYAML = `
+resources:
+  repositories:
+  - repository: lib
+    type: git
+    name: proj/lib
+    ref: refs/heads/release
+`
+
 func TestResolveRepositoriesPrimaryOnly(t *testing.T) {
 	build := Build{
 		Repository:    Repository{Type: "TfsGit", Name: "app", URL: "https://dev.azure.com/org/proj/_git/app"},
@@ -202,6 +212,43 @@ func TestResolveRepositoriesMissingVersion(t *testing.T) {
 	}
 }
 
+func TestResolveRepositoriesUnsupportedPrimaryType(t *testing.T) {
+	// A TFVC primary repository carrying an HTTP URL must be rejected with an
+	// actionable type error, not passed into the clone workflow.
+	build := Build{
+		Repository:    Repository{Type: "TfsVersionControl", Name: "$/app", URL: "https://dev.azure.com/org/proj/_versionControl"},
+		SourceVersion: "1111111111111111111111111111111111111111",
+	}
+
+	_, err := resolveRepositories("https://dev.azure.com/org", "proj", build, nil)
+	if !errors.Is(err, ErrUnsupportedRepositoryType) {
+		t.Fatalf("resolveRepositories() error = %v, want ErrUnsupportedRepositoryType", err)
+	}
+}
+
+// TestResolveRepositoriesDeclarationWithoutRunVersion covers a repository that
+// the pipeline YAML declares but the run did not resolve; it must fail with a
+// missing-version error rather than being silently omitted.
+func TestResolveRepositoriesDeclarationWithoutRunVersion(t *testing.T) {
+	build := Build{
+		Repository:    Repository{Type: "TfsGit", Name: "app", URL: "https://dev.azure.com/org/proj/_git/app"},
+		SourceVersion: "1111111111111111111111111111111111111111",
+	}
+	// finalYaml declares both lib and tool, but the run resolved only lib.
+	run := &Run{
+		FinalYAML: documentedResourcesYAML,
+		Repositories: map[string]RepositoryResource{
+			"self": {Repository: Repository{Type: "azureReposGit"}, Version: "1111111111111111111111111111111111111111"},
+			"lib":  {Repository: Repository{Type: "azureReposGit"}, Version: "2222222222222222222222222222222222222222"},
+		},
+	}
+
+	_, err := resolveRepositories("https://dev.azure.com/org", "proj", build, run)
+	if !errors.Is(err, ErrMissingVersion) {
+		t.Fatalf("resolveRepositories() error = %v, want ErrMissingVersion", err)
+	}
+}
+
 func TestResolveRepositoriesPrimaryMissingURL(t *testing.T) {
 	build := Build{Repository: Repository{Type: "TfsGit", Name: "app"}, SourceVersion: "1"}
 
@@ -217,7 +264,7 @@ func azureServer(t *testing.T, pat string) *httptest.Server {
 	t.Helper()
 	runJSON := func() string {
 		payload := map[string]any{
-			"finalYaml": documentedResourcesYAML,
+			"finalYaml": libOnlyResourcesYAML,
 			"resources": map[string]any{
 				"repositories": map[string]any{
 					"self": map[string]any{"repository": map[string]any{"type": "azureReposGit"}, "refName": "refs/heads/main", "version": "1111111111111111111111111111111111111111"},

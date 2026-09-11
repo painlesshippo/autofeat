@@ -368,7 +368,13 @@ func resolveRepositories(orgURL, project string, build Build, run *Run) ([]Resol
 		return nil
 	}
 
-	// Primary repository: identity from the Build API.
+	// Primary repository: identity from the Build API. Validate its type before
+	// accepting the URL, so an unsupported primary (for example TFVC) fails with
+	// an actionable error rather than a generic clone failure, consistent with
+	// how resource declarations are validated.
+	if !isSupportedGitType(build.Repository.Type) {
+		return nil, fmt.Errorf("%w: %q (primary repository %q)", ErrUnsupportedRepositoryType, build.Repository.Type, build.Repository.Name)
+	}
 	primaryURL := cloneURLFromBuildRepository(build.Repository)
 	if primaryURL == "" {
 		return nil, fmt.Errorf("%w: primary repository %q has no clone URL", ErrUnresolvableRepository, build.Repository.Name)
@@ -381,30 +387,62 @@ func resolveRepositories(orgURL, project string, build Build, run *Run) ([]Resol
 		return resolved, nil
 	}
 
-	aliases := make([]string, 0, len(run.Repositories))
-	for alias := range run.Repositories {
-		if alias == "self" {
-			continue
-		}
-		aliases = append(aliases, alias)
-	}
-	sort.Strings(aliases)
-	for _, alias := range aliases {
-		resource := run.Repositories[alias]
-		declaration, ok := declarations[alias]
-		if !ok {
+	// Reconcile in both directions over the union of run resource aliases and
+	// finalYaml declarations (excluding the implicit self): every run resource
+	// must have a declaration to be identified, and every declared repository
+	// must have a run-resolved version, so a declared repository the run did not
+	// resolve fails with a missing-version error instead of being dropped.
+	for _, alias := range unionAliases(run.Repositories, declarations) {
+		declaration, hasDeclaration := declarations[alias]
+		if !hasDeclaration {
 			return nil, fmt.Errorf("%w: repository resource %q has no declaration in the pipeline definition", ErrUnresolvableRepository, alias)
 		}
 		cloneURL, err := cloneURLFromDeclaration(orgURL, project, declaration)
 		if err != nil {
 			return nil, fmt.Errorf("repository resource %q: %w", alias, err)
 		}
+		resource := run.Repositories[alias]
 		if err := addEntry(alias, declaration.Name, declaration.Type, cloneURL, resource.Version, resource.RefName); err != nil {
 			return nil, err
 		}
 	}
 
 	return resolved, nil
+}
+
+// unionAliases returns the sorted set of resource aliases across the run's
+// resolved repositories and the pipeline declarations, excluding the implicit
+// self repository.
+func unionAliases(repositories map[string]RepositoryResource, declarations map[string]repositoryDeclaration) []string {
+	seen := make(map[string]struct{}, len(repositories)+len(declarations))
+	for alias := range repositories {
+		if alias != "self" {
+			seen[alias] = struct{}{}
+		}
+	}
+	for alias := range declarations {
+		if alias != "self" {
+			seen[alias] = struct{}{}
+		}
+	}
+	aliases := make([]string, 0, len(seen))
+	for alias := range seen {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	return aliases
+}
+
+// isSupportedGitType reports whether a Build API repository type is a Git
+// repository autofeat can clone. TFVC and Subversion are not.
+func isSupportedGitType(repoType string) bool {
+	switch strings.ToLower(strings.TrimSpace(repoType)) {
+	case "tfsgit", "azurereposgit", "git", "externalgit",
+		"github", "githubenterprise", "bitbucket":
+		return true
+	default:
+		return false
+	}
 }
 
 // cloneURLFromBuildRepository returns the clone URL the Build API reports for
