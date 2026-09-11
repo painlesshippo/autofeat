@@ -177,30 +177,34 @@ func addAzureBuildWorkspace(featureName, buildRef, org, project, instanceURL str
 	if err != nil {
 		return err
 	}
-	featureDirPreexisted := directoryExists(featureDir)
+	// Never mutate a path that already exists: it may hold unrelated user files,
+	// and rollback would otherwise remove it. Require a clean feature path so
+	// every path this operation touches is one it created.
+	if _, err := os.Lstat(featureDir); err == nil {
+		return fmt.Errorf("feature workspace path already exists: %s; remove it or choose another feature name", featureDir)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect feature workspace path %q: %w", featureDir, err)
+	}
 
 	for _, repository := range repositories {
 		if err := addAzureRepository(featureName, repository.CloneURL, repository.Commit, repository.RefName); err != nil {
-			return errors.Join(err, rollbackAzureWorkspace(featureName, featureDir, featureDirPreexisted))
+			return errors.Join(err, rollbackAzureWorkspace(featureName, featureDir))
 		}
 	}
 	return nil
 }
 
-// rollbackAzureWorkspace removes any workspace state created before a failure.
+// rollbackAzureWorkspace removes the workspace state this operation created.
 // Once a session is persisted it defers to the shared session rollback, which
 // removes cloned repositories, the feature directory, and the session record.
 // Before the first repository is persisted no session exists, so it removes the
-// feature directory autofeat created, while preserving a directory that already
-// existed on disk.
-func rollbackAzureWorkspace(featureName, featureDir string, featureDirPreexisted bool) error {
+// feature directory autofeat created. The caller guarantees the feature path did
+// not exist beforehand, so removing it cannot delete pre-existing user files.
+func rollbackAzureWorkspace(featureName, featureDir string) error {
 	if _, err := state.GetSession(featureName); err == nil {
 		return rollbackTemplateSession(featureName, nil)
 	} else if !errors.Is(err, state.ErrSessionNotFound) {
 		return err
-	}
-	if featureDirPreexisted {
-		return nil
 	}
 	if err := os.RemoveAll(featureDir); err != nil {
 		return fmt.Errorf("roll back feature directory: %w", err)
@@ -208,23 +212,15 @@ func rollbackAzureWorkspace(featureName, featureDir string, featureDirPreexisted
 	return nil
 }
 
-func directoryExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
-}
-
 // azureBuildError converts REST sentinel errors into actionable messages
-// without exposing credentials.
+// without exposing credentials. Errors that already carry endpoint context from
+// the client (not-found, decode) pass through unchanged.
 func azureBuildError(target azureBuildTarget, err error) error {
-	switch {
-	case errors.Is(err, azuredevops.ErrUnauthorized):
-		return fmt.Errorf("Azure DevOps denied access to build %d in %s/%s; verify %s has build (read) scope for the organization: %w",
+	if errors.Is(err, azuredevops.ErrUnauthorized) {
+		return fmt.Errorf("Azure DevOps denied access to build %d in %s/%s; verify %s has Build (Read) scope for the organization: %w",
 			target.buildID, target.orgURL, target.project, azureTokenEnvVars[0], err)
-	case errors.Is(err, azuredevops.ErrNotFound):
-		return fmt.Errorf("Azure DevOps build %d was not found in %s/%s: %w", target.buildID, target.orgURL, target.project, err)
-	default:
-		return err
 	}
+	return err
 }
 
 // addAzureRepository clones cloneURL into the feature session and creates the

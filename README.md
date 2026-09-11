@@ -330,8 +330,9 @@ autofeat new feature/repro --azure-build 4821 --azure-org contoso --azure-projec
 autofeat new feature/repro --azure-build "https://dev.azure.com/contoso/Widgets/_build/results?buildId=4821"
 ```
 
-Azure DevOps Server (on-premises) instances use `--azure-url` with the numeric
-form, for example `--azure-url https://server/tfs/DefaultCollection`. Each
+Azure DevOps Server (on-premises) instances pass the collection as
+`--azure-org` and the server prefix as `--azure-url` with the numeric form, for
+example `--azure-org DefaultCollection --azure-url https://server/tfs`. Each
 repository is recorded as a normal remote clone whose `base_branch` is the
 resolved commit, so `list`, `status`, `open`, and `teardown` behave as they do
 for any other session. Repositories that the build references more than once,
@@ -340,31 +341,33 @@ once; a repository the build resolves to two different commits is an error.
 
 The exact commit for each repository always comes from the pipeline run, which
 is authoritative for the revision a build used. Repository identity and clone
-URL come from the Build API for the primary repository and from the Git
-Repositories API for Azure Repos Git resources, which the run identifies by id.
+URL come from the Build API for the primary repository, and for repository
+resources from the run's expanded pipeline definition (its `finalYaml`), whose
+`resources.repositories` declarations name each repository. Because the YAML
+name carries the project, resources in other projects of the organization are
+supported. Classic (designer) builds have only their primary repository.
 
 Set `AZURE_DEVOPS_EXT_PAT` (or `AZURE_DEVOPS_PAT`) to an Azure DevOps personal
-access token with **Build (Read)** scope before running the command. This token
-is used only for the REST calls that resolve the build; it is only ever sent as
-an Authorization header and is never written to session metadata, printed, or
-embedded in a stored clone URL. Cloning and fetching are separate and use Git's
-normal credential configuration, exactly like `--remote`, so configure a Git
-credential helper (or SSH keys) with read access to every repository the build
-uses. If you reuse a personal access token as the Git password for Azure Repos
-over HTTPS, that token additionally needs **Code (Read)** scope; a Build-only
-token authenticates the REST calls but cannot clone the repositories.
+access token with **Build (Read)** scope before running the command. That scope
+covers every REST call autofeat makes to resolve the build (build, definition,
+and pipeline run). The token is only ever sent as an Authorization header and is
+never written to session metadata, printed, or embedded in a stored clone URL.
+Cloning and fetching are separate and use Git's normal credential configuration,
+exactly like `--remote`, so configure a Git credential helper (or SSH keys) with
+read access to every repository the build uses. A personal access token reused
+as the Git password for Azure Repos over HTTPS needs **Code (Read)** scope for
+that clone step; the Build (Read) REST token does not clone.
 
 This command covers only Git repositories. Build artifacts and non-repository
-pipeline resources are out of scope. Azure Repos Git resources in the same
-project are resolved by id through the Git Repositories API. A non-Azure
-resource (for example a GitHub repository) is only clonable when the run exposes
-an explicit clone URL for it; a resource the run reports with no clone URL and
-no resolvable Azure repository id produces an actionable error rather than a
-silently incomplete workspace. A build revision that lives on a ref a default
-clone does not fetch, such as a pull request merge ref, is retrieved from the
-resolved ref name when the server exposes it; when the exact commit cannot be
-made available, `autofeat` reports an error and leaves no partial session
-behind.
+pipeline resources are out of scope. Repository resources of the Azure Repos
+(`git`), GitHub, and Bitbucket types are supported through their `finalYaml`
+declarations; a self-hosted type without a derivable clone host (for example
+GitHub Enterprise) or any non-Git type produces an actionable error rather than
+a silently incomplete workspace, as does a run whose resources cannot be
+resolved. A build revision that lives on a ref a default clone does not fetch,
+such as a pull request merge ref, is retrieved from the resolved ref name when
+the server exposes it; when the exact commit cannot be made available,
+`autofeat` reports an error and leaves no partial session behind.
 
 Workspace directory names are flattened so they remain a single directory.
 Every character outside `A-Z`, `a-z`, `0-9`, `.`, `_` and `-` becomes `-`,

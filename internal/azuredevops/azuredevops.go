@@ -3,15 +3,17 @@
 //
 // Commit versions come from the pipeline run, which is authoritative for the
 // exact revision each repository was built at. Repository identity (name and
-// clone URL) comes from sources that actually supply it: the Build API's
-// repository object for the primary ("self") repository, and the Git
-// Repositories API for Azure Repos Git resources that the run identifies only
-// by id. The run response's repository object is not assumed to carry a name or
-// clone URL, matching the documented Pipelines Runs contract.
+// clone URL) comes from sources that supply it under the documented contract:
+// the Build API's repository object for the primary ("self") repository, and
+// the run's expanded pipeline definition (finalYaml) for repository resources,
+// whose run entries expose only a type. Each run resource alias is correlated
+// with its declaration in finalYaml to determine the repository name and type,
+// while the exact commit still comes from the run.
 //
 // The package never logs, embeds, or returns the personal access token it is
 // given. Authentication uses HTTP Basic with an empty username, matching the
-// Azure DevOps convention for PAT authentication.
+// Azure DevOps convention for PAT authentication. Every endpoint used here is
+// covered by the Build (Read) scope.
 package azuredevops
 
 import (
@@ -27,6 +29,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Sentinel errors let callers translate REST failures into actionable messages
@@ -34,14 +38,14 @@ import (
 var (
 	// ErrUnauthorized indicates the credentials were rejected (HTTP 401/403).
 	ErrUnauthorized = errors.New("azure devops access was denied")
-	// ErrNotFound indicates the requested build or run does not exist (HTTP 404).
+	// ErrNotFound indicates the requested resource does not exist (HTTP 404).
 	ErrNotFound = errors.New("azure devops resource was not found")
 	// ErrUnsupportedRepositoryType indicates a resolved repository is not a Git
 	// repository autofeat can clone.
 	ErrUnsupportedRepositoryType = errors.New("unsupported repository type")
-	// ErrUnresolvableRepository indicates a repository whose clone URL could not
-	// be determined from any available source.
-	ErrUnresolvableRepository = errors.New("could not resolve repository clone URL")
+	// ErrUnresolvableRepository indicates a repository whose identity could not
+	// be determined from any documented source.
+	ErrUnresolvableRepository = errors.New("could not resolve repository identity")
 	// ErrMissingVersion indicates a repository was resolved without a commit.
 	ErrMissingVersion = errors.New("build did not resolve a commit version")
 	// ErrConflictingVersions indicates the same repository was resolved to two
@@ -51,20 +55,23 @@ var (
 
 const apiVersion = "7.1"
 
-// Repository identifies a repository referenced by a build, run, or the Git
-// Repositories API. Different sources populate different fields: the Build API
-// supplies Type/Name/URL, a run resource may supply only ID and Type, and the
-// Git Repositories API supplies Name and RemoteURL.
+// Build process types reported by the Build Definitions API.
+const (
+	processTypeDesigner = 1 // classic, single-repository builds
+	processTypeYAML     = 2 // YAML pipelines, which may declare repository resources
+)
+
+// Repository identifies a repository referenced by a build.
 type Repository struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Name      string `json:"name"`
-	URL       string `json:"url"`
-	RemoteURL string `json:"remoteUrl"`
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
-// RepositoryResource is a repository resource resolved for a pipeline run,
-// including the exact commit (Version) the run used.
+// RepositoryResource is a repository resource resolved for a pipeline run. Under
+// the documented contract its Repository carries only a type; the exact commit
+// is Version.
 type RepositoryResource struct {
 	Repository Repository `json:"repository"`
 	RefName    string     `json:"refName"`
@@ -80,9 +87,18 @@ type Build struct {
 	SourceBranch  string
 }
 
-// Run holds the repository resources resolved for a pipeline run.
+// Definition is the subset of a build definition used to tell classic builds
+// from YAML pipelines.
+type Definition struct {
+	ID          int
+	ProcessType int
+}
+
+// Run holds the repository resources resolved for a pipeline run and the run's
+// expanded pipeline definition.
 type Run struct {
 	Repositories map[string]RepositoryResource
+	FinalYAML    string
 }
 
 // ResolvedRepository is a repository the build used, paired with its exact
@@ -96,10 +112,6 @@ type ResolvedRepository struct {
 	Commit   string
 	RefName  string
 }
-
-// repositoryLookup resolves a repository's identity from its id. It is injected
-// so resolution can be unit-tested without HTTP.
-type repositoryLookup func(ctx context.Context, id string) (Repository, error)
 
 // Client calls the Azure DevOps REST API for one organization and project.
 type Client struct {
@@ -129,29 +141,43 @@ func NewClient(orgURL, project, pat string, httpClient *http.Client) (*Client, e
 	return &Client{orgURL: orgURL, project: project, pat: pat, httpClient: httpClient}, nil
 }
 
-// ResolveBuildRepositories resolves every Git repository the build used,
-// starting from its primary repository and adding any repository resources.
+// ResolveBuildRepositories resolves every Git repository the build used. The
+// primary repository always comes from the build. YAML pipelines additionally
+// contribute their resolved repository resources; classic (designer) builds
+// have only the primary repository.
 func (c *Client) ResolveBuildRepositories(ctx context.Context, buildID int) ([]ResolvedRepository, error) {
 	build, err := c.GetBuild(ctx, buildID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, fmt.Errorf("Azure DevOps build %d was not found: %w", buildID, err)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	var run *Run
-	if build.PipelineID != 0 {
-		fetched, err := c.GetRun(ctx, build.PipelineID, buildID)
-		if errors.Is(err, ErrNotFound) {
-			// Classic (non-YAML) builds expose no pipeline run resources; the
-			// primary repository from the build is authoritative.
-			run = nil
-		} else if err != nil {
-			return nil, err
-		} else {
-			run = &fetched
-		}
+	if build.PipelineID == 0 {
+		return resolveRepositories(c.orgURL, c.project, build, nil)
 	}
 
-	return resolveRepositories(ctx, build, run, c.GetRepository)
+	definition, err := c.GetDefinition(ctx, build.PipelineID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, fmt.Errorf("Azure DevOps pipeline definition %d for build %d was not found: %w", build.PipelineID, buildID, err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if definition.ProcessType == processTypeDesigner {
+		// Classic builds cannot declare repository resources.
+		return resolveRepositories(c.orgURL, c.project, build, nil)
+	}
+
+	run, err := c.GetRun(ctx, build.PipelineID, buildID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, fmt.Errorf("Azure DevOps pipeline run for build %d was not found; its repository resources cannot be resolved", buildID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return resolveRepositories(c.orgURL, c.project, build, &run)
 }
 
 // GetBuild fetches the build identified by buildID.
@@ -178,10 +204,26 @@ func (c *Client) GetBuild(ctx context.Context, buildID int) (Build, error) {
 	}, nil
 }
 
-// GetRun fetches the repository resources resolved for a pipeline run.
+// GetDefinition fetches a build definition's process type.
+func (c *Client) GetDefinition(ctx context.Context, definitionID int) (Definition, error) {
+	endpoint := fmt.Sprintf("%s/%s/_apis/build/definitions/%d", c.orgURL, url.PathEscape(c.project), definitionID)
+	var payload struct {
+		ID      int `json:"id"`
+		Process struct {
+			Type int `json:"type"`
+		} `json:"process"`
+	}
+	if err := c.get(ctx, endpoint, &payload); err != nil {
+		return Definition{}, err
+	}
+	return Definition{ID: payload.ID, ProcessType: payload.Process.Type}, nil
+}
+
+// GetRun fetches the repository resources and expanded YAML of a pipeline run.
 func (c *Client) GetRun(ctx context.Context, pipelineID, runID int) (Run, error) {
 	endpoint := fmt.Sprintf("%s/%s/_apis/pipelines/%d/runs/%d", c.orgURL, url.PathEscape(c.project), pipelineID, runID)
 	var payload struct {
+		FinalYAML string `json:"finalYaml"`
 		Resources struct {
 			Repositories map[string]RepositoryResource `json:"repositories"`
 		} `json:"resources"`
@@ -189,29 +231,7 @@ func (c *Client) GetRun(ctx context.Context, pipelineID, runID int) (Run, error)
 	if err := c.get(ctx, endpoint, &payload); err != nil {
 		return Run{}, err
 	}
-	return Run{Repositories: payload.Resources.Repositories}, nil
-}
-
-// GetRepository fetches an Azure Repos Git repository's authoritative identity,
-// including its clone (remote) URL, by id.
-func (c *Client) GetRepository(ctx context.Context, id string) (Repository, error) {
-	endpoint := fmt.Sprintf("%s/%s/_apis/git/repositories/%s", c.orgURL, url.PathEscape(c.project), url.PathEscape(id))
-	var payload struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		URL       string `json:"url"`
-		RemoteURL string `json:"remoteUrl"`
-	}
-	if err := c.get(ctx, endpoint, &payload); err != nil {
-		return Repository{}, err
-	}
-	return Repository{
-		ID:        payload.ID,
-		Type:      "azureReposGit",
-		Name:      payload.Name,
-		URL:       payload.URL,
-		RemoteURL: payload.RemoteURL,
-	}, nil
+	return Run{Repositories: payload.Resources.Repositories, FinalYAML: payload.FinalYAML}, nil
 }
 
 func (c *Client) get(ctx context.Context, endpoint string, out any) error {
@@ -260,73 +280,87 @@ func errorSnippet(body io.Reader) string {
 	return strings.Join(strings.Fields(string(data)), " ")
 }
 
+// repositoryDeclaration is a repository resource declaration parsed from a run's
+// expanded pipeline YAML.
+type repositoryDeclaration struct {
+	Alias string `yaml:"repository"`
+	Type  string `yaml:"type"`
+	Name  string `yaml:"name"`
+	Ref   string `yaml:"ref"`
+}
+
+// parseRepositoryDeclarations extracts resources.repositories declarations from
+// a run's expanded pipeline YAML, keyed by alias.
+func parseRepositoryDeclarations(finalYAML string) (map[string]repositoryDeclaration, error) {
+	declarations := make(map[string]repositoryDeclaration)
+	if strings.TrimSpace(finalYAML) == "" {
+		return declarations, nil
+	}
+	var document struct {
+		Resources struct {
+			Repositories []repositoryDeclaration `yaml:"repositories"`
+		} `yaml:"resources"`
+	}
+	if err := yaml.Unmarshal([]byte(finalYAML), &document); err != nil {
+		return nil, fmt.Errorf("parse pipeline YAML repository resources: %w", err)
+	}
+	for _, declaration := range document.Resources.Repositories {
+		if alias := strings.TrimSpace(declaration.Alias); alias != "" {
+			declarations[alias] = declaration
+		}
+	}
+	return declarations, nil
+}
+
 // resolveRepositories combines a build's primary repository with the resolved
 // repository resources of its run, returning one entry per distinct repository.
-// The primary repository is always first. Commit versions come from the run
-// (or the build's source version for the primary); repository identity comes
-// from the build repository object or, for run resources identified only by id,
-// from the injected lookup. Repositories that appear both as the primary and as
-// a resource, or as repeated resources, are collapsed when they share a commit
-// and rejected when they resolve to conflicting commits.
-func resolveRepositories(ctx context.Context, build Build, run *Run, lookup repositoryLookup) ([]ResolvedRepository, error) {
-	primaryRepo := build.Repository
+// The primary repository is always first. Commit versions come from the run (or
+// the build's source version for the primary). Resource identity comes from the
+// run's expanded pipeline YAML declarations. Repositories that appear both as
+// the primary and as a resource, or as repeated resources, are collapsed when
+// they share a commit and rejected when they resolve to conflicting commits.
+func resolveRepositories(orgURL, project string, build Build, run *Run) ([]ResolvedRepository, error) {
+	var declarations map[string]repositoryDeclaration
+	if run != nil {
+		parsed, err := parseRepositoryDeclarations(run.FinalYAML)
+		if err != nil {
+			return nil, err
+		}
+		declarations = parsed
+	}
+
 	primaryCommit := build.SourceVersion
 	primaryRef := build.SourceBranch
 	if run != nil {
 		if self, ok := run.Repositories["self"]; ok {
-			// The run is authoritative for the commit and ref. The build's
-			// repository object carries identity (URL); only fall back to the
-			// run's self repository when the build omits it.
 			if strings.TrimSpace(self.Version) != "" {
 				primaryCommit = self.Version
 			}
 			if strings.TrimSpace(self.RefName) != "" {
 				primaryRef = self.RefName
 			}
-			if strings.TrimSpace(primaryRepo.ID) == "" && cloneURLFromRepository(primaryRepo) == "" {
-				primaryRepo = self.Repository
-			}
 		}
 	}
 
 	resolved := make([]ResolvedRepository, 0)
-	indexByIdentity := make(map[string]int)
+	indexByURL := make(map[string]int)
 
-	addEntry := func(alias string, repo Repository, commit, refName string) error {
+	addEntry := func(alias, name, repoType, cloneURL, commit, refName string) error {
 		if strings.TrimSpace(commit) == "" {
 			return fmt.Errorf("%w: repository resource %q", ErrMissingVersion, alias)
 		}
-		if !isSupportedGitType(repo.Type) {
-			return fmt.Errorf("%w: %q (repository resource %q)", ErrUnsupportedRepositoryType, repo.Type, alias)
-		}
-
-		cloneURL := cloneURLFromRepository(repo)
-		if cloneURL == "" && isAzureReposType(repo.Type) && strings.TrimSpace(repo.ID) != "" {
-			fetched, err := lookup(ctx, repo.ID)
-			if err != nil {
-				return fmt.Errorf("resolve repository for resource %q (id %s): %w", alias, repo.ID, err)
-			}
-			if strings.TrimSpace(repo.Name) == "" {
-				repo.Name = fetched.Name
-			}
-			cloneURL = cloneURLFromRepository(fetched)
-		}
-		if cloneURL == "" {
-			return fmt.Errorf("%w: repository resource %q (type %q) does not expose a clone URL and could not be identified", ErrUnresolvableRepository, alias, repo.Type)
-		}
-
-		identity := repositoryIdentity(repo.ID, cloneURL)
-		if index, ok := indexByIdentity[identity]; ok {
+		key := normalizeCloneURL(cloneURL)
+		if index, ok := indexByURL[key]; ok {
 			if !strings.EqualFold(resolved[index].Commit, commit) {
 				return fmt.Errorf("%w: %s resolves to %s and %s", ErrConflictingVersions, cloneURL, resolved[index].Commit, commit)
 			}
 			return nil
 		}
-		indexByIdentity[identity] = len(resolved)
+		indexByURL[key] = len(resolved)
 		resolved = append(resolved, ResolvedRepository{
 			Alias:    alias,
-			Name:     repo.Name,
-			Type:     repo.Type,
+			Name:     name,
+			Type:     repoType,
 			CloneURL: cloneURL,
 			Commit:   commit,
 			RefName:  refName,
@@ -334,66 +368,82 @@ func resolveRepositories(ctx context.Context, build Build, run *Run, lookup repo
 		return nil
 	}
 
-	if err := addEntry("self", primaryRepo, primaryCommit, primaryRef); err != nil {
+	// Primary repository: identity from the Build API.
+	primaryURL := cloneURLFromBuildRepository(build.Repository)
+	if primaryURL == "" {
+		return nil, fmt.Errorf("%w: primary repository %q has no clone URL", ErrUnresolvableRepository, build.Repository.Name)
+	}
+	if err := addEntry("self", build.Repository.Name, build.Repository.Type, primaryURL, primaryCommit, primaryRef); err != nil {
 		return nil, err
 	}
-	if run != nil {
-		aliases := make([]string, 0, len(run.Repositories))
-		for alias := range run.Repositories {
-			if alias == "self" {
-				continue
-			}
-			aliases = append(aliases, alias)
+
+	if run == nil {
+		return resolved, nil
+	}
+
+	aliases := make([]string, 0, len(run.Repositories))
+	for alias := range run.Repositories {
+		if alias == "self" {
+			continue
 		}
-		sort.Strings(aliases)
-		for _, alias := range aliases {
-			resource := run.Repositories[alias]
-			if err := addEntry(alias, resource.Repository, resource.Version, resource.RefName); err != nil {
-				return nil, err
-			}
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	for _, alias := range aliases {
+		resource := run.Repositories[alias]
+		declaration, ok := declarations[alias]
+		if !ok {
+			return nil, fmt.Errorf("%w: repository resource %q has no declaration in the pipeline definition", ErrUnresolvableRepository, alias)
+		}
+		cloneURL, err := cloneURLFromDeclaration(orgURL, project, declaration)
+		if err != nil {
+			return nil, fmt.Errorf("repository resource %q: %w", alias, err)
+		}
+		if err := addEntry(alias, declaration.Name, declaration.Type, cloneURL, resource.Version, resource.RefName); err != nil {
+			return nil, err
 		}
 	}
 
 	return resolved, nil
 }
 
-// cloneURLFromRepository returns the first field that looks like a Git clone
-// URL, preferring the Git Repositories API's remoteUrl over a build url.
-func cloneURLFromRepository(repo Repository) string {
-	for _, candidate := range []string{repo.RemoteURL, repo.URL} {
-		if trimmed := strings.TrimSpace(candidate); isCloneURL(trimmed) {
-			return trimmed
-		}
+// cloneURLFromBuildRepository returns the clone URL the Build API reports for
+// the primary repository.
+func cloneURLFromBuildRepository(repo Repository) string {
+	if isCloneURL(strings.TrimSpace(repo.URL)) {
+		return strings.TrimSpace(repo.URL)
 	}
 	return ""
 }
 
-// repositoryIdentity returns a stable dedup key. A repository id is preferred
-// because it is stable across clone-URL spellings; otherwise the normalized
-// clone URL is used.
-func repositoryIdentity(id, cloneURL string) string {
-	if trimmed := strings.TrimSpace(id); trimmed != "" {
-		return "id:" + strings.ToLower(trimmed)
+// cloneURLFromDeclaration derives an HTTPS clone URL for a repository resource
+// from its pipeline YAML declaration. The declared name is authoritative: for
+// Azure Repos Git it may name another project as "Project/Repository".
+func cloneURLFromDeclaration(orgURL, project string, declaration repositoryDeclaration) (string, error) {
+	name := strings.TrimSpace(declaration.Name)
+	if name == "" {
+		return "", fmt.Errorf("%w: declaration has no repository name", ErrUnresolvableRepository)
 	}
-	return "url:" + normalizeCloneURL(cloneURL)
-}
-
-func isSupportedGitType(repoType string) bool {
-	switch strings.ToLower(strings.TrimSpace(repoType)) {
-	case "tfsgit", "azurereposgit", "azurereposgithyphenated",
-		"github", "githubenterprise", "bitbucket", "git", "externalgit":
-		return true
+	switch strings.ToLower(strings.TrimSpace(declaration.Type)) {
+	case "git":
+		// Azure Repos Git in the same organization; the project defaults to the
+		// build's project and may be overridden by a "Project/Repository" name.
+		repoProject := project
+		repoName := name
+		if slash := strings.Index(name, "/"); slash >= 0 {
+			repoProject = name[:slash]
+			repoName = name[slash+1:]
+		}
+		if strings.TrimSpace(repoName) == "" {
+			return "", fmt.Errorf("%w: azure repos declaration has no repository name", ErrUnresolvableRepository)
+		}
+		return orgURL + "/" + url.PathEscape(repoProject) + "/_git/" + url.PathEscape(repoName), nil
+	case "github":
+		return "https://github.com/" + name + ".git", nil
+	case "bitbucket":
+		return "https://bitbucket.org/" + name + ".git", nil
 	default:
-		return false
-	}
-}
-
-func isAzureReposType(repoType string) bool {
-	switch strings.ToLower(strings.TrimSpace(repoType)) {
-	case "tfsgit", "azurereposgit", "azurereposgithyphenated":
-		return true
-	default:
-		return false
+		return "", fmt.Errorf("%w: %q", ErrUnsupportedRepositoryType, declaration.Type)
 	}
 }
 
