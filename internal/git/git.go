@@ -407,6 +407,16 @@ func Rebase(destPath, baseRef string) error {
 	return nil
 }
 
+// AbortRebase aborts the rebase in progress in destPath, restoring the worktree
+// and branch to their pre-rebase state.
+func AbortRebase(destPath string) error {
+	if _, err := run("-C", destPath, "rebase", "--abort"); err != nil {
+		return fmt.Errorf("abort rebase in repository %q: %w", destPath, err)
+	}
+
+	return nil
+}
+
 // IsRebaseInProgress reports whether destPath has an apply or merge rebase in progress.
 func IsRebaseInProgress(destPath string) (bool, error) {
 	for _, stateDirectory := range []string{"rebase-merge", "rebase-apply"} {

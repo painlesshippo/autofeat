@@ -73,7 +73,7 @@ The completer supports:
   and `teardown`; new names remain free-form until the feature exists.
 * Template names and template subcommands.
 * Contextual `--local`, `--remote`, `--template`, `--ref`, `--copilot`,
-  `--force`, and `--task` options.
+  `--cancel`, `--force`, and `--task` options.
 * Duplicate filtering for feature selectors and already-used options.
 
 ## Troubleshooting

@@ -41,6 +41,7 @@ var (
 	openCopilotCommand      = openCopilotSession
 	runFeatureCommand       = runFeature
 	syncFeatureCommand      = syncFeature
+	cancelSyncCommand       = cancelSync
 	teardownCommand         = teardownSession
 	removeRepositoryCommand = removeRepositoryFromSession
 )
@@ -88,6 +89,27 @@ func runSelectedFeatures(selectors []string, command func(string) error) error {
 		}
 	}
 	return nil
+}
+
+// runAllSelectedFeatures runs command for every selected feature, continuing
+// past failures so a recovery command reports each one instead of stopping at
+// the first.
+func runAllSelectedFeatures(selectors []string, command func(string) error) error {
+	sessions, err := state.ListSessions()
+	if err != nil {
+		return err
+	}
+	featureNames, err := selectFeatureNames(sessions, selectors)
+	if err != nil {
+		return err
+	}
+	failures := make([]error, 0, len(featureNames))
+	for _, featureName := range featureNames {
+		if err := command(featureName); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func selectFeatureNames(sessions map[string]state.Session, selectors []string) ([]string, error) {
@@ -967,7 +989,7 @@ func syncFeature(featureName string) error {
 			continue
 		}
 		if err := gitcmd.Rebase(repository.WorktreePath, baseRef); err != nil {
-			fmt.Fprintf(os.Stderr, "Resolve conflicts in %s, then run `git -C %s rebase --continue`, or abort with `git -C %s rebase --abort`.\n", repository.Name, repository.WorktreePath, repository.WorktreePath)
+			fmt.Fprintf(os.Stderr, "Resolve conflicts in %s, then run `git -C %s rebase --continue`, or cancel the synchronization with `autofeat sync %s --cancel`.\n", repository.Name, repository.WorktreePath, featureName)
 			return err
 		}
 		ahead, behind, err = gitcmd.AheadBehind(repository.WorktreePath, baseRef)
@@ -977,6 +999,53 @@ func syncFeature(featureName string) error {
 		fmt.Printf("%s: synchronized (%d ahead, %d behind)\n", repository.Name, ahead, behind)
 	}
 
+	return nil
+}
+
+// cancelSync abandons an interrupted synchronization by aborting the rebase
+// left in progress in each of the session's repositories. Repositories without
+// a rebase in progress are reported and left untouched.
+func cancelSync(featureName string) error {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return err
+	}
+
+	failures := make([]error, 0, len(session.Repos))
+	for _, repository := range session.Repos {
+		if err := cancelRepositorySync(repository); err != nil {
+			failures = append(failures, fmt.Errorf("repository %q at %s: %w", repository.Name, repository.WorktreePath, err))
+		}
+	}
+	if len(failures) != 0 {
+		return fmt.Errorf("cancel synchronization of feature %q: %w", featureName, errors.Join(failures...))
+	}
+
+	return nil
+}
+
+func cancelRepositorySync(repository state.Repository) error {
+	info, err := os.Stat(repository.WorktreePath)
+	if err != nil {
+		return fmt.Errorf("inspect worktree: %w", err)
+	}
+	if !info.IsDir() {
+		return errors.New("worktree is not a directory")
+	}
+
+	rebasing, err := gitcmd.IsRebaseInProgress(repository.WorktreePath)
+	if err != nil {
+		return err
+	}
+	if !rebasing {
+		fmt.Printf("%s: no rebase in progress\n", repository.Name)
+		return nil
+	}
+	if err := gitcmd.AbortRebase(repository.WorktreePath); err != nil {
+		return err
+	}
+
+	fmt.Printf("%s: rebase aborted\n", repository.Name)
 	return nil
 }
 

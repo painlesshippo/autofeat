@@ -74,6 +74,7 @@ The Bash function understands these contexts:
   and `teardown`.
 * `--local`, `--remote`, and `--force` for `remove`.
 * `--copilot` for `open`.
+* `--cancel` for `sync`.
 * `--force` for `teardown`.
 * `--task` for `run`.
 * `bash` and `powershell` after `autofeat completion`.

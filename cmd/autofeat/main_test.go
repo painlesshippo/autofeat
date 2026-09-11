@@ -779,6 +779,236 @@ func TestSyncFeatureConflictLeavesRebaseResumable(t *testing.T) {
 	}
 }
 
+// startConflictingRebase leaves repoPath on featureBranch with a conflicted
+// rebase in progress and returns the commit HEAD pointed at beforehand.
+func startConflictingRebase(t *testing.T, repoPath, featureBranch string) string {
+	t.Helper()
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "checkout", "-qb", featureBranch)
+	writeAndCommitMainFile(t, repoPath, "README.md", "feature\n", "feature change")
+	featureCommit := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD"))
+	runMainGit(t, repoPath, "checkout", "main")
+	writeAndCommitMainFile(t, repoPath, "README.md", "base\n", "base change")
+	runMainGit(t, repoPath, "checkout", featureBranch)
+	t.Cleanup(func() {
+		_ = exec.Command("git", "-C", repoPath, "rebase", "--abort").Run()
+	})
+	if err := gitcmd.Rebase(repoPath, "main"); err == nil {
+		t.Fatal("Rebase() error = nil, want conflict")
+	}
+	return featureCommit
+}
+
+func TestCancelSyncAbortsRebaseAndRestoresWorktree(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	featureCommit := startConflictingRebase(t, repoPath, "feature/cancel")
+	if err := state.SaveSession("feature/cancel", state.Session{Repos: []state.Repository{{
+		Name: "repository", WorktreePath: repoPath, BaseBranch: "main",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cancelSync("feature/cancel"); err != nil {
+		t.Fatalf("cancelSync() error = %v", err)
+	}
+
+	rebasing, err := gitcmd.IsRebaseInProgress(repoPath)
+	if err != nil {
+		t.Fatalf("IsRebaseInProgress() error = %v", err)
+	}
+	if rebasing {
+		t.Error("rebase is still in progress after cancelSync()")
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD")); got != featureCommit {
+		t.Errorf("HEAD after cancelSync() = %q, want pre-rebase commit %q", got, featureCommit)
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, repoPath, "branch", "--show-current")); got != "feature/cancel" {
+		t.Errorf("branch after cancelSync() = %q, want feature/cancel", got)
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, repoPath, "status", "--porcelain")); got != "" {
+		t.Errorf("worktree after cancelSync() = %q, want clean", got)
+	}
+}
+
+func TestCancelSyncWithoutRebaseInProgressSucceeds(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "checkout", "-qb", "feature/idle")
+	headCommit := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD"))
+	if err := state.SaveSession("feature/idle", state.Session{Repos: []state.Repository{{
+		Name: "repository", WorktreePath: repoPath, BaseBranch: "main",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := cancelSync("feature/idle"); err != nil {
+		t.Fatalf("cancelSync() without rebase error = %v, want nil", err)
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD")); got != headCommit {
+		t.Errorf("HEAD changed without a rebase in progress: got %q, want %q", got, headCommit)
+	}
+}
+
+func TestCancelSyncReportsPartialFailures(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	featureCommit := startConflictingRebase(t, repoPath, "feature/partial")
+	missingPath := filepath.Join(t.TempDir(), "missing")
+	if err := state.SaveSession("feature/partial", state.Session{Repos: []state.Repository{
+		{Name: "absent", WorktreePath: missingPath, BaseBranch: "main"},
+		{Name: "rebasing", WorktreePath: repoPath, BaseBranch: "main"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := cancelSync("feature/partial")
+	if err == nil {
+		t.Fatal("cancelSync() error = nil, want failure for the missing repository")
+	}
+	for _, want := range []string{"feature/partial", "absent", missingPath} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("cancelSync() error = %v, want it to mention %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), `"rebasing"`) {
+		t.Errorf("cancelSync() error = %v, want no failure for the aborted repository", err)
+	}
+
+	rebasing, err := gitcmd.IsRebaseInProgress(repoPath)
+	if err != nil {
+		t.Fatalf("IsRebaseInProgress() error = %v", err)
+	}
+	if rebasing {
+		t.Error("cancelSync() stopped at the failing repository; the healthy one is still rebasing")
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD")); got != featureCommit {
+		t.Errorf("HEAD after cancelSync() = %q, want pre-rebase commit %q", got, featureCommit)
+	}
+}
+
+func TestCancelSyncLeavesUnselectedSessionsUntouched(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	selectedPath := createMainRepository(t)
+	startConflictingRebase(t, selectedPath, "feature/selected")
+	unselectedPath := createMainRepository(t)
+	startConflictingRebase(t, unselectedPath, "feature/unselected")
+	for name, worktreePath := range map[string]string{
+		"feature/selected":   selectedPath,
+		"feature/unselected": unselectedPath,
+	} {
+		if err := state.SaveSession(name, state.Session{Repos: []state.Repository{{
+			Name: "repository", WorktreePath: worktreePath, BaseBranch: "main",
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := runAllSelectedFeatures([]string{"feature/selected"}, cancelSync); err != nil {
+		t.Fatalf("runAllSelectedFeatures() error = %v", err)
+	}
+
+	rebasing, err := gitcmd.IsRebaseInProgress(selectedPath)
+	if err != nil {
+		t.Fatalf("IsRebaseInProgress() selected error = %v", err)
+	}
+	if rebasing {
+		t.Error("selected session is still rebasing after cancellation")
+	}
+	rebasing, err = gitcmd.IsRebaseInProgress(unselectedPath)
+	if err != nil {
+		t.Fatalf("IsRebaseInProgress() unselected error = %v", err)
+	}
+	if !rebasing {
+		t.Error("unselected session was cancelled, want it left in progress")
+	}
+}
+
+func TestRunAllSelectedFeaturesReportsEveryFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"feature/a", "feature/b", "feature/c"} {
+		if err := state.SaveSession(name, state.Session{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var visited []string
+	err := runAllSelectedFeatures([]string{"feature/*"}, func(featureName string) error {
+		visited = append(visited, featureName)
+		if featureName == "feature/c" {
+			return nil
+		}
+		return fmt.Errorf("failed %s", featureName)
+	})
+	if err == nil {
+		t.Fatal("runAllSelectedFeatures() error = nil, want joined failures")
+	}
+	if len(visited) != 3 {
+		t.Errorf("visited features = %q, want every selected feature", visited)
+	}
+	for _, want := range []string{"failed feature/a", "failed feature/b"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("runAllSelectedFeatures() error = %v, want it to mention %q", err, want)
+		}
+	}
+}
+
+func TestCancelSyncCommandDispatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"feature/one", "feature/two"} {
+		if err := state.SaveSession(name, state.Session{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originalSyncFeatureCommand := syncFeatureCommand
+	originalCancelSyncCommand := cancelSyncCommand
+	t.Cleanup(func() {
+		syncFeatureCommand = originalSyncFeatureCommand
+		cancelSyncCommand = originalCancelSyncCommand
+	})
+
+	var syncedFeatureNames []string
+	var cancelledFeatureNames []string
+	syncFeatureCommand = func(featureName string) error {
+		syncedFeatureNames = append(syncedFeatureNames, featureName)
+		return nil
+	}
+	cancelSyncCommand = func(featureName string) error {
+		cancelledFeatureNames = append(cancelledFeatureNames, featureName)
+		return nil
+	}
+
+	if err := run([]string{"sync", "feature/*", "--cancel"}); err != nil {
+		t.Fatalf("run(sync feature/* --cancel) error = %v", err)
+	}
+	if len(cancelledFeatureNames) != 2 || cancelledFeatureNames[0] != "feature/one" || cancelledFeatureNames[1] != "feature/two" {
+		t.Errorf("cancelled features = %q, want both sorted features", cancelledFeatureNames)
+	}
+	if len(syncedFeatureNames) != 0 {
+		t.Errorf("synchronized features = %q, want none when --cancel is set", syncedFeatureNames)
+	}
+
+	cancelledFeatureNames = nil
+	if err := run([]string{"sync", "feature/one"}); err != nil {
+		t.Fatalf("run(sync feature/one) error = %v", err)
+	}
+	if len(cancelledFeatureNames) != 0 {
+		t.Errorf("cancelled features = %q, want none without --cancel", cancelledFeatureNames)
+	}
+	if len(syncedFeatureNames) != 1 || syncedFeatureNames[0] != "feature/one" {
+		t.Errorf("synchronized features = %q, want feature/one", syncedFeatureNames)
+	}
+}
+
 func TestSessionDrift(t *testing.T) {
 	requireMainGit(t)
 

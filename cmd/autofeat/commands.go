@@ -146,13 +146,18 @@ func newRunCommand() *cobra.Command {
 }
 
 func newSyncCommand() *cobra.Command {
+	var cancel bool
 	command := &cobra.Command{
 		Use:  "sync SELECTOR...",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			if cancel {
+				return runAllSelectedFeatures(args, cancelSyncCommand)
+			}
 			return runSelectedFeatures(args, syncFeatureCommand)
 		},
 	}
+	command.Flags().BoolVar(&cancel, "cancel", false, "abort in-progress rebases left by an interrupted synchronization")
 	command.ValidArgsFunction = completeFeatureSelectors
 	return command
 }

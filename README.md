@@ -171,7 +171,7 @@ Primary targets remain positional: feature names, feature selectors, template
 names, and completion shells. Named flags specify sources, modes, secondary
 inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
 `--template`, and `--ref`; `remove` uses `--local` or `--remote`; `run` uses
-`--task`; and `remove` and `teardown` use `--force`.
+`--task`; `sync` uses `--cancel`; and `remove` and `teardown` use `--force`.
 
 | Command | Description |
 | --- | --- |
@@ -181,6 +181,7 @@ inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
 | `autofeat open SELECTOR... [--copilot]` | Open matching sessions in the editor or Copilot CLI. |
 | `autofeat run SELECTOR... [--task TEXT]` | Run the configured headless agent for matching sessions. |
 | `autofeat sync SELECTOR...` | Fetch and rebase matching sessions onto their base references. |
+| `autofeat sync SELECTOR... --cancel` | Abort in-progress rebases left by an interrupted synchronization. |
 | `autofeat status [SELECTOR...]` | Inspect repository health; defaults to every session. |
 | `autofeat teardown SELECTOR... [--force]` | Remove matching sessions and their worktrees. |
 | `autofeat list` | List active sessions and their cached base drift. |
@@ -372,11 +373,28 @@ autofeat sync feature/potato
 Every worktree in the session must be on the feature branch and have no staged,
 unstaged, or untracked changes before synchronization begins. Repositories are
 then synchronized sequentially. If a rebase conflicts, synchronization stops
-and leaves the rebase in progress so it can be continued or aborted with the
-Git commands printed by `autofeat`. Repositories without an `origin` remote
-rebase onto their local base branch without fetching. Origin branches are
-fetched before rebasing; tags, commit SHAs, and other immutable references are
-resolved locally and are not fetched.
+and leaves the rebase in progress so it can be resolved and continued, or
+cancelled with `autofeat sync --cancel`. Repositories without an `origin`
+remote rebase onto their local base branch without fetching. Origin branches
+are fetched before rebasing; tags, commit SHAs, and other immutable references
+are resolved locally and are not fetched.
+
+Cancel an interrupted synchronization when a conflict is not worth resolving
+right now:
+
+```sh
+autofeat sync feature/potato --cancel
+```
+
+Cancellation aborts the rebase in progress in every repository of each selected
+session with `git rebase --abort`, restoring the worktree, its branch, and its
+pre-rebase commit. Repositories without a rebase in progress are reported as
+`no rebase in progress` and are left untouched; repositories and sessions
+outside the selectors are never modified. Every selected session is processed
+even when one fails, and each failure is reported with its repository name and
+worktree path, so a partial cancellation never exits successfully. Cancellation
+only aborts rebases: it never discards committed feature work, and without
+`--cancel` the `sync` command behaves exactly as before.
 
 Running the feature command outside a Git repository also opens an existing
 session:
@@ -469,6 +487,7 @@ Commands can target multiple features or a pattern. For example:
 ```sh
 autofeat teardown feature/x feature/y
 autofeat sync "feature/*"
+autofeat sync "feature/*" --cancel
 ```
 
 Before deleting a cloned remote repository, `autofeat` warns when its feature
