@@ -317,6 +317,81 @@ func TestRemoteFeatureSyncLifecycle(t *testing.T) {
 	}
 }
 
+func TestSyncCancelAbortsConflictedRebase(t *testing.T) {
+	requireCommand(t, "git")
+
+	homeDir := t.TempDir()
+	environment := environmentWithHome(homeDir)
+	repositoryPath := filepath.Join(t.TempDir(), "repository")
+	if err := os.Mkdir(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initializeRepository(t, repositoryPath, environment)
+
+	const featureName = "feature/cancel-sync"
+	result := runAutofeat(autofeatBinaryPath, repositoryPath, environment, "new", featureName)
+	requireSuccess(t, result)
+
+	statePath := filepath.Join(homeDir, ".autofeat", "state.json")
+	session, ok := loadState(t, statePath).Sessions[featureName]
+	if !ok {
+		t.Fatalf("state does not contain session %q", featureName)
+	}
+	if len(session.Repos) != 1 {
+		t.Fatalf("session repositories = %+v, want one repository", session.Repos)
+	}
+	repository := session.Repos[0]
+
+	writeAndCommitFile(t, repository.WorktreePath, environment, "README.md", "feature\n", "feature change")
+	featureCommit := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "rev-parse", "HEAD"))
+	writeAndCommitFile(t, repositoryPath, environment, "README.md", "base\n", "base change")
+
+	outsideRepository := t.TempDir()
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "sync", featureName)
+	if result.err == nil {
+		t.Fatalf("sync succeeded despite a conflict; stdout:\n%s\nstderr:\n%s", result.stdout, result.stderr)
+	}
+	requireOutputContains(t, result.stderr, "--cancel")
+	requireRebaseInProgress(t, repository.WorktreePath, environment, true)
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "sync", featureName, "--cancel")
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, repository.Name, "rebase aborted")
+	requireRebaseInProgress(t, repository.WorktreePath, environment, false)
+	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "rev-parse", "HEAD")); got != featureCommit {
+		t.Errorf("worktree HEAD after cancellation = %q, want pre-rebase commit %q", got, featureCommit)
+	}
+	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "branch", "--show-current")); got != featureName {
+		t.Errorf("worktree branch after cancellation = %q, want %q", got, featureName)
+	}
+	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "status", "--porcelain")); got != "" {
+		t.Errorf("worktree after cancellation = %q, want clean", got)
+	}
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "sync", featureName, "--cancel")
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, repository.Name, "no rebase in progress")
+}
+
+func requireRebaseInProgress(t *testing.T, worktreePath string, environment []string, want bool) {
+	t.Helper()
+	got := false
+	for _, stateDirectory := range []string{"rebase-merge", "rebase-apply"} {
+		statePath := strings.TrimSpace(runRequiredCommand(t, worktreePath, environment, "git", "rev-parse", "--git-path", stateDirectory))
+		if !filepath.IsAbs(statePath) {
+			statePath = filepath.Join(worktreePath, statePath)
+		}
+		if _, err := os.Stat(statePath); err == nil {
+			got = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("inspect rebase state %q: %v", statePath, err)
+		}
+	}
+	if got != want {
+		t.Errorf("rebase in progress in %s = %t, want %t", worktreePath, got, want)
+	}
+}
+
 func requireCommand(t *testing.T, name string) {
 	t.Helper()
 	if _, err := exec.LookPath(name); err != nil {

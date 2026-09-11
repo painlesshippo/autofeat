@@ -468,6 +468,62 @@ func TestRebaseConflictRemainsInProgress(t *testing.T) {
 	}
 }
 
+func TestAbortRebaseRestoresPreRebaseState(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	runGit(t, repoPath, "checkout", "-qb", "feature/abort")
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "commit", "-qam", "feature change")
+	featureCommit := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "HEAD"))
+	runGit(t, repoPath, "checkout", "main")
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "commit", "-qam", "base change")
+	runGit(t, repoPath, "checkout", "feature/abort")
+	t.Cleanup(func() {
+		_, _ = run("-C", repoPath, "rebase", "--abort")
+	})
+
+	if err := Rebase(repoPath, "main"); err == nil {
+		t.Fatal("Rebase() error = nil, want conflict")
+	}
+
+	if err := AbortRebase(repoPath); err != nil {
+		t.Fatalf("AbortRebase() error = %v", err)
+	}
+	rebasing, err := IsRebaseInProgress(repoPath)
+	if err != nil {
+		t.Fatalf("IsRebaseInProgress() error = %v", err)
+	}
+	if rebasing {
+		t.Error("IsRebaseInProgress() = true, want false after abort")
+	}
+	if got := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "HEAD")); got != featureCommit {
+		t.Errorf("HEAD after abort = %q, want pre-rebase commit %q", got, featureCommit)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, repoPath, "branch", "--show-current")); got != "feature/abort" {
+		t.Errorf("branch after abort = %q, want feature/abort", got)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, repoPath, "status", "--porcelain")); got != "" {
+		t.Errorf("worktree after abort = %q, want clean", got)
+	}
+}
+
+func TestAbortRebaseWithoutRebaseInProgressFails(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+
+	if err := AbortRebase(repoPath); err == nil {
+		t.Error("AbortRebase() error = nil, want failure without a rebase in progress")
+	}
+}
+
 func TestAddWorktreeAndDetectUncommittedChanges(t *testing.T) {
 	requireGit(t)
 
