@@ -165,12 +165,52 @@ func addAzureBuildWorkspace(featureName, buildRef, org, project, instanceURL str
 		return err
 	}
 
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
+	currentState, err := state.Load()
+	if err != nil {
+		return err
+	}
+	featureDir, _, err := featureDirectoryPaths(featureName, currentState, configuration.WorkspaceBaseDir)
+	if err != nil {
+		return err
+	}
+	featureDirPreexisted := directoryExists(featureDir)
+
 	for _, repository := range repositories {
 		if err := addAzureRepository(featureName, repository.CloneURL, repository.Commit, repository.RefName); err != nil {
-			return errors.Join(err, rollbackTemplateSession(featureName, nil))
+			return errors.Join(err, rollbackAzureWorkspace(featureName, featureDir, featureDirPreexisted))
 		}
 	}
 	return nil
+}
+
+// rollbackAzureWorkspace removes any workspace state created before a failure.
+// Once a session is persisted it defers to the shared session rollback, which
+// removes cloned repositories, the feature directory, and the session record.
+// Before the first repository is persisted no session exists, so it removes the
+// feature directory autofeat created, while preserving a directory that already
+// existed on disk.
+func rollbackAzureWorkspace(featureName, featureDir string, featureDirPreexisted bool) error {
+	if _, err := state.GetSession(featureName); err == nil {
+		return rollbackTemplateSession(featureName, nil)
+	} else if !errors.Is(err, state.ErrSessionNotFound) {
+		return err
+	}
+	if featureDirPreexisted {
+		return nil
+	}
+	if err := os.RemoveAll(featureDir); err != nil {
+		return fmt.Errorf("roll back feature directory: %w", err)
+	}
+	return nil
+}
+
+func directoryExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // azureBuildError converts REST sentinel errors into actionable messages
@@ -224,21 +264,23 @@ func addAzureRepository(featureName, cloneURL, commit, refName string) error {
 	if err := os.MkdirAll(featureDir, 0o755); err != nil {
 		return fmt.Errorf("create feature directory: %w", err)
 	}
-	if err := gitcmd.Clone(cloneURL, worktreePath); err != nil {
-		return err
-	}
-	cloneSucceeded := false
+	// Arm cleanup before cloning so a failed or partial clone directory is
+	// removed too. It stays armed until the session is durably persisted.
+	repositoryPersisted := false
 	defer func() {
-		if cloneSucceeded {
+		if repositoryPersisted {
 			return
 		}
 		_ = os.RemoveAll(worktreePath)
 	}()
+	if err := gitcmd.Clone(cloneURL, worktreePath); err != nil {
+		return err
+	}
 
 	if err := ensureBuildCommitAvailable(worktreePath, commit, refName); err != nil {
 		return fmt.Errorf("check out build revision for repository %q: %w", repoName, err)
 	}
-	if _, err := gitcmd.CheckoutBranch(worktreePath, featureBranchName(featureName), commit); err != nil {
+	if err := gitcmd.CheckoutCommitAsBranch(worktreePath, featureBranchName(featureName), commit); err != nil {
 		return err
 	}
 	if err := hooks.Run(configuration.Hooks, hooks.PostAdd, worktreePath); err != nil {
@@ -252,14 +294,17 @@ func addAzureRepository(featureName, cloneURL, commit, refName string) error {
 		IsRemoteClone: true,
 		BaseBranch:    commit,
 	})
-	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
-		return err
-	}
+	// Persist state before writing the workspace file, so a state failure leaves
+	// no orphaned workspace file, and mark the clone kept only once state is
+	// durable. A later workspace-write failure is recovered by session rollback.
 	currentState.Sessions[featureName] = session
 	if err := state.Save(currentState); err != nil {
 		return err
 	}
-	cloneSucceeded = true
+	repositoryPersisted = true
+	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
+		return err
+	}
 
 	fmt.Printf("Cloned %s at %s into feature %s\n", repoName, shortCommit(commit), featureName)
 	return nil

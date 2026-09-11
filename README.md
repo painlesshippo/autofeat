@@ -338,22 +338,33 @@ for any other session. Repositories that the build references more than once,
 including overlap between the primary repository and a resource, are cloned
 once; a repository the build resolves to two different commits is an error.
 
+The exact commit for each repository always comes from the pipeline run, which
+is authoritative for the revision a build used. Repository identity and clone
+URL come from the Build API for the primary repository and from the Git
+Repositories API for Azure Repos Git resources, which the run identifies by id.
+
 Set `AZURE_DEVOPS_EXT_PAT` (or `AZURE_DEVOPS_PAT`) to an Azure DevOps personal
-access token with **Build (Read)** scope before running the command. The token
-is only ever sent as an Authorization header; it is never written to session
-metadata, printed, or embedded in a stored clone URL. Cloning and fetching use
-Git's normal credential configuration, exactly like `--remote`, so configure a
-Git credential helper (or SSH keys) with read access to every repository the
-build uses. The same personal access token works as the Git password for Azure
-Repos over HTTPS.
+access token with **Build (Read)** scope before running the command. This token
+is used only for the REST calls that resolve the build; it is only ever sent as
+an Authorization header and is never written to session metadata, printed, or
+embedded in a stored clone URL. Cloning and fetching are separate and use Git's
+normal credential configuration, exactly like `--remote`, so configure a Git
+credential helper (or SSH keys) with read access to every repository the build
+uses. If you reuse a personal access token as the Git password for Azure Repos
+over HTTPS, that token additionally needs **Code (Read)** scope; a Build-only
+token authenticates the REST calls but cannot clone the repositories.
 
 This command covers only Git repositories. Build artifacts and non-repository
-pipeline resources are out of scope. GitHub Enterprise and other self-hosted
-resources are supported only when the build supplies an explicit clone URL. A
-build revision that lives on a ref a default clone does not fetch, such as a
-pull request merge ref, is retrieved from the resolved ref name when the server
-exposes it; when the exact commit cannot be made available, `autofeat` reports
-an error and leaves no partial session behind.
+pipeline resources are out of scope. Azure Repos Git resources in the same
+project are resolved by id through the Git Repositories API. A non-Azure
+resource (for example a GitHub repository) is only clonable when the run exposes
+an explicit clone URL for it; a resource the run reports with no clone URL and
+no resolvable Azure repository id produces an actionable error rather than a
+silently incomplete workspace. A build revision that lives on a ref a default
+clone does not fetch, such as a pull request merge ref, is retrieved from the
+resolved ref name when the server exposes it; when the exact commit cannot be
+made available, `autofeat` reports an error and leaves no partial session
+behind.
 
 Workspace directory names are flattened so they remain a single directory.
 Every character outside `A-Z`, `a-z`, `0-9`, `.`, `_` and `-` becomes `-`,

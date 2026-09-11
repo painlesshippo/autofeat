@@ -736,6 +736,38 @@ func TestFetchRefRetrievesUnclonedPullRef(t *testing.T) {
 	}
 }
 
+func TestCheckoutCommitAsBranchPinsExactCommit(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	first := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(repoPath, "second.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", "second.txt")
+	runGit(t, repoPath, "commit", "-qm", "second commit")
+	defaultBranch := strings.TrimSpace(runGitOutput(t, repoPath, "branch", "--show-current"))
+
+	// A feature branch whose name collides with the checked-out default branch
+	// must still be pinned to the requested commit, not the branch tip.
+	if err := CheckoutCommitAsBranch(repoPath, defaultBranch, first); err != nil {
+		t.Fatalf("CheckoutCommitAsBranch(default branch) error = %v", err)
+	}
+	if head := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "HEAD")); head != first {
+		t.Errorf("HEAD = %q, want pinned commit %q", head, first)
+	}
+
+	if err := CheckoutCommitAsBranch(repoPath, "feature/pinned", first); err != nil {
+		t.Fatalf("CheckoutCommitAsBranch(new branch) error = %v", err)
+	}
+	if branch := strings.TrimSpace(runGitOutput(t, repoPath, "branch", "--show-current")); branch != "feature/pinned" {
+		t.Errorf("branch = %q, want feature/pinned", branch)
+	}
+	if head := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "HEAD")); head != first {
+		t.Errorf("HEAD = %q, want pinned commit %q", head, first)
+	}
+}
+
 func createRepository(t *testing.T) string {
 	t.Helper()
 

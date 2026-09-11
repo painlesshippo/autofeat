@@ -101,9 +101,10 @@ func TestAddAzureBuildWorkspaceCreatesPinnedSession(t *testing.T) {
 	appBare, appFirst, appSecond := createAzureBareRepo(t, "app")
 	libBare, _, libSecond := createAzureBareRepo(t, "lib")
 
-	server := newAzureBuildServer(t, appFirst, libSecond)
-	appURL := server.URL + "/org/proj/_git/app"
-	libURL := server.URL + "/org/proj/_git/lib"
+	appURL := "https://dev.azure.example/org/proj/_git/app"
+	libURL := "https://dev.azure.example/org/proj/_git/lib"
+	server := newAzureTwoRepoServer(t, azureRepoSpec{id: "app-id", cloneURL: appURL, commit: appFirst},
+		azureRepoSpec{id: "lib-id", cloneURL: libURL, commit: libSecond})
 	redirectCloneURL(t, appURL, appBare)
 	redirectCloneURL(t, libURL, libBare)
 
@@ -126,12 +127,8 @@ func TestAddAzureBuildWorkspaceCreatesPinnedSession(t *testing.T) {
 	assertPinnedRepository(t, byName["app"], appURL, appFirst)
 	assertPinnedRepository(t, byName["lib"], libURL, libSecond)
 
-	// The primary was resolved to the older commit, not the branch tip.
 	if appFirst == appSecond {
 		t.Fatal("test setup did not create distinct app commits")
-	}
-	if got := strings.TrimSpace(mainGitOutput(t, byName["app"].WorktreePath, "rev-parse", "HEAD")); got != appFirst {
-		t.Errorf("app HEAD = %q, want pinned build commit %q", got, appFirst)
 	}
 	if branch, err := gitcmd.CurrentBranch(byName["app"].WorktreePath); err != nil || branch != "feature/az" {
 		t.Errorf("app branch = %q (err %v), want feature/az", branch, err)
@@ -152,6 +149,64 @@ func assertPinnedRepository(t *testing.T, repository state.Repository, wantURL, 
 	head := strings.TrimSpace(mainGitOutput(t, repository.WorktreePath, "rev-parse", "HEAD"))
 	if head != wantCommit {
 		t.Errorf("repository %q HEAD = %q, want %q", repository.Name, head, wantCommit)
+	}
+}
+
+// TestAddAzureBuildWorkspacePinsOverExistingRemoteBranch proves the checkout is
+// pinned to the build commit even when the clone already carries a remote
+// feature branch that advanced past it.
+func TestAddAzureBuildWorkspacePinsOverExistingRemoteBranch(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	writeMainConfig(t, "code", "copilot")
+	t.Setenv("AZURE_DEVOPS_EXT_PAT", "test-token")
+
+	appBare, appFirst, appSecond := createAzureBareRepo(t, "app")
+	// origin/feature/az sits at the newer commit; the build resolved the older.
+	runMainGit(t, appBare, "update-ref", "refs/heads/feature/az", appSecond)
+
+	appURL := "https://dev.azure.example/org/proj/_git/app"
+	server := newAzurePrimaryServer(t, azureRepoSpec{id: "app-id", cloneURL: appURL, commit: appFirst}, "refs/heads/main")
+	redirectCloneURL(t, appURL, appBare)
+
+	if err := run([]string{"new", "feature/az", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", server.URL}); err != nil {
+		t.Fatalf("run(new --azure-build) error = %v", err)
+	}
+	session, err := state.GetSession("feature/az")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if head := strings.TrimSpace(mainGitOutput(t, session.Repos[0].WorktreePath, "rev-parse", "HEAD")); head != appFirst {
+		t.Errorf("HEAD = %q, want build commit %q, not remote feature tip %q", head, appFirst, appSecond)
+	}
+}
+
+// TestAddAzureBuildWorkspacePinsWhenFeatureNameIsDefaultBranch proves the pin
+// holds when the feature name equals the clone's default branch.
+func TestAddAzureBuildWorkspacePinsWhenFeatureNameIsDefaultBranch(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	writeMainConfig(t, "code", "copilot")
+	t.Setenv("AZURE_DEVOPS_EXT_PAT", "test-token")
+
+	appBare, appFirst, appSecond := createAzureBareRepo(t, "app")
+	appURL := "https://dev.azure.example/org/proj/_git/app"
+	server := newAzurePrimaryServer(t, azureRepoSpec{id: "app-id", cloneURL: appURL, commit: appFirst}, "refs/heads/main")
+	redirectCloneURL(t, appURL, appBare)
+
+	if err := run([]string{"new", "main", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", server.URL}); err != nil {
+		t.Fatalf("run(new --azure-build) error = %v", err)
+	}
+	session, err := state.GetSession("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worktree := session.Repos[0].WorktreePath
+	if branch, err := gitcmd.CurrentBranch(worktree); err != nil || branch != "main" {
+		t.Errorf("branch = %q (err %v), want main", branch, err)
+	}
+	if head := strings.TrimSpace(mainGitOutput(t, worktree, "rev-parse", "HEAD")); head != appFirst {
+		t.Errorf("HEAD = %q, want build commit %q, not default branch tip %q", head, appFirst, appSecond)
 	}
 }
 
@@ -188,12 +243,7 @@ func TestAddAzureBuildWorkspaceUnauthorizedLeavesNoSession(t *testing.T) {
 	if strings.Contains(err.Error(), "test-token") {
 		t.Errorf("error leaked the token: %v", err)
 	}
-	if _, err := state.GetSession("feature/az"); err == nil {
-		t.Error("session was created despite an authorization failure")
-	}
-	if entries, err := os.ReadDir(mainWorkspaceDir(t)); err == nil && len(entries) != 0 {
-		t.Errorf("workspace directory has %d entries, want none after failure", len(entries))
-	}
+	assertNoWorkspaceRemains(t, "feature/az")
 }
 
 func TestAddAzureBuildWorkspaceRejectsExistingSession(t *testing.T) {
@@ -206,8 +256,9 @@ func TestAddAzureBuildWorkspaceRejectsExistingSession(t *testing.T) {
 	}
 
 	appBare, appFirst, _ := createAzureBareRepo(t, "app")
-	server := newAzureBuildServer(t, appFirst, appFirst)
-	redirectCloneURL(t, server.URL+"/org/proj/_git/app", appBare)
+	appURL := "https://dev.azure.example/org/proj/_git/app"
+	server := newAzurePrimaryServer(t, azureRepoSpec{id: "app-id", cloneURL: appURL, commit: appFirst}, "refs/heads/main")
+	redirectCloneURL(t, appURL, appBare)
 
 	err := run([]string{"new", "feature/az", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", server.URL})
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
@@ -215,16 +266,91 @@ func TestAddAzureBuildWorkspaceRejectsExistingSession(t *testing.T) {
 	}
 }
 
-// newAzureBuildServer serves a two-repository build: primary "app" pinned to
-// appCommit and repository resource "lib" pinned to libCommit.
-func newAzureBuildServer(t *testing.T, appCommit, libCommit string) *httptest.Server {
+func TestAddAzureBuildWorkspaceCleansUpOnCloneFailure(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	writeMainConfig(t, "code", "copilot")
+	t.Setenv("AZURE_DEVOPS_EXT_PAT", "test-token")
+
+	appURL := "https://dev.azure.example/org/proj/_git/app"
+	server := newAzurePrimaryServer(t, azureRepoSpec{id: "app-id", cloneURL: appURL, commit: "1111111111111111111111111111111111111111"}, "refs/heads/main")
+	// Redirect the clone URL to a path that does not exist so the clone fails.
+	redirectCloneURL(t, appURL, filepath.Join(t.TempDir(), "missing.git"))
+
+	if err := run([]string{"new", "feature/az", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", server.URL}); err == nil {
+		t.Fatal("run(new --azure-build) error = nil, want clone failure")
+	}
+	assertNoWorkspaceRemains(t, "feature/az")
+}
+
+func TestAddAzureBuildWorkspaceCleansUpOnCheckoutFailure(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	writeMainConfig(t, "code", "copilot")
+	t.Setenv("AZURE_DEVOPS_EXT_PAT", "test-token")
+
+	appBare, _, _ := createAzureBareRepo(t, "app")
+	appURL := "https://dev.azure.example/org/proj/_git/app"
+	// The build resolves a commit that the clone cannot obtain from any ref.
+	server := newAzurePrimaryServer(t, azureRepoSpec{id: "app-id", cloneURL: appURL, commit: "0123456789012345678901234567890123456789"}, "refs/heads/does-not-exist")
+	redirectCloneURL(t, appURL, appBare)
+
+	if err := run([]string{"new", "feature/az", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", server.URL}); err == nil {
+		t.Fatal("run(new --azure-build) error = nil, want checkout failure")
+	}
+	assertNoWorkspaceRemains(t, "feature/az")
+}
+
+// assertNoWorkspaceRemains verifies neither the session nor its feature
+// directory survives a failed creation.
+func assertNoWorkspaceRemains(t *testing.T, featureName string) {
+	t.Helper()
+	if _, err := state.GetSession(featureName); err == nil {
+		t.Errorf("session %q was created despite failure", featureName)
+	}
+	featureDir := filepath.Join(mainWorkspaceDir(t), featureDirectoryName(featureName))
+	if _, err := os.Stat(featureDir); !os.IsNotExist(err) {
+		t.Errorf("feature directory %q survived failure (stat err = %v)", featureDir, err)
+	}
+}
+
+type azureRepoSpec struct {
+	id       string
+	cloneURL string
+	commit   string
+}
+
+// newAzureTwoRepoServer serves a build whose primary repository is app (clone
+// URL from the Build API) and whose run references a repository resource lib,
+// resolved through the Git Repositories API by id.
+func newAzureTwoRepoServer(t *testing.T, app, lib azureRepoSpec) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/_apis/build/builds/42"):
-			fmt.Fprintf(w, `{"id":42,"definition":{"id":7},"sourceVersion":%q,"sourceBranch":"refs/heads/main","repository":{"type":"TfsGit","name":"app"}}`, appCommit)
+			fmt.Fprintf(w, `{"id":42,"definition":{"id":7},"sourceVersion":%q,"sourceBranch":"refs/heads/main","repository":{"id":%q,"type":"TfsGit","name":"app","url":%q}}`, app.commit, app.id, app.cloneURL)
 		case strings.HasSuffix(r.URL.Path, "/_apis/pipelines/7/runs/42"):
-			fmt.Fprintf(w, `{"resources":{"repositories":{"self":{"repository":{"type":"azureReposGit","name":"app"},"refName":"refs/heads/main","version":%q},"lib":{"repository":{"type":"azureReposGit","name":"lib"},"refName":"refs/heads/main","version":%q}}}}`, appCommit, libCommit)
+			fmt.Fprintf(w, `{"resources":{"repositories":{"self":{"repository":{"id":%q,"type":"azureReposGit"},"refName":"refs/heads/main","version":%q},"lib":{"repository":{"id":%q,"type":"azureReposGit"},"refName":"refs/heads/main","version":%q}}}}`, app.id, app.commit, lib.id, lib.commit)
+		case strings.HasSuffix(r.URL.Path, "/_apis/git/repositories/"+lib.id):
+			fmt.Fprintf(w, `{"id":%q,"name":"lib","remoteUrl":%q}`, lib.id, lib.cloneURL)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// newAzurePrimaryServer serves a single-repository build whose primary clone
+// URL comes from the Build API.
+func newAzurePrimaryServer(t *testing.T, app azureRepoSpec, sourceBranch string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/_apis/build/builds/42"):
+			fmt.Fprintf(w, `{"id":42,"definition":{"id":7},"sourceVersion":%q,"sourceBranch":%q,"repository":{"id":%q,"type":"TfsGit","name":"app","url":%q}}`, app.commit, sourceBranch, app.id, app.cloneURL)
+		case strings.HasSuffix(r.URL.Path, "/_apis/pipelines/7/runs/42"):
+			fmt.Fprintf(w, `{"resources":{"repositories":{"self":{"repository":{"id":%q,"type":"azureReposGit"},"refName":%q,"version":%q}}}}`, app.id, sourceBranch, app.commit)
 		default:
 			http.NotFound(w, r)
 		}

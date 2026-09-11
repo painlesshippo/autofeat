@@ -157,6 +157,19 @@ func CheckoutBranch(destPath, branchName, baseRef string) (bool, error) {
 	return true, nil
 }
 
+// CheckoutCommitAsBranch creates (or resets) branchName to point exactly at
+// commit and checks it out in the worktree at destPath. Unlike CheckoutBranch,
+// it never reuses an existing local branch or remote-tracking branch as the
+// start point, so the checkout is pinned to the given commit even when a branch
+// of the same name already exists in the clone.
+func CheckoutCommitAsBranch(destPath, branchName, commit string) error {
+	if _, err := run("-C", destPath, "checkout", "--no-track", "-B", branchName, "--end-of-options", commit, "--"); err != nil {
+		return fmt.Errorf("check out commit %q as branch %q in %q: %w", commit, branchName, destPath, err)
+	}
+
+	return nil
+}
+
 func refExists(repoPath, ref string) (bool, error) {
 	args := repositoryArgs(repoPath, "show-ref", "--verify", "--quiet", ref)
 	command := exec.Command("git", args...)
