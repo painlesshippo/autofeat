@@ -396,6 +396,37 @@ func TestGetBuildUnauthorized(t *testing.T) {
 	}
 }
 
+func TestErrorBodyRedactsCredentials(t *testing.T) {
+	const pat = "super-secret-token"
+	basic := base64.StdEncoding.EncodeToString([]byte(":" + pat))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Simulate a proxy/diagnostic endpoint that echoes the request
+		// credentials in a 500 body.
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"message":"upstream echoed Authorization: Basic %s and pat=%s"}`, basic, pat)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL+"/org", "proj", pat, server.Client())
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	_, err = client.ResolveBuildRepositories(context.Background(), 42)
+	if err == nil {
+		t.Fatal("ResolveBuildRepositories() error = nil, want request failure")
+	}
+	if strings.Contains(err.Error(), pat) {
+		t.Errorf("error leaked the raw token: %v", err)
+	}
+	if strings.Contains(err.Error(), basic) {
+		t.Errorf("error leaked the Basic credential: %v", err)
+	}
+	// The status should still be reported for actionability.
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error dropped the status context: %v", err)
+	}
+}
+
 func TestGetBuildNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.NotFound(w, nil)

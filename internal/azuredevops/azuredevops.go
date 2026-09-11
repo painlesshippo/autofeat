@@ -261,7 +261,10 @@ func (c *Client) get(ctx context.Context, endpoint string, out any) error {
 	case http.StatusNotFound:
 		return fmt.Errorf("%w: %s", ErrNotFound, endpoint)
 	default:
-		snippet := errorSnippet(response.Body)
+		// The response body is server-controlled and could echo the request's
+		// Authorization header, so redact any credential representation before
+		// including it in a user-facing error.
+		snippet := c.redactCredentials(errorSnippet(response.Body))
 		if snippet != "" {
 			return fmt.Errorf("azure devops request to %s failed: %s: %s", endpoint, response.Status, snippet)
 		}
@@ -269,8 +272,23 @@ func (c *Client) get(ctx context.Context, endpoint string, out any) error {
 	}
 }
 
-// errorSnippet returns a short, single-line excerpt of an error body. It never
-// contains credentials because the token is only sent in request headers.
+// redactCredentials replaces the personal access token and the Basic credential
+// derived from it with a placeholder, so a response body that echoes the
+// Authorization header cannot leak the token through an error message.
+func (c *Client) redactCredentials(text string) string {
+	if text == "" || c.pat == "" {
+		return text
+	}
+	for _, secret := range []string{base64.StdEncoding.EncodeToString([]byte(":" + c.pat)), c.pat} {
+		if secret != "" {
+			text = strings.ReplaceAll(text, secret, "[redacted]")
+		}
+	}
+	return text
+}
+
+// errorSnippet returns a short, single-line excerpt of an error body. Callers
+// must redact credentials because the body is server-controlled.
 func errorSnippet(body io.Reader) string {
 	const limit = 512
 	data, err := io.ReadAll(io.LimitReader(body, limit))
