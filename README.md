@@ -9,6 +9,9 @@ and open them together in one VS Code workspace.
 * Git installed and available on `PATH`.
 * VS Code's `code` command on `PATH` to use the default workspace-opening
   command. Another editor command can be configured instead.
+* VS Code with the Dev Containers extension and a container runtime such as
+  Docker to use `open --devcontainer PATH`. The configured editor command must
+  understand `--file-uri`.
 * GitHub Copilot CLI's `copilot` command on `PATH` to use `open --copilot` or
   the default headless-agent command.
 * PowerShell 7 to use PowerShell argument completion on Windows.
@@ -179,7 +182,7 @@ inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
 | `autofeat new FEATURE --template NAME` | Create a feature session from a saved template. |
 | `autofeat new FEATURE --azure-build (ID \| URL) [--azure-org ORG --azure-project PROJECT] [--azure-url URL]` | Create a feature session from the repositories an Azure DevOps build resolved. |
 | `autofeat remove FEATURE (--local PATH \| --remote URL) [--force]` | Remove one repository from a feature session. |
-| `autofeat open SELECTOR... [--copilot]` | Open matching sessions in the editor or Copilot CLI. |
+| `autofeat open SELECTOR... [--copilot \| --devcontainer PATH]` | Open matching sessions in the editor, the Dev Container at PATH, or Copilot CLI. |
 | `autofeat run SELECTOR... [--task TEXT]` | Run the configured headless agent for matching sessions. |
 | `autofeat sync SELECTOR...` | Fetch and rebase matching sessions onto their base references. |
 | `autofeat sync SELECTOR... --cancel` | Abort in-progress rebases left by an interrupted synchronization. |
@@ -392,6 +395,41 @@ Open a session explicitly from any directory:
 ```sh
 autofeat open feature/potato
 ```
+
+Open the feature's generated workspace inside a Dev Container instead of on the
+host by pointing `--devcontainer` at a `devcontainer.json`:
+
+```sh
+autofeat open feature/potato --devcontainer ./service/.devcontainer/devcontainer.json
+```
+
+`--devcontainer PATH` opens the session's generated multi-root `.code-workspace`
+in the Dev Container defined by the configuration at `PATH`, through the editor's
+`vscode-remote://dev-container+` file URI, building or attaching the container as
+needed. There is no automatic discovery — the path is required and explicit.
+
+The configuration is developer-owned and passed through untouched: autofeat does
+not create, copy, merge, rewrite, or parse it, and does not inject mounts or
+adjust workspace settings. The configuration owns the container's mounts, its
+handling of the session's linked-worktree Git metadata (worktree Git data lives
+outside the feature directory, so the configuration must mount it if Git is
+needed in the container), its `localWorkspaceFolder` semantics, and its
+compatibility with the session layout. autofeat opens the feature directory as
+the container's local workspace folder and opens the workspace file at VS Code's
+default mount location, `/workspaces/<feature-dir-name>/<workspace>.code-workspace`.
+
+`PATH` may live anywhere, including outside the feature session. A relative path
+is resolved against the current working directory (so it behaves like any other
+shell path argument), and one command that opens several selected sessions
+applies the same configuration to each. A missing, non-file, or unreadable path
+fails immediately with an actionable error instead of falling back to a host
+window; autofeat validates only that the path is a readable file and never
+judges the configuration's container semantics.
+
+The configured `editor_cmd` must be a VS Code-family command (`code`,
+`code-insiders`, `cursor`, and so on) that understands `--file-uri`. Under WSL,
+the feature and configuration paths are translated with `wslpath` so the
+Windows-side Dev Containers extension can locate them.
 
 Open GitHub Copilot CLI in the invoking terminal with the feature directory as
 its workspace root. The CLI remains interactive and receives no initial

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/painlesshippo/autofeat/internal/config"
+	"github.com/painlesshippo/autofeat/internal/devcontainer"
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/painlesshippo/autofeat/internal/hooks"
 	"github.com/painlesshippo/autofeat/internal/state"
@@ -39,6 +40,7 @@ var (
 	openConfigCommand       = openConfig
 	openFeatureCommand      = openSession
 	openCopilotCommand      = openCopilotSession
+	openDevcontainerCommand = openDevcontainerSession
 	runFeatureCommand       = runFeature
 	syncFeatureCommand      = syncFeature
 	cancelSyncCommand       = cancelSync
@@ -657,6 +659,70 @@ func openSession(featureName string) error {
 	}
 
 	return nil
+}
+
+// openDevcontainerSession opens the session's generated multi-root workspace
+// inside the Dev Container defined by the developer-provided configuration at
+// configPath. autofeat passes that configuration through untouched — it neither
+// parses nor modifies it, and the configuration owns the container's mounts,
+// Git behavior, and workspace semantics. A relative configPath is resolved
+// against the current working directory. A missing, non-file, or unreadable
+// path fails early without falling back to a host window.
+func openDevcontainerSession(featureName, configPath string) error {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(session.WorkspaceFile) == "" {
+		return fmt.Errorf("feature %q has no workspace file to open in a dev container", featureName)
+	}
+
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	resolvedConfigPath, err := validateDevcontainerConfig(configPath)
+	if err != nil {
+		return err
+	}
+	uri, err := devcontainer.WorkspaceURI(filepath.Dir(session.WorkspaceFile), resolvedConfigPath, session.WorkspaceFile)
+	if err != nil {
+		return err
+	}
+
+	command := exec.Command(configuration.EditorCmd, "--file-uri", uri)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("open feature %q in dev container with %q: %w", featureName, configuration.EditorCmd, err)
+	}
+
+	return nil
+}
+
+// validateDevcontainerConfig resolves configPath against the current working
+// directory and confirms it is a readable regular file, without reading or
+// interpreting its contents.
+func validateDevcontainerConfig(configPath string) (string, error) {
+	resolved, err := filepath.Abs(configPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve dev container configuration path %q: %w", configPath, err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("dev container configuration %q: %w", resolved, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("dev container configuration %q is not a file", resolved)
+	}
+	file, err := os.Open(resolved)
+	if err != nil {
+		return "", fmt.Errorf("dev container configuration %q: %w", resolved, err)
+	}
+	_ = file.Close()
+	return resolved, nil
 }
 
 func openConfig() error {
