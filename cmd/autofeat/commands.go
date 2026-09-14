@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/spf13/cobra"
@@ -131,19 +133,31 @@ func newRemoveCommand() *cobra.Command {
 
 func newOpenCommand() *cobra.Command {
 	var copilot bool
+	var devcontainerConfig string
 	command := &cobra.Command{
 		Use:  "open SELECTOR...",
 		Args: cobra.MinimumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			handler := openFeatureCommand
-			if copilot {
-				handler = openCopilotCommand
+		RunE: func(command *cobra.Command, args []string) error {
+			switch {
+			case command.Flags().Changed("devcontainer"):
+				if strings.TrimSpace(devcontainerConfig) == "" {
+					return errors.New("--devcontainer requires a devcontainer.json path")
+				}
+				return runSelectedFeatures(args, func(featureName string) error {
+					return openDevcontainerCommand(featureName, devcontainerConfig)
+				})
+			case copilot:
+				return runSelectedFeatures(args, openCopilotCommand)
+			default:
+				return runSelectedFeatures(args, openFeatureCommand)
 			}
-			return runSelectedFeatures(args, handler)
 		},
 	}
 	command.Flags().BoolVar(&copilot, "copilot", false, "open the feature with Copilot CLI")
+	command.Flags().StringVar(&devcontainerConfig, "devcontainer", "", "open the feature in the dev container defined by this devcontainer.json path")
+	command.MarkFlagsMutuallyExclusive("copilot", "devcontainer")
 	command.ValidArgsFunction = completeFeatureSelectors
+	registerFlagCompletion(command, "devcontainer", completeFilePaths)
 	return command
 }
 

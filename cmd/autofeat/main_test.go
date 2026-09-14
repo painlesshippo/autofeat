@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"github.com/painlesshippo/autofeat/internal/hooks"
 	"github.com/painlesshippo/autofeat/internal/state"
 	"github.com/painlesshippo/autofeat/internal/templates"
+	"github.com/painlesshippo/autofeat/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -481,6 +484,269 @@ func TestOpenCommandCopilotDispatch(t *testing.T) {
 	}
 	if openedWith != "copilot" {
 		t.Errorf("open command = %q, want copilot", openedWith)
+	}
+}
+
+func TestOpenCommandDevcontainerDispatch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"feature/a", "feature/b"} {
+		if err := state.SaveSession(name, state.Session{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originalOpenFeatureCommand := openFeatureCommand
+	originalOpenDevcontainerCommand := openDevcontainerCommand
+	t.Cleanup(func() {
+		openFeatureCommand = originalOpenFeatureCommand
+		openDevcontainerCommand = originalOpenDevcontainerCommand
+	})
+
+	var openedWith string
+	var configHints []string
+	openFeatureCommand = func(string) error {
+		openedWith = "editor"
+		return nil
+	}
+	openDevcontainerCommand = func(_ string, configHint string) error {
+		openedWith = "devcontainer"
+		configHints = append(configHints, configHint)
+		return nil
+	}
+
+	if err := run([]string{"open", "feature/a", "--devcontainer", "/path/to/devcontainer.json"}); err != nil {
+		t.Fatalf("run(open --devcontainer PATH) error = %v", err)
+	}
+	if openedWith != "devcontainer" || len(configHints) != 1 || configHints[0] != "/path/to/devcontainer.json" {
+		t.Errorf("open --devcontainer = (%q, %q), want devcontainer with the supplied path", openedWith, configHints)
+	}
+
+	// One command opening multiple selected sessions applies the same config.
+	openedWith, configHints = "", nil
+	if err := run([]string{"open", "feature/*", "--devcontainer", "/path/to/devcontainer.json"}); err != nil {
+		t.Fatalf("run(open feature/* --devcontainer PATH) error = %v", err)
+	}
+	if len(configHints) != 2 || configHints[0] != "/path/to/devcontainer.json" || configHints[1] != "/path/to/devcontainer.json" {
+		t.Errorf("multi-selector config hints = %q, want the same path for both sessions", configHints)
+	}
+
+	if err := run([]string{"open", "feature/a", "--devcontainer", "/x", "--copilot"}); err == nil {
+		t.Error("run(open --devcontainer --copilot) error = nil, want mutually exclusive flags")
+	}
+
+	// A required value with no path (--devcontainer=) fails without any launch.
+	openedWith = ""
+	if err := run([]string{"open", "feature/a", "--devcontainer="}); err == nil {
+		t.Error("run(open --devcontainer=) error = nil, want an actionable error")
+	}
+	if openedWith != "" {
+		t.Errorf("blank --devcontainer opened via %q, want no launch", openedWith)
+	}
+}
+
+// devcontainerFeature lays out a feature directory with a generated workspace
+// file and the named repositories, then records the session. Repositories are
+// plain directories because devcontainer mode does not inspect them.
+func devcontainerFeature(t *testing.T, featureName string, repoNames []string) (featureDir, workspaceFile string) {
+	t.Helper()
+	featureDir = filepath.Join(t.TempDir(), "feature-dev")
+	workspaceFile = filepath.Join(featureDir, "feature-dev.code-workspace")
+	repos := make([]state.Repository, 0, len(repoNames))
+	for _, name := range repoNames {
+		worktree := filepath.Join(featureDir, name)
+		if err := os.MkdirAll(worktree, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		repos = append(repos, state.Repository{Name: name, WorktreePath: worktree})
+	}
+	if err := workspace.Write(workspaceFile, repoNames); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SaveSession(featureName, state.Session{FeatureDir: featureDir, WorkspaceFile: workspaceFile, Repos: repos}); err != nil {
+		t.Fatal(err)
+	}
+	return featureDir, workspaceFile
+}
+
+func writeDevcontainerConfig(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"image":"mcr.microsoft.com/devcontainers/base:ubuntu"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// decodeDevcontainerInvocation parses a `--file-uri` editor invocation logged by
+// the stub command, returning the decoded hostPath, the configFile path, and the
+// container path of the opened workspace file.
+func decodeDevcontainerInvocation(t *testing.T, logPath string) (hostPath, configFilePath, containerPath string) {
+	t.Helper()
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(contents)), "\n")
+	if len(lines) != 3 || lines[1] != "--file-uri" {
+		t.Fatalf("editor invocation = %q, want [cwd --file-uri uri]", lines)
+	}
+	const prefix = "vscode-remote://dev-container+"
+	uri := lines[2]
+	if !strings.HasPrefix(uri, prefix) {
+		t.Fatalf("file URI = %q, want prefix %q", uri, prefix)
+	}
+	rest := strings.TrimPrefix(uri, prefix)
+	end := strings.IndexFunc(rest, func(r rune) bool {
+		return !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f'))
+	})
+	if end < 0 {
+		t.Fatalf("file URI = %q, want a container path after the hex authority", uri)
+	}
+	decoded, err := hex.DecodeString(rest[:end])
+	if err != nil {
+		t.Fatalf("hex.DecodeString error = %v", err)
+	}
+	var document struct {
+		HostPath   string `json:"hostPath"`
+		ConfigFile struct {
+			Path string `json:"path"`
+		} `json:"configFile"`
+	}
+	if err := json.Unmarshal(decoded, &document); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", decoded, err)
+	}
+	return document.HostPath, document.ConfigFile.Path, rest[end:]
+}
+
+// assertPathSuffix checks that got, after normalizing separators, ends with
+// want. Host and config paths are translated to Windows form under WSL, so an
+// exact comparison is not portable across environments.
+func assertPathSuffix(t *testing.T, label, got, want string) {
+	t.Helper()
+	normalized := strings.ReplaceAll(got, "\\", "/")
+	if !strings.HasSuffix(normalized, want) {
+		t.Errorf("%s = %q, want a path ending in %q", label, got, want)
+	}
+}
+
+func TestOpenDevcontainerSessionOpensWorkspaceFileWithSuppliedConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	scriptPath, logPath := writeStubCommand(t)
+	writeMainConfig(t, scriptPath, "copilot")
+
+	featureDir, workspaceFile := devcontainerFeature(t, "feature/dev", []string{"api", "web"})
+	configPath := writeDevcontainerConfig(t, filepath.Join(featureDir, "api", ".devcontainer", "devcontainer.json"))
+
+	if err := openDevcontainerSession("feature/dev", configPath); err != nil {
+		t.Fatalf("openDevcontainerSession() error = %v", err)
+	}
+
+	hostPath, configFilePath, containerPath := decodeDevcontainerInvocation(t, logPath)
+	if containerPath != "/workspaces/feature-dev/feature-dev.code-workspace" {
+		t.Errorf("container path = %q, want the workspace file at the default mount location", containerPath)
+	}
+	assertPathSuffix(t, "hostPath", hostPath, featureDir)
+	assertPathSuffix(t, "configFile.path", configFilePath, configPath)
+
+	// The generated workspace file the container opens references every root.
+	generated, err := os.ReadFile(workspaceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{"./api", "./web"} {
+		if !strings.Contains(string(generated), root) {
+			t.Errorf("workspace file = %s, want root %q", generated, root)
+		}
+	}
+}
+
+func TestOpenDevcontainerSessionAcceptsExternalConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	scriptPath, logPath := writeStubCommand(t)
+	writeMainConfig(t, scriptPath, "copilot")
+
+	devcontainerFeature(t, "feature/dev", []string{"service"})
+	// A configuration that lives entirely outside the feature session.
+	externalConfig := writeDevcontainerConfig(t, filepath.Join(t.TempDir(), "shared", "devcontainer.json"))
+
+	if err := openDevcontainerSession("feature/dev", externalConfig); err != nil {
+		t.Fatalf("openDevcontainerSession() error = %v", err)
+	}
+	_, configFilePath, _ := decodeDevcontainerInvocation(t, logPath)
+	assertPathSuffix(t, "configFile.path", configFilePath, externalConfig)
+}
+
+func TestOpenDevcontainerSessionResolvesRelativeConfigAgainstWorkingDir(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	scriptPath, logPath := writeStubCommand(t)
+	writeMainConfig(t, scriptPath, "copilot")
+
+	devcontainerFeature(t, "feature/dev", []string{"service"})
+	workingDir := t.TempDir()
+	writeDevcontainerConfig(t, filepath.Join(workingDir, "devcontainer.json"))
+	t.Chdir(workingDir)
+
+	if err := openDevcontainerSession("feature/dev", "devcontainer.json"); err != nil {
+		t.Fatalf("openDevcontainerSession() error = %v", err)
+	}
+	_, configFilePath, _ := decodeDevcontainerInvocation(t, logPath)
+	resolved, err := filepath.EvalSymlinks(filepath.Join(workingDir, "devcontainer.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPathSuffix(t, "configFile.path", configFilePath, resolved)
+}
+
+func TestOpenDevcontainerSessionRejectsMissingConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	scriptPath, logPath := writeStubCommand(t)
+	writeMainConfig(t, scriptPath, "copilot")
+
+	featureDir, _ := devcontainerFeature(t, "feature/dev", []string{"service"})
+
+	if err := openDevcontainerSession("feature/dev", filepath.Join(featureDir, "missing.json")); err == nil {
+		t.Fatal("openDevcontainerSession() error = nil, want a missing-config error")
+	}
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("editor was invoked, want no host fallback for a missing configuration")
+	}
+}
+
+func TestOpenDevcontainerSessionRejectsNonFileConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	scriptPath, logPath := writeStubCommand(t)
+	writeMainConfig(t, scriptPath, "copilot")
+
+	featureDir, _ := devcontainerFeature(t, "feature/dev", []string{"service"})
+	// A directory is not a usable configuration file.
+	if err := openDevcontainerSession("feature/dev", filepath.Join(featureDir, "service")); err == nil {
+		t.Fatal("openDevcontainerSession() error = nil, want a non-file error")
+	}
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("editor was invoked, want no host fallback for a non-file configuration")
+	}
+}
+
+func TestOpenDevcontainerSessionRejectsUnreadableConfig(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read mode 0000 files")
+	}
+	t.Setenv("HOME", t.TempDir())
+	scriptPath, logPath := writeStubCommand(t)
+	writeMainConfig(t, scriptPath, "copilot")
+
+	featureDir, _ := devcontainerFeature(t, "feature/dev", []string{"service"})
+	unreadable := filepath.Join(featureDir, "unreadable.json")
+	if err := os.WriteFile(unreadable, []byte("{}"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := openDevcontainerSession("feature/dev", unreadable); err == nil {
+		t.Fatal("openDevcontainerSession() error = nil, want an unreadable-config error")
+	}
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("editor was invoked, want no host fallback for an unreadable configuration")
 	}
 }
 

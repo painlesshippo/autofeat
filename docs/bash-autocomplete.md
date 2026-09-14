@@ -73,7 +73,7 @@ The Bash function understands these contexts:
 * Active feature names for `new`, `remove`, `open`, `run`, `sync`, `status`,
   and `teardown`.
 * `--local`, `--remote`, and `--force` for `remove`.
-* `--copilot` for `open`.
+* `--copilot` and `--devcontainer` for `open`.
 * `--cancel` for `sync`.
 * `--force` for `teardown`.
 * `--task` for `run`.
