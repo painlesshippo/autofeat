@@ -25,7 +25,6 @@ func newRootCommand() *cobra.Command {
 		newFeatureCommand(),
 		newRemoveCommand(),
 		newOpenCommand(),
-		newRunCommand(),
 		newSyncCommand(),
 		newStatusCommand(),
 		newTeardownCommand(),
@@ -170,23 +169,6 @@ func newOpenCommand() *cobra.Command {
 	command.MarkFlagsMutuallyExclusive("copilot", "devcontainer")
 	command.ValidArgsFunction = completeFeatureSelectors
 	registerFlagCompletion(command, "devcontainer", completeFilePaths)
-	return command
-}
-
-func newRunCommand() *cobra.Command {
-	var task string
-	command := &cobra.Command{
-		Use:  "run SELECTOR...",
-		Args: cobra.MinimumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			return runSelectedFeatures(args, func(featureName string) error {
-				return runFeatureCommand(featureName, task)
-			})
-		},
-	}
-	command.Flags().StringVar(&task, "task", "", "append an objective to TASK.md")
-	command.ValidArgsFunction = completeFeatureSelectors
-	registerFlagCompletion(command, "task", completeNothing)
 	return command
 }
 

@@ -11,32 +11,6 @@ import (
 	"time"
 )
 
-func TestIsInsideWorkTree(t *testing.T) {
-	requireGit(t)
-
-	outsideRepo := t.TempDir()
-	changeDirectory(t, outsideRepo)
-
-	inside, err := IsInsideWorkTree()
-	if err != nil {
-		t.Fatalf("IsInsideWorkTree() outside repository error = %v", err)
-	}
-	if inside {
-		t.Error("IsInsideWorkTree() outside repository = true, want false")
-	}
-
-	repoPath := createRepository(t)
-	changeDirectory(t, repoPath)
-
-	inside, err = IsInsideWorkTree()
-	if err != nil {
-		t.Fatalf("IsInsideWorkTree() inside repository error = %v", err)
-	}
-	if !inside {
-		t.Error("IsInsideWorkTree() inside repository = false, want true")
-	}
-}
-
 func TestGetRepoRoot(t *testing.T) {
 	requireGit(t)
 

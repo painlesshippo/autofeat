@@ -12,8 +12,7 @@ and open them together in one VS Code workspace.
 * VS Code with the Dev Containers extension and a container runtime such as
   Docker to use `open --devcontainer PATH`. The configured editor command must
   understand `--file-uri`.
-* GitHub Copilot CLI's `copilot` command on `PATH` to use `open --copilot` or
-  the default headless-agent command.
+* GitHub Copilot CLI's `copilot` command on `PATH` to use `open --copilot`.
 * PowerShell 7 to use PowerShell argument completion on Windows.
 
 On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
@@ -40,7 +39,7 @@ On its first use, `autofeat` creates `$HOME/.autofeat/config.json`:
 Set `workspace_base_dir` to choose where feature worktrees and
 `.code-workspace` files are created. Set `editor_cmd` to the executable that
 should receive a workspace-file path. Set `headless_cmd` to the interactive
-agent command used by `open --copilot` and `run`. Set `hooks` to commands that
+agent command used by `open --copilot`. Set `hooks` to commands that
 run at supported lifecycle events. A `post-add` hook runs through `sh` with the
 new local worktree or remote clone as its working directory. Its optional
 `if_files` list limits execution to repositories containing at least one listed
@@ -170,11 +169,10 @@ selectors so the shell passes them to `autofeat` instead of expanding them as
 file names. `remove` instead accepts one exact feature name and one repository,
 given either as a positional worktree name or as a source flag.
 
-Primary targets remain positional: feature names, feature selectors, template
-names, repository names for `remove`, and completion shells. Named flags specify sources, modes, secondary
-inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
-`--template`, and `--ref`; `remove` accepts `--local` or `--remote` instead of a repository name; `run` uses
-`--task`; `sync` uses `--cancel`; and `remove` and `teardown` use `--force`.
+Primary targets remain positional: feature names, feature selectors, template names, repository names for `remove`, and
+completion shells. Named flags specify sources, modes, secondary inputs, or safety overrides. For example, `new` uses
+`--local`, `--remote`, `--template`, and `--ref`; `remove` accepts `--local` or `--remote` instead of a repository name;
+`sync` uses `--cancel`; and `remove` and `teardown` use `--force`.
 
 | Command | Description |
 | --- | --- |
@@ -183,7 +181,6 @@ inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
 | `autofeat new FEATURE --azure-build (ID \| URL) [--azure-org ORG --azure-project PROJECT] [--azure-url URL]` | Create a feature session from the repositories an Azure DevOps build resolved. |
 | `autofeat remove FEATURE (REPO \| --local PATH \| --remote URL) [--force]` | Remove one repository from a feature session. |
 | `autofeat open SELECTOR... [--copilot \| --devcontainer PATH]` | Open matching sessions in the editor, the Dev Container at PATH, or Copilot CLI. |
-| `autofeat run SELECTOR... [--task TEXT]` | Run the configured headless agent for matching sessions. |
 | `autofeat sync SELECTOR...` | Fetch and rebase matching sessions onto their base references. |
 | `autofeat sync SELECTOR... --cancel` | Abort in-progress rebases left by an interrupted synchronization. |
 | `autofeat status [SELECTOR...]` | Inspect repository health; defaults to every session. |
@@ -204,7 +201,7 @@ autofeat config
 ```
 
 Bash and PowerShell completion suggest active feature names for `new`,
-`remove`, `open`, `run`, `sync`, `status`, and `teardown`. This lets `new` add
+`remove`, `open`, `sync`, `status`, and `teardown`. This lets `new` add
 a repository to an existing feature; a feature name that does not exist yet
 remains free-form. Commands that accept multiple selectors omit names already
 selected. Completion also includes each command's supported options.
@@ -437,21 +434,6 @@ prompt:
 
 ```sh
 autofeat open feature/potato --copilot
-```
-
-Run the configured headless agent from a feature directory. When started from
-a Git repository, `run` first adds that repository to the session when it has
-not already been added. The agent inherits the terminal's standard input,
-output, and error streams:
-
-```sh
-autofeat run feature/potato
-```
-
-Append an objective to the feature's `TASK.md` before starting the agent:
-
-```sh
-autofeat run feature/potato --task "Implement the potato feature and add tests"
 ```
 
 Synchronize each repository with its configured base reference:

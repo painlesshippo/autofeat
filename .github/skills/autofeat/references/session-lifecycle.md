@@ -45,20 +45,18 @@ autofeat new bug/repro --azure-build 4821 --azure-org ORG --azure-project PROJ
 - `STATE` values: `ready`, `dirty`, `behind-base`, `unpushed`, `remote-ahead`,
   `remote-diverged`, `rebasing`, `wrong-branch`, `detached`, `missing`, `error`.
 
-## Open And Run
+## Open
 
 ```sh
 autofeat open FEATURE                                  # editor_cmd on .code-workspace
 autofeat open FEATURE --copilot                        # interactive headless_cmd
 autofeat open FEATURE --devcontainer ./x/.devcontainer/devcontainer.json
-autofeat run FEATURE --task "Implement X and add tests" # appends to TASK.md, starts headless_cmd
 ```
 
 - `--devcontainer` is required to be an explicit, readable file path (relative
   to cwd). Autofeat passes it through untouched. The config must mount worktree
   Git metadata if Git is needed inside the container. Requires a VS Code-family
   `editor_cmd` that supports `--file-uri`.
-- Run `run` from outside a Git repo to avoid attaching the current repo.
 
 ## Sync
 
