@@ -5,8 +5,8 @@
 | Source | Command | Result |
 | --- | --- | --- |
 | Current repo | `autofeat new FEATURE` | Git worktree |
-| Other local repo | `--local PATH` (any dir inside the repo) | Git worktree |
-| Remote URL | `--remote URL` (HTTP(S) or SSH) | Fresh clone |
+| Other local repo | `autofeat new FEATURE PATH` (any dir inside the repo) | Git worktree |
+| Remote URL | `autofeat new FEATURE URL` (`http://`, `https://`, `git@`) | Fresh clone |
 | Template | `--template NAME` | All template repos; feature must be new |
 | Azure DevOps build | `--azure-build URL\|ID` | Clone per build repo, pinned to the build's commit |
 
@@ -16,7 +16,9 @@
 - Base ref order: `--ref` > remembered ref for that repo > detected
   `master`/`main` > `default_base_branch`. `--ref` accepts branches, tags,
   SHAs, full refs, and revision expressions, and is remembered per repo.
-- `--template` cannot be combined with `--ref`, `--local`, or `--remote`.
+- Sources are auto-detected: URL prefixes mean remote, anything else is a
+  local path. There are no `--local`/`--remote` flags.
+- `--template` cannot be combined with `--ref` or a positional source.
 - Directory names are flattened (`feature/x` -> `feature-x`). Colliding names
   are rejected; choose another feature name.
 

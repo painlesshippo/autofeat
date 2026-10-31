@@ -72,7 +72,8 @@ The Bash function understands these contexts:
 * Top-level command names.
 * Active feature names for `new`, `remove`, `open`, `sync`, `status`, and
   `teardown`.
-* `--local`, `--remote`, and `--force` for `remove`.
+* Attached worktree names, local paths, and remote URLs, plus `--force`, for
+  `remove`.
 * `--copilot` and `--devcontainer` for `open`.
 * `--cancel` for `sync`.
 * `--force` for `teardown`.

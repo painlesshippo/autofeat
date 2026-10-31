@@ -123,11 +123,16 @@ func TestTemplateCommandArguments(t *testing.T) {
 		{"template", "unknown"},
 		{"template", "show"},
 		{"template", "save", "full-stack", "feature/source"},
-		{"new", "feature/test", "https://example.com/repository.git"},
-		{"new", "feature/test", "--local", "/tmp/repository", "--remote", "https://example.com/repository.git"},
-		{"new", "feature/test", "--local", "/tmp/repository", "--template", "full-stack"},
-		{"new", "feature/test", "--remote", "https://example.com/repository.git", "--template", "full-stack"},
-		{"new", "feature/test", "--remote", "/tmp/repository"},
+		{"new", "feature/test", "https://example.com/repository.git", "--template", "full-stack"},
+		{"new", "feature/test", "/tmp/repository", "--template", "full-stack"},
+		{"new", "feature/test", "/tmp/repository", "--azure-build", "42"},
+		{"new", "feature/test", "/tmp/repository", "--template="},
+		{"new", "feature/test", "/tmp/repository", "--azure-build="},
+		{"new", "feature/test", ""},
+		{"new", "feature/test", "/tmp/repository", "extra"},
+		{"new", "feature/test", "--local", "/tmp/repository"},
+		{"new", "feature/test", "--remote", "https://example.com/repository.git"},
+		{"new", "feature/test", "--template", "full-stack", "--azure-build", "42"},
 		{"new", "feature/test", "--template"},
 		{"new", "feature/test", "--unknown", "full-stack"},
 		{"new", "feature/test", "--template", "full-stack", "--ref", "develop"},
@@ -259,13 +264,13 @@ func TestCobraCompletionProtocol(t *testing.T) {
 	command = newRootCommand()
 	command.SetOut(&output)
 	command.SetErr(&errorOutput)
-	command.SetArgs([]string{"__complete", "remove", "feature/zulu", "--local", "/tmp", "-"})
+	command.SetArgs([]string{"__complete", "remove", "feature/zulu", "-"})
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Cobra remove flag completion error = %v", err)
 	}
 	for _, flag := range []string{"--local", "--remote"} {
 		if strings.Contains(output.String(), flag) {
-			t.Errorf("Cobra remove completion offered mutually exclusive %s:\n%s", flag, output.String())
+			t.Errorf("Cobra remove completion offered removed flag %s:\n%s", flag, output.String())
 		}
 	}
 
@@ -274,14 +279,12 @@ func TestCobraCompletionProtocol(t *testing.T) {
 	command = newRootCommand()
 	command.SetOut(&output)
 	command.SetErr(&errorOutput)
-	command.SetArgs([]string{"__complete", "new", "feature/new", "--local", "/tmp", "-"})
+	command.SetArgs([]string{"__complete", "new", "feature/new", ""})
 	if err := command.Execute(); err != nil {
-		t.Fatalf("Cobra local flag completion error = %v", err)
+		t.Fatalf("Cobra new source completion error = %v", err)
 	}
-	for _, flag := range []string{"--local", "--remote", "--template"} {
-		if strings.Contains(output.String(), flag) {
-			t.Errorf("Cobra completion offered mutually exclusive %s:\n%s", flag, output.String())
-		}
+	if got, want := output.String(), fmt.Sprintf(":%d\n", cobra.ShellCompDirectiveFilterDirs); got != want {
+		t.Errorf("Cobra new source completion = %q, want %q", got, want)
 	}
 
 	_, directive := completeDirectories(nil, nil, "")
@@ -367,21 +370,37 @@ func TestStatusCommandDispatch(t *testing.T) {
 
 func TestRemoveCommandDispatch(t *testing.T) {
 	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
 	repositoryPath := createMainRepository(t)
 	nestedPath := filepath.Join(repositoryPath, "nested")
 	if err := os.Mkdir(nestedPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	unattachedPath := createMainRepository(t)
+	if err := state.SaveSession("feature/remove", state.Session{Repos: []state.Repository{{
+		Name:         filepath.Base(repositoryPath),
+		OriginalPath: repositoryPath,
+		WorktreePath: filepath.Join(t.TempDir(), filepath.Base(repositoryPath)),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
 
 	originalRemoveRepositoryCommand := removeRepositoryCommand
+	originalRemoveRepositoryByNameCommand := removeRepositoryByNameCommand
 	t.Cleanup(func() {
 		removeRepositoryCommand = originalRemoveRepositoryCommand
+		removeRepositoryByNameCommand = originalRemoveRepositoryByNameCommand
 	})
 
 	var gotFeatureName string
 	var gotRepositorySource string
 	var gotRemote bool
 	var gotForce bool
+	var gotName string
+	reset := func() {
+		gotFeatureName, gotRepositorySource, gotName = "", "", ""
+		gotRemote, gotForce = false, false
+	}
 	removeRepositoryCommand = func(featureName, repositorySource string, remote, force bool) error {
 		gotFeatureName = featureName
 		gotRepositorySource = repositorySource
@@ -389,32 +408,45 @@ func TestRemoveCommandDispatch(t *testing.T) {
 		gotForce = force
 		return nil
 	}
-
-	if err := run([]string{"remove", "feature/remove", "--local", nestedPath, "--force"}); err != nil {
-		t.Fatalf("run(remove --local) error = %v", err)
-	}
-	if gotFeatureName != "feature/remove" || gotRepositorySource != repositoryPath || gotRemote || !gotForce {
-		t.Errorf("local remove dispatch = (%q, %q, %t, %t), want feature, repository root, local, force", gotFeatureName, gotRepositorySource, gotRemote, gotForce)
-	}
-
-	if err := run([]string{"remove", "feature/remove", "--remote", "https://example.com/repository.git/"}); err != nil {
-		t.Fatalf("run(remove --remote) error = %v", err)
-	}
-	if gotRepositorySource != "https://example.com/repository.git" || !gotRemote || gotForce {
-		t.Errorf("remote remove dispatch = (%q, %t, %t), want normalized remote without force", gotRepositorySource, gotRemote, gotForce)
-	}
-
-	originalRemoveRepositoryByNameCommand := removeRepositoryByNameCommand
-	t.Cleanup(func() {
-		removeRepositoryByNameCommand = originalRemoveRepositoryByNameCommand
-	})
-	var gotName string
 	removeRepositoryByNameCommand = func(featureName, name string, force bool) error {
 		gotFeatureName = featureName
 		gotName = name
 		gotForce = force
 		return nil
 	}
+
+	if err := run([]string{"remove", "feature/remove", nestedPath, "--force"}); err != nil {
+		t.Fatalf("run(remove PATH) error = %v", err)
+	}
+	if gotFeatureName != "feature/remove" || gotRepositorySource != repositoryPath || gotRemote || !gotForce || gotName != "" {
+		t.Errorf("local remove dispatch = (%q, %q, %t, %t), want feature, repository root, local, force", gotFeatureName, gotRepositorySource, gotRemote, gotForce)
+	}
+
+	reset()
+	if err := run([]string{"remove", "feature/remove", "https://example.com/repository.git/"}); err != nil {
+		t.Fatalf("run(remove URL) error = %v", err)
+	}
+	if gotRepositorySource != "https://example.com/repository.git" || !gotRemote || gotForce || gotName != "" {
+		t.Errorf("remote remove dispatch = (%q, %t, %t), want normalized remote without force", gotRepositorySource, gotRemote, gotForce)
+	}
+
+	reset()
+	if err := run([]string{"remove", "feature/remove", unattachedPath}); err != nil {
+		t.Fatalf("run(remove unattached PATH) error = %v", err)
+	}
+	if gotName != unattachedPath || gotRepositorySource != "" {
+		t.Errorf("unattached path dispatch = (name %q, source %q), want name fallback", gotName, gotRepositorySource)
+	}
+
+	reset()
+	if err := run([]string{"remove", "feature/named", " repo1"}); err != nil {
+		t.Fatalf("run(remove ' repo1') error = %v", err)
+	}
+	if gotName != " repo1" {
+		t.Errorf("named remove dispatch selected %q, want literal %q", gotName, " repo1")
+	}
+
+	reset()
 	if err := run([]string{"remove", "feature/named", "repo1", "--force"}); err != nil {
 		t.Fatalf("run(remove REPO) error = %v", err)
 	}
@@ -427,10 +459,9 @@ func TestRemoveCommandArguments(t *testing.T) {
 	invalid := [][]string{
 		{"remove"},
 		{"remove", "feature/remove"},
-		{"remove", "feature/remove", "--local", ".", "--remote", "https://example.com/repository.git"},
-		{"remove", "feature/remove", "--remote", "/tmp/repository"},
-		{"remove", "feature/remove", "extra", "--remote", "https://example.com/repository.git"},
-		{"remove", "feature/remove", "extra", "--local", "."},
+		{"remove", "feature/remove", ""},
+		{"remove", "feature/remove", "--local", "."},
+		{"remove", "feature/remove", "--remote", "https://example.com/repository.git"},
 		{"remove", "feature/remove", "repo1", "repo2"},
 	}
 	for _, args := range invalid {
@@ -1875,8 +1906,8 @@ func TestNewLocalPathResolvesRepositoryRootAndRef(t *testing.T) {
 	}
 	t.Chdir(parentPath)
 
-	if err := run([]string{"new", "feature/local-path", "--local", filepath.Join("repository", "nested"), "--ref", "develop"}); err != nil {
-		t.Fatalf("run(new --local --ref) error = %v", err)
+	if err := run([]string{"new", "feature/local-path", filepath.Join("repository", "nested"), "--ref", "develop"}); err != nil {
+		t.Fatalf("run(new PATH --ref) error = %v", err)
 	}
 	session, err := state.GetSession("feature/local-path")
 	if err != nil {
@@ -1898,6 +1929,45 @@ func TestNewLocalPathResolvesRepositoryRootAndRef(t *testing.T) {
 	}
 }
 
+func TestNewLocalPathIsNotTrimmed(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	parentPath := t.TempDir()
+	for _, name := range []string{" repo", "repo"} {
+		if err := os.Rename(createMainRepository(t), filepath.Join(parentPath, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(parentPath)
+
+	if err := run([]string{"new", "feature/spaced", " repo"}); err != nil {
+		t.Fatalf("run(new ' repo') error = %v", err)
+	}
+	session, err := state.GetSession("feature/spaced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := session.Repos[0].OriginalPath, filepath.Join(parentPath, " repo"); got != want {
+		t.Errorf("attached repository = %q, want %q", got, want)
+	}
+}
+
+func TestNewSourceRejectsExplicitEmptySourceModeFlags(t *testing.T) {
+	requireMainGit(t)
+	for _, flag := range []string{"--template=", "--azure-build="} {
+		t.Run(flag, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			repositoryPath := createMainRepository(t)
+			if err := run([]string{"new", "feature/conflict", repositoryPath, flag}); err == nil {
+				t.Fatalf("run(new PATH %s) error = nil, want usage error", flag)
+			}
+			if _, err := state.GetSession("feature/conflict"); !errors.Is(err, state.ErrSessionNotFound) {
+				t.Errorf("GetSession() error = %v, want ErrSessionNotFound", err)
+			}
+		})
+	}
+}
+
 func TestNewRemoteURLUsesRequestedBranch(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
@@ -1912,8 +1982,8 @@ func TestNewRemoteURLUsesRequestedBranch(t *testing.T) {
 	runMainGit(t, sourcePath, "config", "--global", "url."+localRemoteURL+".insteadOf", remoteURL)
 	t.Chdir(t.TempDir())
 
-	if err := run([]string{"new", "feature/remote-ref", "--remote", remoteURL, "--ref", "develop"}); err != nil {
-		t.Fatalf("run(new --remote --ref) error = %v", err)
+	if err := run([]string{"new", "feature/remote-ref", remoteURL, "--ref", "develop"}); err != nil {
+		t.Fatalf("run(new URL --ref) error = %v", err)
 	}
 	session, err := state.GetSession("feature/remote-ref")
 	if err != nil {
@@ -2893,17 +2963,22 @@ func TestRemoveCompletesSessionRepositories(t *testing.T) {
 	}
 
 	command := newRemoveCommand()
-	got, _ := completeSessionRepositoryNames(command, []string{"feature/complete-remove"}, "")
-	want := []string{filepath.Base(session.Repos[0].WorktreePath), filepath.Base(session.Repos[1].WorktreePath)}
+	got, directive := completeSessionRepositories(command, []string{"feature/complete-remove"}, "")
+	want := []string{
+		filepath.Base(session.Repos[0].WorktreePath),
+		filepath.Base(session.Repos[1].WorktreePath),
+		localPath,
+		remotePath,
+	}
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("repository name completion = %q, want %q", got, want)
+		t.Errorf("repository completion = %q, want %q", got, want)
 	}
-	if got, _ := completeSessionLocalRepositories(command, []string{"feature/complete-remove"}, ""); !reflect.DeepEqual(got, []string{localPath}) {
-		t.Errorf("--local completion = %q, want %q", got, []string{localPath})
+	if directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Errorf("repository completion directive = %v, want NoFileComp", directive)
 	}
-	if got, _ := completeSessionRemoteRepositories(command, []string{"feature/complete-remove"}, ""); !reflect.DeepEqual(got, []string{remotePath}) {
-		t.Errorf("--remote completion = %q, want %q", got, []string{remotePath})
+	if got, _ := completeSessionRepositories(command, []string{"feature/complete-remove"}, localPath); !reflect.DeepEqual(got, []string{localPath}) {
+		t.Errorf("local path completion = %q, want %q", got, []string{localPath})
 	}
 }
 

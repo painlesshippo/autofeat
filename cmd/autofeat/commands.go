@@ -3,10 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
-	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/spf13/cobra"
 )
 
@@ -38,8 +36,6 @@ func newRootCommand() *cobra.Command {
 }
 
 func newFeatureCommand() *cobra.Command {
-	var localPath string
-	var remoteURL string
 	var templateName string
 	var baseBranch string
 	var azureBuild string
@@ -47,12 +43,16 @@ func newFeatureCommand() *cobra.Command {
 	var azureProject string
 	var azureURL string
 	command := &cobra.Command{
-		Use:  "new FEATURE",
-		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		Use:  "new FEATURE [SOURCE]",
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(command *cobra.Command, args []string) error {
 			featureName := args[0]
-			if remoteURL != "" && !isRemoteURL(remoteURL) {
-				return usageError()
+			source := ""
+			if len(args) == 2 {
+				source = args[1]
+				if source == "" || command.Flags().Changed("template") || command.Flags().Changed("azure-build") {
+					return usageError()
+				}
 			}
 			if azureBuild == "" && (azureOrg != "" || azureProject != "" || azureURL != "") {
 				return usageError()
@@ -66,29 +66,25 @@ func newFeatureCommand() *cobra.Command {
 			if azureBuild != "" {
 				return addAzureBuildWorkspace(featureName, azureBuild, azureOrg, azureProject, azureURL)
 			}
-			if localPath != "" {
-				return addLocalRepositoryWithRef(featureName, localPath, baseBranch)
+			if source == "" {
+				return addRepositoryWithRef(featureName, baseBranch)
 			}
-			if remoteURL != "" {
-				return addRemoteRepositoryWithRef(featureName, remoteURL, baseBranch)
+			if isRemoteURL(source) {
+				return addRemoteRepositoryWithRef(featureName, source, baseBranch)
 			}
-			return addRepositoryWithRef(featureName, baseBranch)
+			return addLocalRepositoryWithRef(featureName, source, baseBranch)
 		},
 	}
-	command.Flags().StringVar(&localPath, "local", "", "local repository path")
-	command.Flags().StringVar(&remoteURL, "remote", "", "remote repository URL")
 	command.Flags().StringVar(&templateName, "template", "", "create the feature from a template")
 	command.Flags().StringVar(&baseBranch, "ref", "", "base Git reference")
 	command.Flags().StringVar(&azureBuild, "azure-build", "", "Azure DevOps build id or build results URL")
 	command.Flags().StringVar(&azureOrg, "azure-org", "", "Azure DevOps organization (with a numeric --azure-build)")
 	command.Flags().StringVar(&azureProject, "azure-project", "", "Azure DevOps project (with a numeric --azure-build)")
 	command.Flags().StringVar(&azureURL, "azure-url", "", "Azure DevOps instance base URL (default https://dev.azure.com)")
-	command.MarkFlagsMutuallyExclusive("local", "remote", "template", "azure-build")
+	command.MarkFlagsMutuallyExclusive("template", "azure-build")
 	command.MarkFlagsMutuallyExclusive("template", "ref")
 	command.MarkFlagsMutuallyExclusive("azure-build", "ref")
-	command.ValidArgsFunction = completeFeatureName
-	registerFlagCompletion(command, "local", completeDirectories)
-	registerFlagCompletion(command, "remote", completeNothing)
+	command.ValidArgsFunction = completeNewFeatureArguments
 	registerFlagCompletion(command, "template", completeTemplateNames)
 	registerFlagCompletion(command, "ref", completeNothing)
 	registerFlagCompletion(command, "azure-build", completeNothing)
@@ -99,46 +95,26 @@ func newFeatureCommand() *cobra.Command {
 }
 
 func newRemoveCommand() *cobra.Command {
-	var localPath string
-	var remoteURL string
 	var force bool
 	command := &cobra.Command{
-		Use:  "remove FEATURE [REPO]",
-		Args: cobra.RangeArgs(1, 2),
-		RunE: func(command *cobra.Command, args []string) error {
-			selectorCount := len(args) - 1
-			if command.Flags().Changed("local") {
-				selectorCount++
-			}
-			if command.Flags().Changed("remote") {
-				selectorCount++
-			}
-			if selectorCount != 1 {
+		Use:  "remove FEATURE REPO",
+		Args: cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			featureName, repository := args[0], args[1]
+			if repository == "" {
 				return usageError()
 			}
-			if len(args) == 2 {
-				return removeRepositoryByNameCommand(args[0], args[1], force)
+			if isRemoteURL(repository) {
+				return removeRepositoryCommand(featureName, normalizeRemoteRepositoryURL(repository), true, force)
 			}
-			if remoteURL != "" && !isRemoteURL(remoteURL) {
-				return usageError()
+			if repositoryRoot, ok := attachedLocalRepositoryRoot(featureName, repository); ok {
+				return removeRepositoryCommand(featureName, repositoryRoot, false, force)
 			}
-			if localPath != "" {
-				repositoryRoot, err := gitcmd.GetRepoRootAt(localPath)
-				if err != nil {
-					return err
-				}
-				return removeRepositoryCommand(args[0], filepath.Clean(repositoryRoot), false, force)
-			}
-			return removeRepositoryCommand(args[0], normalizeRemoteRepositoryURL(remoteURL), true, force)
+			return removeRepositoryByNameCommand(featureName, repository, force)
 		},
 	}
-	command.Flags().StringVar(&localPath, "local", "", "local repository path")
-	command.Flags().StringVar(&remoteURL, "remote", "", "remote repository URL")
 	command.Flags().BoolVar(&force, "force", false, "discard uncommitted changes")
-	command.MarkFlagsMutuallyExclusive("local", "remote")
-	command.ValidArgsFunction = completeSessionRepositoryNames
-	registerFlagCompletion(command, "local", completeSessionLocalRepositories)
-	registerFlagCompletion(command, "remote", completeSessionRemoteRepositories)
+	command.ValidArgsFunction = completeSessionRepositories
 	return command
 }
 

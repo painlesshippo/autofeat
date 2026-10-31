@@ -6,12 +6,13 @@ Always run `autofeat status FEATURE` before a destructive operation.
 
 ```sh
 autofeat remove FEATURE repo1                 # worktree directory name
-autofeat remove FEATURE --local /path/inside/repo
-autofeat remove FEATURE --remote URL
+autofeat remove FEATURE /path/inside/repo     # attached local repo
+autofeat remove FEATURE URL                   # remote clone
 ```
 
-- `REPO` matches the worktree directory first, then the repository name. It
-  fails if several repos share that name.
+- URLs match remote clones. A directory inside an attached local repo selects
+  it. Otherwise `REPO` matches the worktree directory first, then the
+  repository name. It fails if several repos share that name.
 - The local feature branch is kept.
 - Removing the last repo tears down the session (`post-teardown` hooks run).
 - A worktree that was deleted by hand is dropped from the session. A locked

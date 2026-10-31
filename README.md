@@ -167,19 +167,20 @@ existing-session commands accept exact feature names, multiple selectors,
 `"*"` for every feature, and patterns such as `"feature/*"`. Quote wildcard
 selectors so the shell passes them to `autofeat` instead of expanding them as
 file names. `remove` instead accepts one exact feature name and one repository,
-given either as a positional worktree name or as a source flag.
+given as a worktree name, a local path, or a remote URL.
 
-Primary targets remain positional: feature names, feature selectors, template names, repository names for `remove`, and
-completion shells. Named flags specify sources, modes, secondary inputs, or safety overrides. For example, `new` uses
-`--local`, `--remote`, `--template`, and `--ref`; `remove` accepts `--local` or `--remote` instead of a repository name;
-`sync` uses `--cancel`; and `remove` and `teardown` use `--force`.
+Primary targets remain positional: feature names, feature selectors, template names, repository sources for `new` and
+`remove`, and completion shells. Repository sources are detected automatically: values starting with `http://`,
+`https://`, or `git@` are remote URLs, and anything else is a local path. Named flags specify modes, secondary inputs,
+or safety overrides. For example, `new` uses `--template` and `--ref`; `sync` uses `--cancel`; and `remove` and
+`teardown` use `--force`.
 
 | Command | Description |
 | --- | --- |
-| `autofeat new FEATURE [--local PATH \| --remote URL] [--ref REF]` | Create a feature session or add a repository to one. |
+| `autofeat new FEATURE [PATH \| URL] [--ref REF]` | Create a feature session or add a repository to one. |
 | `autofeat new FEATURE --template NAME` | Create a feature session from a saved template. |
 | `autofeat new FEATURE --azure-build (ID \| URL) [--azure-org ORG --azure-project PROJECT] [--azure-url URL]` | Create a feature session from the repositories an Azure DevOps build resolved. |
-| `autofeat remove FEATURE (REPO \| --local PATH \| --remote URL) [--force]` | Remove one repository from a feature session. |
+| `autofeat remove FEATURE (REPO \| PATH \| URL) [--force]` | Remove one repository from a feature session. |
 | `autofeat open SELECTOR... [--copilot \| --devcontainer PATH]` | Open matching sessions in the editor, the Dev Container at PATH, or Copilot CLI. |
 | `autofeat sync SELECTOR...` | Fetch and rebase matching sessions onto their base references. |
 | `autofeat sync SELECTOR... --cancel` | Abort in-progress rebases left by an interrupted synchronization. |
@@ -257,14 +258,14 @@ session, and regenerates its VS Code workspace. Feature names use valid Git
 branch syntax, so hierarchical names such as `feature/potato` and
 `bug/f321s-aaa` are supported.
 
-With no repository source flag, `new` uses the Git repository containing the
-current directory. Use `--local` to select another local repository without
+With no repository source, `new` uses the Git repository containing the
+current directory. Pass a local path to select another local repository without
 changing directories. The path may be the repository root or a directory
 inside it:
 
 ```sh
-autofeat new feature/potato --local ~/sources/repo1
-autofeat new feature/potato --local ../repo2/packages/api --ref develop
+autofeat new feature/potato ~/sources/repo1
+autofeat new feature/potato ../repo2/packages/api --ref develop
 ```
 
 Local repositories always use Git worktrees; they are not cloned.
@@ -308,13 +309,14 @@ cd ~/sources/repo2
 autofeat new feature/potato
 ```
 
-Add a remote repository to a feature from any directory with `--remote` and an
-HTTP(S) or Git SSH URL. `autofeat` always clones it into the feature directory,
-even when another local clone exists, and creates the supplied feature branch:
+Add a remote repository to a feature from any directory by passing an HTTP(S)
+or Git SSH URL (`http://`, `https://`, or `git@`). `autofeat` always clones it
+into the feature directory, even when another local clone exists, and creates
+the supplied feature branch:
 
 ```sh
-autofeat new feature/potato --remote https://github.com/example/repo3.git
-autofeat new feature/other --remote https://github.com/example/repo3.git --ref develop
+autofeat new feature/potato https://github.com/example/repo3.git
+autofeat new feature/other https://github.com/example/repo3.git --ref develop
 ```
 
 Remote repository preferences are remembered by their normalized URL.
@@ -354,7 +356,7 @@ covers every REST call autofeat makes to resolve the build (build, definition,
 and pipeline run). The token is only ever sent as an Authorization header and is
 never written to session metadata, printed, or embedded in a stored clone URL.
 Cloning and fetching are separate and use Git's normal credential configuration,
-exactly like `--remote`, so configure a Git credential helper (or SSH keys) with
+exactly like adding a remote URL, so configure a Git credential helper (or SSH keys) with
 read access to every repository the build uses. A personal access token reused
 as the Git password for Azure Repos over HTTPS needs **Code (Read)** scope for
 that clone step; the Build (Read) REST token does not clone.
@@ -536,18 +538,19 @@ autofeat version
 ```
 
 Remove one repository from a feature by its worktree directory name inside the
-feature (for example `repo1` or `repo1-parent`), or by specifying the same
-source used to add it:
+feature (for example `repo1` or `repo1-parent`), or by the same local path or
+remote URL used to add it:
 
 ```sh
 autofeat remove feature/potato repo1
-autofeat remove feature/potato --local ~/sources/repo1
-autofeat remove feature/potato --remote https://github.com/example/repo3.git
+autofeat remove feature/potato ~/sources/repo1
+autofeat remove feature/potato https://github.com/example/repo3.git
 ```
 
-A `REPO` name that matches no worktree directory falls back to the repository
-name and fails when several repositories share it. A local path may point
-anywhere inside the original repository. Removal stops
+URLs are matched against remote clones. Otherwise, a value that is a directory
+inside an attached local repository selects that repository; anything else is
+treated as a worktree directory name, then a repository name, and fails when
+several repositories share that name. Removal stops
 when the selected worktree has uncommitted changes; use `--force` to discard
 them. Before deleting a remote clone, `autofeat` warns about commits that have
 not been pushed. If a worktree was already deleted by hand, removal drops it

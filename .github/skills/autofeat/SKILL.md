@@ -14,7 +14,7 @@ session id and the Git branch name in every repository.
 | Intent | Command |
 | --- | --- |
 | Create session / add current repo | `autofeat new FEATURE [--ref REF]` |
-| Add another local repo or a remote | `autofeat new FEATURE --local PATH` / `--remote URL` |
+| Add another local repo or a remote | `autofeat new FEATURE (PATH \| URL)` (auto-detected) |
 | Create from template | `autofeat new FEATURE --template NAME` |
 | Create from Azure DevOps build | `autofeat new FEATURE --azure-build (URL \| ID --azure-org ORG --azure-project PROJ)` |
 | List sessions (offline) | `autofeat list` |
@@ -24,7 +24,7 @@ session id and the Git branch name in every repository.
 | Open interactive agent | `autofeat open SELECTOR... --copilot` |
 | Fetch and rebase onto base | `autofeat sync SELECTOR...` |
 | Abort a stuck sync rebase | `autofeat sync SELECTOR... --cancel` |
-| Detach one repo | `autofeat remove FEATURE (REPO \| --local PATH \| --remote URL)` |
+| Detach one repo | `autofeat remove FEATURE (REPO \| PATH \| URL)` |
 | Delete sessions | `autofeat teardown SELECTOR...` |
 | Templates | `autofeat template save NAME --from FEATURE`, `template list`, `template show NAME` |
 | Edit config/hooks | `autofeat config` |
