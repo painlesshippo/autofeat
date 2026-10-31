@@ -6,6 +6,12 @@ The [`autofeat`](autofeat/SKILL.md) skill teaches compatible agents how to use
 the installed CLI across project workspaces. Release and source installers copy
 it to `$HOME/.agents/skills/autofeat`.
 
+## Markdown
+
+The [`markdown`](markdown/SKILL.md) skill documents the Markdown conventions
+enforced by `.rumdl.toml` so agents produce files that pass the rumdl
+pre-commit check on the first attempt.
+
 ## Go development
 
 Vendored from [samber/cc-skills-golang](https://github.com/samber/cc-skills-golang)
