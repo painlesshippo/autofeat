@@ -1,56 +1,46 @@
 # Templates And Configuration
 
-## Reuse Repository Groups
-
-Save the ordered local and remote repository sources from an active session:
+## Templates
 
 ```sh
-autofeat template save full-stack --from feature/name
-```
-
-Discover and inspect templates:
-
-```sh
+autofeat template save full-stack --from FEATURE
 autofeat template list
 autofeat template show full-stack
-```
-
-Create a new session from every repository in a template:
-
-```sh
 autofeat new feature/other --template full-stack
 ```
 
-Template creation requires a feature name that has no existing session. It
-retains source paths and URLs in repository order, but not generated worktree
-paths, base references, or the original feature name. Autofeat validates all
-sources before creation and rolls back repositories created for the new
-session if a later addition fails.
+- Templates store ordered local paths and remote URLs only. They do not store
+  worktree paths, base refs, or the feature name.
+- All sources are validated before anything is created. A later failure rolls
+  back repos already created.
+- Normal base-ref selection and `post-add` hooks apply.
 
-Normal base-reference selection and `post-add` hooks apply to every template
-repository. `--template` cannot be combined with `--ref`, `--local`, or
-`--remote`.
+## Files Under `$HOME/.autofeat`
 
-## Edit Global Configuration
+| File | Contents |
+| --- | --- |
+| `config.json` | Global settings (`autofeat config` opens it) |
+| `state.json` | Sessions, `default_base_branch`, remembered `repository_base_branches` |
+| `templates.json` | Saved templates |
 
-Open `$HOME/.autofeat/config.json` in the configured editor with:
+Every file has a `schema_version`, and unknown fields are rejected. Keep the
+version and existing fields if you edit one.
 
-```sh
-autofeat config
+## config.json
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `workspace_base_dir` | `~/.autofeat-workspaces` | Parent of feature directories |
+| `editor_cmd` | `code` | Used by `open`, `config`, and `open --devcontainer` (must support `--file-uri`) |
+| `headless_cmd` | `copilot` | Used by `open --copilot` and `run` |
+| `hooks` | mise trust/install | Lifecycle commands; `[]` disables all |
+
+Hook shape:
+
+```json
+{ "when": "post-add", "if_files": ["mise.toml", ".mise.toml"], "run": "mise trust && mise install" }
 ```
 
-The main fields are:
-
-| Field | Purpose |
-| --- | --- |
-| `workspace_base_dir` | Parent directory for feature worktrees and workspace files |
-| `editor_cmd` | Executable used by `autofeat open` and `autofeat config` |
-| `headless_cmd` | Interactive or headless agent executable used by `open --copilot` and `run` |
-| `hooks` | Commands run at supported lifecycle events |
-
-Preserve `schema_version` and existing fields when editing. Unknown fields are
-rejected. Set `hooks` to an empty array to disable all hooks.
-
-The default `post-add` hook runs `mise trust && mise install` only when the new
-repository contains `mise.toml` or `.mise.toml`. Hook commands run through
-`sh`, with the new worktree or clone as their working directory.
+- `when`: `post-add` (runs in the new worktree/clone) or `post-teardown`.
+- `if_files` (optional): run only if the repo contains at least one listed file.
+- `run`: executed with `sh`.

@@ -1,51 +1,57 @@
 ---
 name: autofeat
-description: "Manage disposable Git worktree sessions for concurrent AI-agent feature development. Use when creating, opening, running, inspecting, syncing, templating, removing, or tearing down autofeat feature sessions."
+description: "Manage disposable Git worktree sessions for concurrent AI-agent feature development. Use when creating, opening, running, inspecting, syncing, templating, removing, or tearing down autofeat feature sessions, including sessions built from Azure DevOps builds or opened in Dev Containers."
 ---
 
 # Autofeat
 
-Use `autofeat` to manage a feature session containing one or more repository
-worktrees. Treat the feature name as both the session identifier and the Git
-branch name.
+A feature session groups one worktree or clone per repository under
+`<workspace_base_dir>/<flattened-feature>/`. The feature name is both the
+session id and the Git branch name in every repository.
 
-## Route The Request
+## Commands
 
-| User intent | Command |
+| Intent | Command |
 | --- | --- |
-| Create a session or attach a repository | `autofeat new` |
-| Open a session in an editor or interactive agent | `autofeat open` |
-| append an objective and start the headless agent | `autofeat run` |
-| Discover or inspect sessions | `autofeat list`, `autofeat status` |
-| Rebase clean worktrees onto their base references | `autofeat sync` |
-| Detach one repository | `autofeat remove` |
-| Delete an entire session | `autofeat teardown` |
-| Save or instantiate a repository group | `autofeat template`, `autofeat new --template` |
-| Edit global settings and hooks | `autofeat config` |
+| Create session / add current repo | `autofeat new FEATURE [--ref REF]` |
+| Add another local repo or a remote | `autofeat new FEATURE --local PATH` / `--remote URL` |
+| Create from template | `autofeat new FEATURE --template NAME` |
+| Create from Azure DevOps build | `autofeat new FEATURE --azure-build (URL \| ID --azure-org ORG --azure-project PROJ)` |
+| List sessions (offline) | `autofeat list` |
+| Inspect repo health (offline) | `autofeat status [SELECTOR...]` |
+| Open in editor | `autofeat open SELECTOR...` |
+| Open in Dev Container | `autofeat open SELECTOR... --devcontainer PATH/devcontainer.json` |
+| Open interactive agent | `autofeat open SELECTOR... --copilot` |
+| Run headless agent | `autofeat run SELECTOR... [--task TEXT]` |
+| Fetch and rebase onto base | `autofeat sync SELECTOR...` |
+| Abort a stuck sync rebase | `autofeat sync SELECTOR... --cancel` |
+| Detach one repo | `autofeat remove FEATURE (REPO \| --local PATH \| --remote URL)` |
+| Delete sessions | `autofeat teardown SELECTOR...` |
+| Templates | `autofeat template save NAME --from FEATURE`, `template list`, `template show NAME` |
+| Edit config/hooks | `autofeat config` |
 
-Read [Session Lifecycle](./references/session-lifecycle.md) for creation,
-selectors, opening, running, status, and synchronization.
+`SELECTOR` is an exact name, several names, or a quoted wildcard
+(`"feature/*"`, `"*"`). `remove` takes one exact feature only.
 
-Read [Safety And Recovery](./references/safety-and-recovery.md) before removal,
-teardown, forced cleanup, or rebase recovery.
+## Rules
 
-Read [Templates And Configuration](./references/templates-and-config.md) when
-reusing repository groups or changing editor, agent, workspace, and hook
-settings.
+1. Discover first: `autofeat list`, then `autofeat status FEATURE`. Both are
+   offline and read-only.
+2. Quote wildcard selectors.
+3. Mutating commands: `new`, `run` (attaches the current repo when invoked
+   inside one), `sync`, `remove`, `teardown`. State what will change first.
+4. Never pass `--force` without explicit user authorization to discard
+   changes. "Remove" or "tear down" alone is not authorization.
+5. Surface autofeat's warnings verbatim (dirty worktrees, unpushed commits in
+   remote clones, rebase conflicts, hook failures).
+6. Do not hand-edit `$HOME/.autofeat/*.json` unless the user asks; prefer CLI
+   commands.
 
-## Operating Rules
+## References
 
-1. Confirm `autofeat` is available before relying on it.
-2. Use `autofeat list` to discover session names and `autofeat status` to
-   inspect repository health. Both are offline.
-3. Quote selectors containing `*` so the shell does not expand them.
-4. Prefer explicit `--local`, `--remote`, and `--ref` arguments when context is
-   ambiguous.
-5. Explain mutations before running them. `new`, `run` from inside a Git
-   repository, `sync`, `remove`, and `teardown` can modify local state.
-6. Never add `--force` unless the user explicitly authorizes discarding local
-   changes. A general request to remove or tear down a session is not force
-   authorization.
-7. Report the command result and any recovery instructions printed by
-   `autofeat`; do not hide warnings about dirty worktrees, rebases, or unpushed
-   commits.
+- [Session Lifecycle](./references/session-lifecycle.md): creation sources,
+  base refs, Azure DevOps, opening, running, `list`/`status` output, sync.
+- [Safety And Recovery](./references/safety-and-recovery.md): remove,
+  teardown, `--force`, rebase conflicts, hook failures.
+- [Templates And Configuration](./references/templates-and-config.md):
+  templates, `config.json` fields, hooks, state files.
