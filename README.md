@@ -167,13 +167,13 @@ Commands use `autofeat <command> [feature-selector ...]`. Selector-based
 existing-session commands accept exact feature names, multiple selectors,
 `"*"` for every feature, and patterns such as `"feature/*"`. Quote wildcard
 selectors so the shell passes them to `autofeat` instead of expanding them as
-file names. `remove` instead accepts one exact feature name and one repository
-source.
+file names. `remove` instead accepts one exact feature name and one repository,
+given either as a positional worktree name or as a source flag.
 
 Primary targets remain positional: feature names, feature selectors, template
-names, and completion shells. Named flags specify sources, modes, secondary
+names, repository names for `remove`, and completion shells. Named flags specify sources, modes, secondary
 inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
-`--template`, and `--ref`; `remove` uses `--local` or `--remote`; `run` uses
+`--template`, and `--ref`; `remove` accepts `--local` or `--remote` instead of a repository name; `run` uses
 `--task`; `sync` uses `--cancel`; and `remove` and `teardown` use `--force`.
 
 | Command | Description |
@@ -181,7 +181,7 @@ inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
 | `autofeat new FEATURE [--local PATH \| --remote URL] [--ref REF]` | Create a feature session or add a repository to one. |
 | `autofeat new FEATURE --template NAME` | Create a feature session from a saved template. |
 | `autofeat new FEATURE --azure-build (ID \| URL) [--azure-org ORG --azure-project PROJECT] [--azure-url URL]` | Create a feature session from the repositories an Azure DevOps build resolved. |
-| `autofeat remove FEATURE (--local PATH \| --remote URL) [--force]` | Remove one repository from a feature session. |
+| `autofeat remove FEATURE (REPO \| --local PATH \| --remote URL) [--force]` | Remove one repository from a feature session. |
 | `autofeat open SELECTOR... [--copilot \| --devcontainer PATH]` | Open matching sessions in the editor, the Dev Container at PATH, or Copilot CLI. |
 | `autofeat run SELECTOR... [--task TEXT]` | Run the configured headless agent for matching sessions. |
 | `autofeat sync SELECTOR...` | Fetch and rebase matching sessions onto their base references. |
@@ -543,18 +543,25 @@ Print the build version, commit, and timestamp:
 autofeat version
 ```
 
-Remove one local or remote repository from a feature by specifying the same
+Remove one repository from a feature by its worktree directory name inside the
+feature (for example `repo1` or `repo1-parent`), or by specifying the same
 source used to add it:
 
 ```sh
+autofeat remove feature/potato repo1
 autofeat remove feature/potato --local ~/sources/repo1
 autofeat remove feature/potato --remote https://github.com/example/repo3.git
 ```
 
-A local path may point anywhere inside the original repository. Removal stops
+A `REPO` name that matches no worktree directory falls back to the repository
+name and fails when several repositories share it. A local path may point
+anywhere inside the original repository. Removal stops
 when the selected worktree has uncommitted changes; use `--force` to discard
 them. Before deleting a remote clone, `autofeat` warns about commits that have
-not been pushed. Local feature branches are retained. Removing the final
+not been pushed. If a worktree was already deleted by hand, removal drops it
+from the feature and removes Git's record of that worktree only; a locked
+record requires `--force`. Local feature branches
+are retained. Removing the final
 repository tears down the complete feature session and runs normal
 `post-teardown` hooks.
 

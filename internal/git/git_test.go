@@ -619,6 +619,44 @@ func TestRemoveWorktree(t *testing.T) {
 	}
 }
 
+func TestRemoveMissingWorktreeIsTargetedAndRespectsLocks(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	baseDir := t.TempDir()
+	targetPath := filepath.Join(baseDir, "target")
+	otherPath := filepath.Join(baseDir, "other")
+	runGit(t, repoPath, "worktree", "add", "-q", "-b", "target", targetPath)
+	runGit(t, repoPath, "worktree", "add", "-q", "-b", "other", otherPath)
+	runGit(t, repoPath, "worktree", "lock", targetPath)
+	for _, path := range []string{targetPath, otherPath} {
+		if err := os.RemoveAll(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	record, err := FindWorktreeRecord(repoPath, targetPath)
+	if err != nil {
+		t.Fatalf("FindWorktreeRecord() error = %v", err)
+	}
+	if !record.Registered || !record.Locked {
+		t.Fatalf("FindWorktreeRecord() = %+v, want registered and locked", record)
+	}
+	if err := RemoveMissingWorktree(repoPath, targetPath, false); err == nil {
+		t.Fatal("RemoveMissingWorktree(locked, no force) error = nil, want error")
+	}
+	if err := RemoveMissingWorktree(repoPath, targetPath, true); err != nil {
+		t.Fatalf("RemoveMissingWorktree(locked, force) error = %v", err)
+	}
+
+	if record, err := FindWorktreeRecord(repoPath, targetPath); err != nil || record.Registered {
+		t.Errorf("FindWorktreeRecord(target) = %+v, %v; want unregistered", record, err)
+	}
+	if record, err := FindWorktreeRecord(repoPath, otherPath); err != nil || !record.Registered || record.Locked {
+		t.Errorf("FindWorktreeRecord(other) = %+v, %v; want registered and unlocked", record, err)
+	}
+}
+
 func TestCloneCheckoutNewBranchAndDetectUnpushedCommits(t *testing.T) {
 	requireGit(t)
 

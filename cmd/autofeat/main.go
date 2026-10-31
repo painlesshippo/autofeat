@@ -36,16 +36,17 @@ const headlessPrompt = "Please execute the objectives defined in TASK.md"
 const fallbackFeatureDirectoryName = "feature"
 
 var (
-	statusCommand           = statusSessions
-	openConfigCommand       = openConfig
-	openFeatureCommand      = openSession
-	openCopilotCommand      = openCopilotSession
-	openDevcontainerCommand = openDevcontainerSession
-	runFeatureCommand       = runFeature
-	syncFeatureCommand      = syncFeature
-	cancelSyncCommand       = cancelSync
-	teardownCommand         = teardownSession
-	removeRepositoryCommand = removeRepositoryFromSession
+	statusCommand                 = statusSessions
+	openConfigCommand             = openConfig
+	openFeatureCommand            = openSession
+	openCopilotCommand            = openCopilotSession
+	openDevcontainerCommand       = openDevcontainerSession
+	runFeatureCommand             = runFeature
+	syncFeatureCommand            = syncFeature
+	cancelSyncCommand             = cancelSync
+	teardownCommand               = teardownSession
+	removeRepositoryCommand       = removeRepositoryFromSession
+	removeRepositoryByNameCommand = removeRepositoryByName
 )
 
 func main() {
@@ -1184,6 +1185,16 @@ func teardownSession(featureName string, force bool) error {
 
 	if !force {
 		for _, repo := range session.Repos {
+			missing, err := worktreeMissing(repo.WorktreePath)
+			if err != nil {
+				return err
+			}
+			if missing {
+				if _, err := inspectMissingWorktree(repo, force); err != nil {
+					return err
+				}
+				continue
+			}
 			dirty, err := gitcmd.HasUncommittedChanges(repo.WorktreePath)
 			if err != nil {
 				return err
@@ -1196,6 +1207,16 @@ func teardownSession(featureName string, force bool) error {
 	}
 
 	for _, repo := range session.Repos {
+		missing, err := worktreeMissing(repo.WorktreePath)
+		if err != nil {
+			return err
+		}
+		if missing {
+			if err := dropMissingWorktree(repo, force); err != nil {
+				return err
+			}
+			continue
+		}
 		if repo.IsRemoteClone {
 			branchName, err := gitcmd.CurrentBranch(repo.WorktreePath)
 			if err != nil {
@@ -1255,11 +1276,131 @@ func removeRepositoryFromSession(featureName, repositorySource string, remote, f
 	if repositoryIndex < 0 {
 		return fmt.Errorf("repository %q is not attached to feature %q", repositorySource, featureName)
 	}
+	return removeSessionRepository(featureName, session, repositoryIndex, force)
+}
+
+// removeRepositoryByName removes the repository whose worktree directory name,
+// or otherwise whose repository name, matches name.
+func removeRepositoryByName(featureName, name string, force bool) error {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return err
+	}
+	repositoryIndex, err := findRepositoryByName(featureName, session, name)
+	if err != nil {
+		return err
+	}
+	return removeSessionRepository(featureName, session, repositoryIndex, force)
+}
+
+func findRepositoryByName(featureName string, session state.Session, name string) (int, error) {
+	for index, repository := range session.Repos {
+		if filepath.Base(repository.WorktreePath) == name {
+			return index, nil
+		}
+	}
+	matches := make([]int, 0, 1)
+	for index, repository := range session.Repos {
+		if repository.Name == name {
+			matches = append(matches, index)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return -1, fmt.Errorf("repository %q is not attached to feature %q", name, featureName)
+	case 1:
+		return matches[0], nil
+	}
+	candidates := make([]string, 0, len(matches))
+	for _, index := range matches {
+		candidates = append(candidates, filepath.Base(session.Repos[index].WorktreePath))
+	}
+	return -1, fmt.Errorf("repository name %q is ambiguous in feature %q; use one of: %s", name, featureName, strings.Join(candidates, ", "))
+}
+
+func removeSessionRepository(featureName string, session state.Session, repositoryIndex int, force bool) error {
 	if len(session.Repos) == 1 {
 		return teardownSession(featureName, force)
 	}
 
 	repository := session.Repos[repositoryIndex]
+	missing, err := worktreeMissing(repository.WorktreePath)
+	if err != nil {
+		return err
+	}
+	if missing {
+		err = dropMissingWorktree(repository, force)
+	} else {
+		err = removeRepositoryWorktree(repository, force)
+	}
+	if err != nil {
+		return err
+	}
+
+	session.Repos = append(session.Repos[:repositoryIndex], session.Repos[repositoryIndex+1:]...)
+	if err := state.UpdateSession(featureName, session); err != nil {
+		return err
+	}
+	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
+		return err
+	}
+
+	fmt.Printf("Removed %s from feature %s\n", repository.Name, featureName)
+	return nil
+}
+
+func worktreeMissing(worktreePath string) (bool, error) {
+	_, err := os.Stat(worktreePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect worktree %q: %w", worktreePath, err)
+	}
+	return false, nil
+}
+
+// inspectMissingWorktree returns the source repository's record of a local
+// worktree deleted outside autofeat. Locked records are refused unless force is
+// set. Remote clones and local repositories whose source is gone have no record.
+func inspectMissingWorktree(repository state.Repository, force bool) (gitcmd.WorktreeRecord, error) {
+	if repository.IsRemoteClone {
+		return gitcmd.WorktreeRecord{}, nil
+	}
+	sourceMissing, err := worktreeMissing(repository.OriginalPath)
+	if err != nil {
+		return gitcmd.WorktreeRecord{}, err
+	}
+	if sourceMissing {
+		return gitcmd.WorktreeRecord{}, nil
+	}
+	record, err := gitcmd.FindWorktreeRecord(repository.OriginalPath, repository.WorktreePath)
+	if err != nil {
+		return gitcmd.WorktreeRecord{}, err
+	}
+	if record.Locked && !force {
+		return record, fmt.Errorf("%s worktree is missing at %s but locked in %s; unlock it or use --force", repository.Name, repository.WorktreePath, repository.OriginalPath)
+	}
+	return record, nil
+}
+
+// dropMissingWorktree removes the source repository's record of a worktree
+// deleted outside autofeat, leaving other worktree records untouched.
+func dropMissingWorktree(repository state.Repository, force bool) error {
+	record, err := inspectMissingWorktree(repository, force)
+	if err != nil {
+		return err
+	}
+	if record.Registered {
+		if err := gitcmd.RemoveMissingWorktree(repository.OriginalPath, repository.WorktreePath, record.Locked); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(os.Stderr, "Warning: %s worktree is missing at %s; dropping it from the feature.\n", repository.Name, repository.WorktreePath)
+	return nil
+}
+
+func removeRepositoryWorktree(repository state.Repository, force bool) error {
 	if !force {
 		dirty, err := gitcmd.HasUncommittedChanges(repository.WorktreePath)
 		if err != nil {
@@ -1289,16 +1430,6 @@ func removeRepositoryFromSession(featureName, repositorySource string, remote, f
 	} else if err := gitcmd.RemoveWorktree(repository.WorktreePath, force); err != nil {
 		return err
 	}
-
-	session.Repos = append(session.Repos[:repositoryIndex], session.Repos[repositoryIndex+1:]...)
-	if err := state.UpdateSession(featureName, session); err != nil {
-		return err
-	}
-	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
-		return err
-	}
-
-	fmt.Printf("Removed %s from feature %s\n", repository.Name, featureName)
 	return nil
 }
 

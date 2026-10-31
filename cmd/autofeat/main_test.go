@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -401,6 +402,24 @@ func TestRemoveCommandDispatch(t *testing.T) {
 	if gotRepositorySource != "https://example.com/repository.git" || !gotRemote || gotForce {
 		t.Errorf("remote remove dispatch = (%q, %t, %t), want normalized remote without force", gotRepositorySource, gotRemote, gotForce)
 	}
+
+	originalRemoveRepositoryByNameCommand := removeRepositoryByNameCommand
+	t.Cleanup(func() {
+		removeRepositoryByNameCommand = originalRemoveRepositoryByNameCommand
+	})
+	var gotName string
+	removeRepositoryByNameCommand = func(featureName, name string, force bool) error {
+		gotFeatureName = featureName
+		gotName = name
+		gotForce = force
+		return nil
+	}
+	if err := run([]string{"remove", "feature/named", "repo1", "--force"}); err != nil {
+		t.Fatalf("run(remove REPO) error = %v", err)
+	}
+	if gotFeatureName != "feature/named" || gotName != "repo1" || !gotForce {
+		t.Errorf("named remove dispatch = (%q, %q, %t), want feature, repo1, force", gotFeatureName, gotName, gotForce)
+	}
 }
 
 func TestRemoveCommandArguments(t *testing.T) {
@@ -410,6 +429,8 @@ func TestRemoveCommandArguments(t *testing.T) {
 		{"remove", "feature/remove", "--local", ".", "--remote", "https://example.com/repository.git"},
 		{"remove", "feature/remove", "--remote", "/tmp/repository"},
 		{"remove", "feature/remove", "extra", "--remote", "https://example.com/repository.git"},
+		{"remove", "feature/remove", "extra", "--local", "."},
+		{"remove", "feature/remove", "repo1", "repo2"},
 	}
 	for _, args := range invalid {
 		if err := run(args); err == nil {
@@ -2721,6 +2742,206 @@ func TestRemoveRepositoryFromSessionRejectsUnknownSource(t *testing.T) {
 		if _, err := os.Stat(repository.WorktreePath); err != nil {
 			t.Errorf("worktree changed after rejected removals: %v", err)
 		}
+	}
+}
+
+func TestRemoveRepositoryByName(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repositoryRoot := t.TempDir()
+	repositoryPaths := []string{
+		filepath.Join(repositoryRoot, "first", "repository"),
+		filepath.Join(repositoryRoot, "second", "repository"),
+		filepath.Join(repositoryRoot, "third", "repository"),
+	}
+	for _, repositoryPath := range repositoryPaths {
+		if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runMainGit(t, repositoryPath, "init", "-q")
+		runMainGit(t, repositoryPath, "config", "user.email", "test@example.com")
+		runMainGit(t, repositoryPath, "config", "user.name", "Test User")
+		writeAndCommitMainFile(t, repositoryPath, "README.md", "initial\n", "initial commit")
+		runMainGit(t, repositoryPath, "branch", "-M", "main")
+		if _, err := addRepositoryAt("feature/by-name", repositoryPath); err != nil {
+			t.Fatalf("addRepositoryAt(%q) error = %v", repositoryPath, err)
+		}
+	}
+
+	if err := removeRepositoryByName("feature/by-name", "repository", false); err != nil {
+		t.Fatalf("removeRepositoryByName(directory name) error = %v", err)
+	}
+	session, err := state.GetSession("feature/by-name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.Repos) != 2 || session.Repos[0].OriginalPath != repositoryPaths[1] {
+		t.Fatalf("remaining repositories = %+v, want second and third", session.Repos)
+	}
+
+	err = removeRepositoryByName("feature/by-name", "repository", false)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("removeRepositoryByName(ambiguous) error = %v, want ambiguity error", err)
+	}
+	if err := removeRepositoryByName("feature/by-name", "unknown", false); err == nil {
+		t.Fatal("removeRepositoryByName(unknown) error = nil, want not attached error")
+	}
+
+	if err := removeRepositoryByName("feature/by-name", "repository-third", false); err != nil {
+		t.Fatalf("removeRepositoryByName(repository-third) error = %v", err)
+	}
+	session, err = state.GetSession("feature/by-name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.Repos) != 1 || session.Repos[0].OriginalPath != repositoryPaths[1] {
+		t.Fatalf("remaining repositories = %+v, want only second", session.Repos)
+	}
+	if err := removeRepositoryByName("feature/by-name", "repository", false); err != nil {
+		t.Fatalf("removeRepositoryByName(unique repository name) error = %v", err)
+	}
+	if _, err := state.GetSession("feature/by-name"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() error = %v, want ErrSessionNotFound after final removal", err)
+	}
+}
+
+func TestRemoveRepositoryWithMissingWorktree(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repositoryPaths := []string{createMainRepository(t), createMainRepository(t)}
+	for _, repositoryPath := range repositoryPaths {
+		runMainGit(t, repositoryPath, "branch", "-M", "main")
+		if _, err := addRepositoryAt("feature/missing-remove", repositoryPath); err != nil {
+			t.Fatalf("addRepositoryAt() error = %v", err)
+		}
+	}
+	session, err := state.GetSession("feature/missing-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingWorktree := session.Repos[0].WorktreePath
+	if err := os.RemoveAll(missingWorktree); err != nil {
+		t.Fatal(err)
+	}
+	unrelatedWorktree := filepath.Join(t.TempDir(), "unrelated")
+	runMainGit(t, repositoryPaths[0], "worktree", "add", "-q", "-b", "unrelated", unrelatedWorktree)
+	if err := os.RemoveAll(unrelatedWorktree); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeRepositoryByName("feature/missing-remove", filepath.Base(missingWorktree), false); err != nil {
+		t.Fatalf("removeRepositoryByName() error = %v", err)
+	}
+	after, err := state.GetSession("feature/missing-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Repos) != 1 || after.Repos[0].OriginalPath != repositoryPaths[1] {
+		t.Errorf("remaining repositories = %+v, want only second", after.Repos)
+	}
+	if worktrees := mainGitOutput(t, repositoryPaths[0], "worktree", "list"); strings.Contains(worktrees, missingWorktree) {
+		t.Errorf("git worktree list still references missing worktree:\n%s", worktrees)
+	}
+	if worktrees := mainGitOutput(t, repositoryPaths[0], "worktree", "list"); !strings.Contains(worktrees, unrelatedWorktree) {
+		t.Errorf("git worktree list lost unrelated missing worktree:\n%s", worktrees)
+	}
+
+	if err := os.RemoveAll(after.Repos[0].WorktreePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeRepositoryFromSession("feature/missing-remove", repositoryPaths[1], false, false); err != nil {
+		t.Fatalf("removeRepositoryFromSession(final missing) error = %v", err)
+	}
+	if _, err := state.GetSession("feature/missing-remove"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("GetSession() error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestRemoveRepositoryWithLockedMissingWorktree(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repositoryPaths := []string{createMainRepository(t), createMainRepository(t)}
+	for _, repositoryPath := range repositoryPaths {
+		runMainGit(t, repositoryPath, "branch", "-M", "main")
+		if _, err := addRepositoryAt("feature/locked-remove", repositoryPath); err != nil {
+			t.Fatalf("addRepositoryAt() error = %v", err)
+		}
+	}
+	session, err := state.GetSession("feature/locked-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockedWorktree := session.Repos[0].WorktreePath
+	runMainGit(t, repositoryPaths[0], "worktree", "lock", lockedWorktree)
+	if err := os.RemoveAll(lockedWorktree); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeRepositoryByName("feature/locked-remove", filepath.Base(lockedWorktree), false); err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("removeRepositoryByName(locked) error = %v, want locked error", err)
+	}
+	if err := teardownSession("feature/locked-remove", false); err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("teardownSession(locked) error = %v, want locked error", err)
+	}
+	unchanged, err := state.GetSession("feature/locked-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unchanged.Repos) != 2 {
+		t.Fatalf("repositories after refused removal = %+v, want both", unchanged.Repos)
+	}
+	if _, err := os.Stat(unchanged.Repos[1].WorktreePath); err != nil {
+		t.Errorf("refused teardown touched second worktree: %v", err)
+	}
+
+	if err := removeRepositoryByName("feature/locked-remove", filepath.Base(lockedWorktree), true); err != nil {
+		t.Fatalf("removeRepositoryByName(locked, force) error = %v", err)
+	}
+	after, err := state.GetSession("feature/locked-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Repos) != 1 || after.Repos[0].OriginalPath != repositoryPaths[1] {
+		t.Errorf("remaining repositories = %+v, want only second", after.Repos)
+	}
+	if worktrees := mainGitOutput(t, repositoryPaths[0], "worktree", "list"); strings.Contains(worktrees, lockedWorktree) {
+		t.Errorf("git worktree list still references locked worktree:\n%s", worktrees)
+	}
+}
+
+func TestRemoveCompletesSessionRepositories(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	localPath := createMainRepository(t)
+	runMainGit(t, localPath, "branch", "-M", "main")
+	if _, err := addRepositoryAt("feature/complete-remove", localPath); err != nil {
+		t.Fatalf("addRepositoryAt() error = %v", err)
+	}
+	_, remotePath := createRemoteMainRepository(t)
+	if err := addRemoteRepository("feature/complete-remove", remotePath); err != nil {
+		t.Fatalf("addRemoteRepository() error = %v", err)
+	}
+	session, err := state.GetSession("feature/complete-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	command := newRemoveCommand()
+	got, _ := completeSessionRepositoryNames(command, []string{"feature/complete-remove"}, "")
+	want := []string{filepath.Base(session.Repos[0].WorktreePath), filepath.Base(session.Repos[1].WorktreePath)}
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("repository name completion = %q, want %q", got, want)
+	}
+	if got, _ := completeSessionLocalRepositories(command, []string{"feature/complete-remove"}, ""); !reflect.DeepEqual(got, []string{localPath}) {
+		t.Errorf("--local completion = %q, want %q", got, []string{localPath})
+	}
+	if got, _ := completeSessionRemoteRepositories(command, []string{"feature/complete-remove"}, ""); !reflect.DeepEqual(got, []string{remotePath}) {
+		t.Errorf("--remote completion = %q, want %q", got, []string{remotePath})
 	}
 }
 

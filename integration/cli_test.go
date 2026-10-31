@@ -232,7 +232,7 @@ func TestRemoveLocalRepositoryLifecycle(t *testing.T) {
 		t.Errorf("workspace does not contain remaining repository:\n%s", workspaceContents)
 	}
 
-	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "remove", featureName, "--local", repositoryPaths[1])
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "remove", featureName, filepath.Base(after.Repos[0].WorktreePath))
 	requireSuccess(t, result)
 	if _, err := os.Stat(after.FeatureDir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("feature directory still exists after final removal: %v", err)
