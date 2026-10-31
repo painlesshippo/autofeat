@@ -1,70 +1,53 @@
 # Safety And Recovery
 
-## Destructive Operations
+Always run `autofeat status FEATURE` before a destructive operation.
 
-Inspect the exact target before detaching or deleting resources:
-
-```sh
-autofeat status feature/name
-```
-
-Remove one repository by its worktree directory name in the feature, or by the
-same kind of source used to add it:
+## Remove One Repository
 
 ```sh
-autofeat remove feature/name repository
-autofeat remove feature/name --local /path/to/repository
-autofeat remove feature/name --remote https://github.com/example/repository.git
+autofeat remove FEATURE repo1                 # worktree directory name
+autofeat remove FEATURE --local /path/inside/repo
+autofeat remove FEATURE --remote URL
 ```
 
-A local path may point inside the original repository. Removing the final
-repository tears down the entire session. Local feature branches are retained.
-A worktree that was already deleted is dropped from the session and only its own Git worktree record is removed. If that record is locked, removal and teardown stop unless `--force` is passed.
+- `REPO` matches the worktree directory first, then the repository name. It
+  fails if several repos share that name.
+- The local feature branch is kept.
+- Removing the last repo tears down the session (`post-teardown` hooks run).
+- A worktree that was deleted by hand is dropped from the session. A locked
+  worktree record requires `--force`.
 
-Delete every worktree and remote clone in a session with:
+## Teardown
 
 ```sh
-autofeat teardown feature/name
+autofeat teardown FEATURE
 ```
 
-Without `--force`, removal and teardown stop on uncommitted changes. Do not
-retry with `--force` unless the user explicitly authorizes discarding those
-changes. Before acting on authorization, identify the affected feature and
-repository scope.
-
-Remote clones can contain commits that do not exist on their corresponding
-remote branch. Autofeat warns before deleting such a clone. Surface that
-warning to the user; `--force` does not make an unpushed commit recoverable.
+- Stops without changes if any worktree is dirty. `--force` discards those
+  changes. Use it only with explicit user authorization, and name the scope
+  affected.
+- Remote clones with unpushed commits trigger a warning. `--force` does not
+  make those commits recoverable. Tell the user.
 
 ## Rebase Recovery
 
-If `sync` encounters a conflict, it stops at that repository and leaves the
-rebase in progress. Preserve the worktree and follow the paths printed by
-autofeat. The two valid recovery directions are:
+If `sync` stops on a conflict, preserve the worktree and choose one path:
 
-```sh
-git -C /path/to/worktree rebase --continue
-git -C /path/to/worktree rebase --abort
-```
+| Goal | Action |
+| --- | --- |
+| Finish the rebase | Resolve, `git add`, `git -C WORKTREE rebase --continue` |
+| Abort one repo | `git -C WORKTREE rebase --abort` |
+| Abort all stuck repos | `autofeat sync SELECTOR... --cancel` |
 
-Do not start another `autofeat sync` while the rebase remains in progress.
-Resolve conflicts and continue only when the user wants the rebase completed;
-abort when the user wants the feature branch restored to its pre-sync state.
+- `--cancel` runs `git rebase --abort` only where a rebase is in progress. It
+  never discards commits and reports each failure. A partial failure exits
+  non-zero.
+- Do not start another `sync` while a rebase is still in progress.
 
-## Hook Failure
+## Hook Failures
 
-`post-add` hooks run in each new worktree or remote clone. If a hook fails,
-autofeat stops subsequent hooks and removes the newly added repository so the
-operation can be retried. Report the hook's error rather than manually adding
-partial session state.
-
-`post-teardown` hooks run after session resources and state are removed. A hook
-error at that point does not imply that the session still exists; inspect with
-`autofeat list` before retrying cleanup.
-
-## State Files
-
-Avoid manually rewriting files under `$HOME/.autofeat` during ordinary
-recovery. They are versioned data files, reject unknown fields, and may be
-upgraded when autofeat writes them. Prefer CLI operations and inspect current
-state before considering manual repair.
+- `post-add` failure: later hooks are skipped and the new repo is removed.
+  Report the error and retry after fixing the cause. Do not add partial state
+  by hand.
+- `post-teardown` failure: the session is already gone. Check with
+  `autofeat list` before retrying.

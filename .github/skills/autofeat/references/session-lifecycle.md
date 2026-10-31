@@ -1,96 +1,76 @@
 # Session Lifecycle
 
-## Create Or Extend A Session
+## Create Or Extend
 
-From inside the source repository:
+| Source | Command | Result |
+| --- | --- | --- |
+| Current repo | `autofeat new FEATURE` | Git worktree |
+| Other local repo | `--local PATH` (any dir inside the repo) | Git worktree |
+| Remote URL | `--remote URL` (HTTP(S) or SSH) | Fresh clone |
+| Template | `--template NAME` | All template repos; feature must be new |
+| Azure DevOps build | `--azure-build URL\|ID` | Clone per build repo, pinned to the build's commit |
 
-```sh
-autofeat new feature/name
-```
+- Re-running `new` with an existing feature attaches another repo.
+- Feature branch: reuse local branch, else cached `origin/FEATURE`, else
+  create from base. `new` never fetches.
+- Base ref order: `--ref` > remembered ref for that repo > detected
+  `master`/`main` > `default_base_branch`. `--ref` accepts branches, tags,
+  SHAs, full refs, and revision expressions, and is remembered per repo.
+- `--template` cannot be combined with `--ref`, `--local`, or `--remote`.
+- Directory names are flattened (`feature/x` -> `feature-x`). Colliding names
+  are rejected; choose another feature name.
 
-Use an explicit local path or remote URL when the current directory is not the
-intended source:
-
-```sh
-autofeat new feature/name --local /path/to/repository
-autofeat new feature/name --remote https://github.com/example/repository.git
-```
-
-Running `new` again with the same feature name attaches another repository to
-the existing session. Local sources become Git worktrees. Remote sources are
-cloned into the session.
-
-Use `--ref REF` to select a branch, tag, commit, full ref, or revision
-expression as the base. Autofeat remembers an explicit base reference for that
-repository. Repository creation does not fetch; an unqualified branch uses its
-cached `origin` branch when available, then its local branch.
-
-## Select Existing Sessions
-
-`open`, `run`, `sync`, `status`, and `teardown` accept exact names, multiple
-selectors, or wildcard selectors:
+### Azure DevOps
 
 ```sh
-autofeat status feature/name
-autofeat status feature/one feature/two
-autofeat status "feature/*"
+autofeat new bug/repro --azure-build "https://dev.azure.com/ORG/PROJ/_build/results?buildId=4821"
+autofeat new bug/repro --azure-build 4821 --azure-org ORG --azure-project PROJ
+# On-prem: --azure-org DefaultCollection --azure-url https://server/tfs
 ```
 
-Always quote wildcard selectors. `status` defaults to all sessions when no
-selector is provided. `remove` is different: it accepts one exact feature name
-and one explicit repository source.
+- Requires `AZURE_DEVOPS_EXT_PAT` or `AZURE_DEVOPS_PAT` with Build (Read).
+- Cloning uses normal Git credentials (helper/SSH) with read access to every
+  repo. The PAT is used for REST calls only.
+- Clones the primary repo plus Git repository resources (Azure Repos, GitHub,
+  Bitbucket). Artifacts and non-Git resources are out of scope. Failures leave
+  no partial session.
 
-## Inspect And Enter Work
+## Inspect
 
-Use these offline inspection commands first when the target session is not
-clear:
+- `autofeat list`: sessions, most recent `LAST ACTIVITY` first, with cached
+  `DRIFT`. Never touches the network.
+- `autofeat status [SELECTOR...]`: per-repo `BRANCH`, `WORKTREE`, `BASE`,
+  `DRIFT` (vs. cached base), `PUSH` (vs. cached origin), and `STATE`. Defaults to
+  all sessions. Exits 0 regardless of repo health.
+- `STATE` values: `ready`, `dirty`, `behind-base`, `unpushed`, `remote-ahead`,
+  `remote-diverged`, `rebasing`, `wrong-branch`, `detached`, `missing`, `error`.
+
+## Open And Run
 
 ```sh
-autofeat list
-autofeat status feature/name
+autofeat open FEATURE                                  # editor_cmd on .code-workspace
+autofeat open FEATURE --copilot                        # interactive headless_cmd
+autofeat open FEATURE --devcontainer ./x/.devcontainer/devcontainer.json
+autofeat run FEATURE --task "Implement X and add tests" # appends to TASK.md, starts headless_cmd
 ```
 
-`list` shows active sessions and cached base drift. `status` reports branch,
-worktree cleanliness, base drift, push relationship, and an actionable state.
-Neither command fetches or modifies repositories.
+- `--devcontainer` is required to be an explicit, readable file path (relative
+  to cwd). Autofeat passes it through untouched. The config must mount worktree
+  Git metadata if Git is needed inside the container. Requires a VS Code-family
+  `editor_cmd` that supports `--file-uri`.
+- Run `run` from outside a Git repo to avoid attaching the current repo.
 
-Open the session workspace in the configured editor:
+## Sync
 
 ```sh
-autofeat open feature/name
+autofeat status FEATURE
+autofeat sync FEATURE
 ```
 
-Open an interactive configured agent instead:
-
-```sh
-autofeat open feature/name --copilot
-```
-
-Start the configured headless agent, optionally appending an objective to the
-session's `TASK.md`:
-
-```sh
-autofeat run feature/name
-autofeat run feature/name --task "Implement the requested change and test it"
-```
-
-When `run` starts inside a Git repository, it first attaches that repository if
-the session does not already contain it. Run from outside a Git repository when
-the user intends only to start an existing session.
-
-## Synchronize
-
-Inspect the session before synchronization:
-
-```sh
-autofeat status feature/name
-autofeat sync feature/name
-```
-
-Every repository must exist, be on the feature branch, have no staged,
-unstaged, or untracked changes, and have no rebase in progress. Autofeat
-validates every repository before fetching or rebasing any of them.
-
-Origin branches are fetched before rebasing. Repositories without an `origin`
-use their local base branch. Tags, commit SHAs, and other immutable references
-are resolved locally and are not fetched.
+- Preconditions are checked for every repo before any work starts: repo
+  present, on the feature branch, clean (including untracked files), and no
+  rebase in progress.
+- Origin branches are fetched. Repos without `origin` use the local base.
+  Tags and SHAs are resolved locally.
+- On conflict, sync stops and leaves the rebase in progress. See
+  [Safety And Recovery](./safety-and-recovery.md#rebase-recovery).
