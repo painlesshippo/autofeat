@@ -158,7 +158,7 @@ func TestExplicitLocalRepositoryCreatesWorktree(t *testing.T) {
 
 	const featureName = "feature/explicit-local"
 	outsideRepository := t.TempDir()
-	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, "--local", repositoryPath)
+	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, repositoryPath)
 	requireSuccess(t, result)
 
 	statePath := filepath.Join(homeDir, ".autofeat", "state.json")
@@ -197,7 +197,7 @@ func TestRemoveLocalRepositoryLifecycle(t *testing.T) {
 	const featureName = "feature/remove-integration"
 	outsideRepository := t.TempDir()
 	for _, repositoryPath := range repositoryPaths {
-		result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, "--local", repositoryPath)
+		result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, repositoryPath)
 		requireSuccess(t, result)
 	}
 
@@ -207,7 +207,7 @@ func TestRemoveLocalRepositoryLifecycle(t *testing.T) {
 		t.Fatalf("session repositories = %+v, want two repositories", before.Repos)
 	}
 	removedRepository := before.Repos[0]
-	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "remove", featureName, "--local", repositoryPaths[0])
+	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "remove", featureName, repositoryPaths[0])
 	requireSuccess(t, result)
 	requireOutputContains(t, result.stdout, "Removed", removedRepository.Name, featureName)
 
@@ -268,7 +268,7 @@ func TestRemoteFeatureSyncLifecycle(t *testing.T) {
 
 	const featureName = "feature/remote-sync"
 	outsideRepository := t.TempDir()
-	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, "--remote", remoteURL, "--ref", "develop")
+	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, remoteURL, "--ref", "develop")
 	requireSuccess(t, result)
 	requireOutputContains(t, result.stdout, "Cloned remote repo", "repository", featureName)
 

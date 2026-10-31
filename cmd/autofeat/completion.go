@@ -62,44 +62,35 @@ func completeNothing(*cobra.Command, []string, string) ([]string, cobra.ShellCom
 	return nil, cobra.ShellCompDirectiveNoFileComp
 }
 
-func completeSessionRepositoryNames(command *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+func completeNewFeatureArguments(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	switch len(args) {
+	case 0:
+		return featureCompletions(nil, toComplete)
+	case 1:
+		return nil, cobra.ShellCompDirectiveFilterDirs
+	}
+	return nil, cobra.ShellCompDirectiveNoFileComp
+}
+
+func completeSessionRepositories(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 	if len(args) == 0 {
 		return featureCompletions(nil, toComplete)
 	}
-	if len(args) > 1 || command.Flags().Changed("local") || command.Flags().Changed("remote") {
+	if len(args) > 1 {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	return sessionRepositoryCompletions(args[0], toComplete, func(repository state.Repository) (string, bool) {
-		return filepath.Base(repository.WorktreePath), true
-	})
-}
-
-func completeSessionLocalRepositories(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	if len(args) == 0 {
-		return nil, cobra.ShellCompDirectiveFilterDirs
-	}
-	return sessionRepositoryCompletions(args[0], toComplete, func(repository state.Repository) (string, bool) {
-		return repository.OriginalPath, !repository.IsRemoteClone
-	})
-}
-
-func completeSessionRemoteRepositories(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	if len(args) == 0 {
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
-	return sessionRepositoryCompletions(args[0], toComplete, func(repository state.Repository) (string, bool) {
-		return repository.OriginalPath, repository.IsRemoteClone
-	})
-}
-
-func sessionRepositoryCompletions(featureName, toComplete string, value func(state.Repository) (string, bool)) ([]string, cobra.ShellCompDirective) {
-	session, err := state.GetSession(featureName)
+	session, err := state.GetSession(args[0])
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
-	values := make([]string, 0, len(session.Repos))
+	seen := make(map[string]struct{}, 2*len(session.Repos))
+	values := make([]string, 0, 2*len(session.Repos))
 	for _, repository := range session.Repos {
-		if candidate, ok := value(repository); ok && strings.HasPrefix(candidate, toComplete) {
+		for _, candidate := range []string{filepath.Base(repository.WorktreePath), repository.OriginalPath} {
+			if _, exists := seen[candidate]; exists || candidate == "" || !strings.HasPrefix(candidate, toComplete) {
+				continue
+			}
+			seen[candidate] = struct{}{}
 			values = append(values, candidate)
 		}
 	}

@@ -72,7 +72,7 @@ The completer supports:
 * Active feature names for `new`, `remove`, `open`, `sync`, `status`, and
   `teardown`; new names remain free-form until the feature exists.
 * Template names and template subcommands.
-* Contextual `--local`, `--remote`, `--template`, `--ref`, `--copilot`,
+* Contextual `--template`, `--ref`, `--copilot`,
   `--devcontainer`, `--cancel`, and `--force` options.
 * Duplicate filtering for feature selectors and already-used options.
 

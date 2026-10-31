@@ -1297,6 +1297,30 @@ func removeRepositoryFromSession(featureName, repositorySource string, remote, f
 	return removeSessionRepository(featureName, session, repositoryIndex, force)
 }
 
+// attachedLocalRepositoryRoot resolves value as a path inside a local Git
+// repository and reports its root only when that repository is attached to the
+// feature, so plain names that happen to be directories fall back to name lookup.
+func attachedLocalRepositoryRoot(featureName, value string) (string, bool) {
+	if info, err := os.Stat(value); err != nil || !info.IsDir() {
+		return "", false
+	}
+	repositoryRoot, err := gitcmd.GetRepoRootAt(value)
+	if err != nil {
+		return "", false
+	}
+	repositoryRoot = filepath.Clean(repositoryRoot)
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return "", false
+	}
+	for _, repository := range session.Repos {
+		if !repository.IsRemoteClone && filepath.Clean(repository.OriginalPath) == repositoryRoot {
+			return repositoryRoot, true
+		}
+	}
+	return "", false
+}
+
 // removeRepositoryByName removes the repository whose worktree directory name,
 // or otherwise whose repository name, matches name.
 func removeRepositoryByName(featureName, name string, force bool) error {
