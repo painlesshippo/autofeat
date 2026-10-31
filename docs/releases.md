@@ -56,7 +56,7 @@ The `Release` workflow runs when GitHub receives any tag matching `v*`. It:
 2. Installs the Go version declared in `go.mod`.
 3. Runs `go test ./...` again so a manually pushed tag cannot bypass tests.
 4. Exports the Go toolchain version as `GOVERSION`.
-5. Runs GoReleaser `v2.17.0` with `release --clean`.
+5. Runs GoReleaser `v2.19.0` with `release --clean`.
 
 The workflow grants `contents: write` to the repository-scoped
 `GITHUB_TOKEN`. No personal access token or additional repository secret is
