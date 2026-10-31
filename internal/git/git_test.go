@@ -5,8 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsInsideWorkTree(t *testing.T) {
@@ -911,4 +913,117 @@ func changeDirectory(t *testing.T, directory string) {
 			t.Errorf("restore working directory: %v", err)
 		}
 	})
+}
+
+func TestLastActivity(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	baseCommitTime := time.Unix(parseUnix(t, runGitOutput(t, repoPath, "log", "-1", "--format=%at")), 0)
+
+	activity, err := LastActivity(repoPath, "")
+	if err != nil {
+		t.Fatalf("LastActivity(clean, no base) error = %v", err)
+	}
+	if !activity.Equal(baseCommitTime) {
+		t.Errorf("LastActivity(clean, no base) = %v, want HEAD author time %v", activity, baseCommitTime)
+	}
+
+	activity, err = LastActivity(repoPath, "main")
+	if err != nil {
+		t.Fatalf("LastActivity(no feature commits) error = %v", err)
+	}
+	if !activity.IsZero() {
+		t.Errorf("LastActivity(no feature commits) = %v, want zero", activity)
+	}
+
+	runGit(t, repoPath, "checkout", "-qb", "feature/activity")
+	featureCommitTime := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	commitFileAt(t, repoPath, "feature.txt", featureCommitTime)
+
+	activity, err = LastActivity(repoPath, "main")
+	if err != nil {
+		t.Fatalf("LastActivity(feature commit) error = %v", err)
+	}
+	if !activity.Equal(featureCommitTime) {
+		t.Errorf("LastActivity(feature commit) = %v, want %v", activity, featureCommitTime)
+	}
+
+	dirtyTime := featureCommitTime.Add(time.Hour)
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(repoPath, "README.md"), dirtyTime, dirtyTime); err != nil {
+		t.Fatal(err)
+	}
+	activity, err = LastActivity(repoPath, "main")
+	if err != nil {
+		t.Fatalf("LastActivity(dirty file) error = %v", err)
+	}
+	if !activity.Equal(dirtyTime) {
+		t.Errorf("LastActivity(dirty file) = %v, want %v", activity, dirtyTime)
+	}
+
+	untrackedTime := dirtyTime.Add(time.Hour)
+	untrackedPath := filepath.Join(repoPath, "nested", "dir", "new file.txt")
+	if err := os.MkdirAll(filepath.Dir(untrackedPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(untrackedPath, []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(untrackedPath, untrackedTime, untrackedTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(repoPath, "feature.txt")); err != nil {
+		t.Fatal(err)
+	}
+	activity, err = LastActivity(repoPath, "main")
+	if err != nil {
+		t.Fatalf("LastActivity(untracked and deleted files) error = %v", err)
+	}
+	if !activity.Equal(untrackedTime) {
+		t.Errorf("LastActivity(untracked and deleted files) = %v, want %v", activity, untrackedTime)
+	}
+
+	if _, err := LastActivity(filepath.Join(t.TempDir(), "missing"), ""); err == nil {
+		t.Error("LastActivity(missing path) error = nil, want error")
+	}
+}
+
+func TestLastActivityWithUnbornHead(t *testing.T) {
+	requireGit(t)
+
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init", "-q")
+	activity, err := LastActivity(repoPath, "")
+	if err != nil {
+		t.Fatalf("LastActivity(unborn) error = %v", err)
+	}
+	if !activity.IsZero() {
+		t.Errorf("LastActivity(unborn, clean) = %v, want zero", activity)
+	}
+}
+
+func commitFileAt(t *testing.T, repoPath, name string, authorTime time.Time) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repoPath, name), []byte(name+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "add", name)
+	command := exec.Command("git", "-C", repoPath, "commit", "-qm", "add "+name)
+	command.Env = append(os.Environ(), "GIT_AUTHOR_DATE="+authorTime.Format(time.RFC3339))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v\n%s", err, output)
+	}
+}
+
+func parseUnix(t *testing.T, value string) int64 {
+	t.Helper()
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // BaseStatus describes the cached relationship between HEAD and a base branch.
@@ -529,6 +530,64 @@ func IsRebaseInProgress(destPath string) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// LastActivity returns the most recent local activity in the worktree at
+// destPath: the latest author time among commits reachable from HEAD but not
+// from baseRef (all of HEAD when baseRef is empty), and the modification time
+// of every changed or untracked file. A zero time means no activity was found.
+func LastActivity(destPath, baseRef string) (time.Time, error) {
+	latest := time.Time{}
+
+	statusOutput, err := exec.Command("git", "-C", destPath, "status", "--porcelain", "-z", "--untracked-files=all").Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("inspect worktree %q status: %w", destPath, err)
+	}
+	entries := strings.Split(string(statusOutput), "\x00")
+	for index := 0; index < len(entries); index++ {
+		entry := entries[index]
+		if len(entry) < 4 {
+			continue
+		}
+		if entry[0] == 'R' || entry[0] == 'C' {
+			// Renames and copies are followed by their source path.
+			index++
+		}
+		info, err := os.Lstat(filepath.Join(destPath, entry[3:]))
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(latest) {
+			latest = info.ModTime()
+		}
+	}
+
+	if err := exec.Command("git", "-C", destPath, "rev-parse", "--verify", "--quiet", "HEAD").Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return latest, nil
+		}
+		return time.Time{}, fmt.Errorf("resolve HEAD in repository %q: %w", destPath, err)
+	}
+	revision := "HEAD"
+	if baseRef != "" {
+		revision = baseRef + "..HEAD"
+	}
+	logOutput, err := exec.Command("git", "-C", destPath, "log", "--format=%at", "--end-of-options", revision).Output()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read commit times in repository %q: %w", destPath, err)
+	}
+	for _, field := range strings.Fields(string(logOutput)) {
+		seconds, err := strconv.ParseInt(field, 10, 64)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("parse commit time %q: %w", field, err)
+		}
+		if commitTime := time.Unix(seconds, 0); commitTime.After(latest) {
+			latest = commitTime
+		}
+	}
+
+	return latest, nil
 }
 
 func run(args ...string) (string, error) {
