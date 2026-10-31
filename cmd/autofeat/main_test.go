@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/painlesshippo/autofeat/internal/config"
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
@@ -2912,13 +2913,127 @@ func TestListSessionsToRendersDrift(t *testing.T) {
 		t.Fatalf("listSessionsTo() error = %v", err)
 	}
 	report := output.String()
-	for _, want := range []string{"FEATURE", "CREATED", "REPOSITORIES", "DRIFT", "feature/list", "1 behind", "feature/current", "current"} {
+	for _, want := range []string{"FEATURE", "CREATED", "LAST ACTIVITY", "REPOSITORIES", "DRIFT", "feature/list", "1 behind", "feature/current", "current"} {
 		if !strings.Contains(report, want) {
 			t.Errorf("list report does not contain %q:\n%s", want, report)
 		}
 	}
+	if strings.Contains(report, "\x1b[") {
+		t.Errorf("list report written to a buffer contains ANSI escapes:\n%q", report)
+	}
 	if strings.Index(report, "feature/current") > strings.Index(report, "feature/list") {
-		t.Errorf("list report is not sorted by feature name:\n%s", report)
+		t.Errorf("list report does not break activity ties by feature name:\n%s", report)
+	}
+}
+
+func TestListSessionsToSortsByLastActivity(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	committedPath := createMainRepository(t)
+	runMainGit(t, committedPath, "branch", "-M", "main")
+	runMainGit(t, committedPath, "checkout", "-qb", "feature/committed")
+	if err := os.WriteFile(filepath.Join(committedPath, "work.txt"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runMainGit(t, committedPath, "add", "work.txt")
+	commit := exec.Command("git", "-C", committedPath, "commit", "-qm", "work")
+	commit.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2031-01-01T00:00:00Z")
+	if output, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v\n%s", err, output)
+	}
+
+	dirtyPath := createMainRepository(t)
+	runMainGit(t, dirtyPath, "branch", "-M", "main")
+	runMainGit(t, dirtyPath, "checkout", "-qb", "feature/dirty")
+	dirtyTime := time.Date(2032, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.WriteFile(filepath.Join(dirtyPath, "scratch.txt"), []byte("scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(dirtyPath, "scratch.txt"), dirtyTime, dirtyTime); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := map[string]state.Session{
+		"feature/committed": {CreatedAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Repos: []state.Repository{{
+			Name: "committed", WorktreePath: committedPath, BaseBranch: "main",
+		}}},
+		"feature/dirty": {CreatedAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Repos: []state.Repository{{
+			Name: "dirty", WorktreePath: dirtyPath, BaseBranch: "main",
+		}}},
+		"feature/created": {CreatedAt: time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC), Repos: []state.Repository{{
+			Name: "missing", WorktreePath: filepath.Join(t.TempDir(), "missing"), BaseBranch: "main",
+		}}},
+	}
+	for name, session := range sessions {
+		if err := state.SaveSession(name, session); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var output bytes.Buffer
+	if err := listSessionsTo(&output); err != nil {
+		t.Fatalf("listSessionsTo() error = %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("list report has %d lines, want 4:\n%s", len(lines), output.String())
+	}
+	wants := []struct{ feature, activity string }{
+		{"feature/dirty", "2032-01-01T00:00:00Z"},
+		{"feature/committed", "2031-01-01T00:00:00Z"},
+		{"feature/created", "2030-06-01T00:00:00Z"},
+	}
+	for index, want := range wants {
+		fields := strings.Fields(lines[index+1])
+		if len(fields) < 3 || fields[0] != want.feature || fields[2] != want.activity {
+			t.Errorf("list row %d = %q, want feature %s with last activity %s", index+1, lines[index+1], want.feature, want.activity)
+		}
+	}
+	if !strings.Contains(lines[3], "unknown") {
+		t.Errorf("missing worktree row = %q, want unknown drift", lines[3])
+	}
+}
+
+func TestColorEnabled(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	if colorEnabled(&bytes.Buffer{}) {
+		t.Error("colorEnabled(buffer) = true, want false")
+	}
+	file, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if colorEnabled(file) {
+		t.Error("colorEnabled(regular file) = true, want false")
+	}
+
+	if terminal, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
+		defer terminal.Close()
+		if !colorEnabled(terminal) {
+			t.Error("colorEnabled(terminal) = false, want true")
+		}
+		t.Setenv("NO_COLOR", "1")
+		if colorEnabled(terminal) {
+			t.Error("colorEnabled(terminal) with NO_COLOR = true, want false")
+		}
+	}
+}
+
+func TestColorizeDrift(t *testing.T) {
+	tests := []struct{ drift, want string }{
+		{"current", "\x1b[32mcurrent\x1b[0m"},
+		{"3 behind", "\x1b[33m3 behind\x1b[0m"},
+		{"unknown", "\x1b[31munknown\x1b[0m"},
+	}
+	for _, test := range tests {
+		if got := colorize(true, driftColor(test.drift), test.drift); got != test.want {
+			t.Errorf("colorize(%q) = %q, want %q", test.drift, got, test.want)
+		}
+	}
+	if got := colorize(false, ansiGreen, "current"); got != "current" {
+		t.Errorf("colorize(disabled) = %q, want plain text", got)
 	}
 }
 

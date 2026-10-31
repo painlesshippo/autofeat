@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -176,47 +177,156 @@ func isRemoteURL(value string) bool {
 		strings.HasPrefix(value, "git@")
 }
 
+const (
+	ansiReset  = "\x1b[0m"
+	ansiBold   = "\x1b[1m"
+	ansiRed    = "\x1b[31m"
+	ansiGreen  = "\x1b[32m"
+	ansiYellow = "\x1b[33m"
+)
+
+type sessionListing struct {
+	name         string
+	session      state.Session
+	lastActivity time.Time
+	drift        string
+}
+
 func listSessionsTo(output io.Writer) error {
 	currentState, err := state.Load()
 	if err != nil {
 		return err
 	}
-	sessions := currentState.Sessions
 
-	names := make([]string, 0, len(sessions))
-	for name := range sessions {
-		names = append(names, name)
+	listings := make([]sessionListing, 0, len(currentState.Sessions))
+	for name, session := range currentState.Sessions {
+		drift, lastActivity := inspectSessionListing(session, currentState.DefaultBaseBranch)
+		listings = append(listings, sessionListing{name: name, session: session, lastActivity: lastActivity, drift: drift})
 	}
-	sort.Strings(names)
+	sort.Slice(listings, func(i, j int) bool {
+		if !listings[i].lastActivity.Equal(listings[j].lastActivity) {
+			return listings[i].lastActivity.After(listings[j].lastActivity)
+		}
+		return listings[i].name < listings[j].name
+	})
 
-	writer := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "FEATURE\tCREATED\tREPOSITORIES\tDRIFT")
-	for _, name := range names {
-		session := sessions[name]
-		fmt.Fprintf(writer, "%s\t%s\t%d\t%s\n", name, session.CreatedAt.Format(time.RFC3339), len(session.Repos), sessionDrift(session, currentState.DefaultBaseBranch))
+	var table bytes.Buffer
+	writer := tabwriter.NewWriter(&table, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(writer, "FEATURE\tCREATED\tLAST ACTIVITY\tREPOSITORIES\tDRIFT")
+	for _, listing := range listings {
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%s\n",
+			listing.name,
+			listing.session.CreatedAt.Format(time.RFC3339),
+			listing.lastActivity.UTC().Format(time.RFC3339),
+			len(listing.session.Repos),
+			listing.drift,
+		)
+	}
+	if err := writer.Flush(); err != nil {
+		return err
 	}
 
-	return writer.Flush()
+	// Colors are applied after alignment because tabwriter would count escape
+	// sequences as cell width.
+	lines := strings.SplitAfter(table.String(), "\n")
+	color := colorEnabled(output)
+	for index, line := range lines {
+		if line == "" {
+			continue
+		}
+		if color {
+			text := strings.TrimSuffix(line, "\n")
+			if index == 0 {
+				text = colorize(true, ansiBold, text)
+			} else {
+				drift := listings[index-1].drift
+				text = strings.TrimSuffix(text, drift) + colorize(true, driftColor(drift), drift)
+			}
+			line = text + "\n"
+		}
+		if _, err := io.WriteString(output, line); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func sessionDrift(session state.Session, defaultBaseBranch string) string {
+	drift, _ := inspectSessionListing(session, defaultBaseBranch)
+	return drift
+}
+
+// inspectSessionListing reports the cached base drift of session and its most
+// recent local activity, which is never earlier than the session creation.
+func inspectSessionListing(session state.Session, defaultBaseBranch string) (string, time.Time) {
 	totalBehind := 0
+	driftKnown := true
+	lastActivity := session.CreatedAt
 	for _, repository := range session.Repos {
 		baseBranch := repository.BaseBranch
 		if baseBranch == "" {
 			baseBranch = defaultBaseBranch
 		}
-		status, err := gitcmd.CachedBaseStatus(repository.WorktreePath, baseBranch)
-		if err != nil {
-			return "unknown"
+		baseRef, err := gitcmd.ResolveBaseRef(repository.WorktreePath, baseBranch)
+		if err == nil {
+			_, behind, aheadBehindErr := gitcmd.AheadBehind(repository.WorktreePath, baseRef)
+			if aheadBehindErr != nil {
+				driftKnown = false
+			}
+			totalBehind += behind
+		} else {
+			driftKnown = false
+			baseRef = ""
 		}
-		totalBehind += status.Behind
-	}
-	if totalBehind == 0 {
-		return "current"
+		if activity, err := gitcmd.LastActivity(repository.WorktreePath, baseRef); err == nil && activity.After(lastActivity) {
+			lastActivity = activity
+		}
 	}
 
-	return fmt.Sprintf("%d behind", totalBehind)
+	switch {
+	case !driftKnown:
+		return "unknown", lastActivity
+	case totalBehind == 0:
+		return "current", lastActivity
+	default:
+		return fmt.Sprintf("%d behind", totalBehind), lastActivity
+	}
+}
+
+func driftColor(drift string) string {
+	switch {
+	case drift == "current":
+		return ansiGreen
+	case drift == "unknown":
+		return ansiRed
+	default:
+		return ansiYellow
+	}
+}
+
+func colorize(enabled bool, code, text string) string {
+	if !enabled {
+		return text
+	}
+	return code + text + ansiReset
+}
+
+// colorEnabled reports whether ANSI colors should be written to output: only
+// for terminals, and never when NO_COLOR is set (https://no-color.org).
+func colorEnabled(output io.Writer) bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	file, ok := output.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 type repositoryStatus struct {

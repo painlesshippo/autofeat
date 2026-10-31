@@ -188,7 +188,7 @@ inputs, or safety overrides. For example, `new` uses `--local`, `--remote`,
 | `autofeat sync SELECTOR... --cancel` | Abort in-progress rebases left by an interrupted synchronization. |
 | `autofeat status [SELECTOR...]` | Inspect repository health; defaults to every session. |
 | `autofeat teardown SELECTOR... [--force]` | Remove matching sessions and their worktrees. |
-| `autofeat list` | List active sessions and their cached base drift. |
+| `autofeat list` | List active sessions, most recently active first, with their cached base drift. |
 | `autofeat template list` | List saved templates. |
 | `autofeat template show NAME` | Show the repositories in a template. |
 | `autofeat template save NAME --from FEATURE` | Save an active session as a template. |
@@ -500,9 +500,19 @@ List active sessions:
 autofeat list
 ```
 
+Sessions are listed most recently active first, ties broken by feature name.
+`LAST ACTIVITY` is the latest of the session creation time, the author time of
+commits the session added on top of its base, and the modification time of
+changed or untracked files in its worktrees. Rebasing with `sync` does not count
+as activity.
+
 The `DRIFT` column reports cached base drift across each session's repositories.
 Run `sync` to fetch current remote state and rebase; `list` itself never performs
 network access.
+
+When writing to a terminal, the header is bold and `DRIFT` is colored: green for
+`current`, yellow when behind, and red for `unknown`. Set `NO_COLOR` to disable
+colors.
 
 Inspect every repository in every active session:
 
