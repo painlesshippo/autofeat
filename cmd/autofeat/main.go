@@ -31,8 +31,6 @@ var (
 	goVersion     = "unknown"
 )
 
-const headlessPrompt = "Please execute the objectives defined in TASK.md"
-
 // fallbackFeatureDirectoryName is used when normalization leaves nothing usable.
 const fallbackFeatureDirectoryName = "feature"
 
@@ -42,7 +40,6 @@ var (
 	openFeatureCommand            = openSession
 	openCopilotCommand            = openCopilotSession
 	openDevcontainerCommand       = openDevcontainerSession
-	runFeatureCommand             = runFeature
 	syncFeatureCommand            = syncFeature
 	cancelSyncCommand             = cancelSync
 	teardownCommand               = teardownSession
@@ -886,43 +883,6 @@ func openCopilotSession(featureName string) error {
 	return nil
 }
 
-func runFeature(featureName, task string) error {
-	insideWorkTree, err := gitcmd.IsInsideWorkTree()
-	if err != nil {
-		return err
-	}
-	if insideWorkTree {
-		if err := ensureRepositoryAdded(featureName); err != nil {
-			return err
-		}
-	}
-
-	return runHeadless(featureName, task)
-}
-
-func ensureRepositoryAdded(featureName string) error {
-	repoRoot, err := gitcmd.GetRepoRoot()
-	if err != nil {
-		return err
-	}
-
-	session, err := state.GetSession(featureName)
-	if errors.Is(err, state.ErrSessionNotFound) {
-		return addRepository(featureName)
-	}
-	if err != nil {
-		return err
-	}
-
-	for _, repository := range session.Repos {
-		if !repository.IsRemoteClone && filepath.Clean(repository.OriginalPath) == filepath.Clean(repoRoot) {
-			return nil
-		}
-	}
-
-	return addRepository(featureName)
-}
-
 func saveTemplateFromSession(templateName, featureName string) error {
 	session, err := state.GetSession(featureName)
 	if err != nil {
@@ -1051,37 +1011,6 @@ func rollbackTemplateSession(featureName string, createdBranches map[string]bool
 		return fmt.Errorf("roll back feature directory: %w", err)
 	}
 	return state.DeleteSession(featureName)
-}
-
-func runHeadless(featureName, task string) error {
-	session, err := state.GetSession(featureName)
-	if err != nil {
-		return err
-	}
-	if task != "" {
-		if err := appendTask(session.FeatureDir, task); err != nil {
-			return err
-		}
-	}
-
-	configuration, err := config.Load()
-	if err != nil {
-		return err
-	}
-	if _, err := exec.LookPath(configuration.HeadlessCmd); err != nil {
-		return fmt.Errorf("find headless command %q: %w", configuration.HeadlessCmd, err)
-	}
-
-	command := exec.Command(configuration.HeadlessCmd, headlessArgs()...)
-	command.Dir = session.FeatureDir
-	command.Stdin = os.Stdin
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	if err := command.Run(); err != nil {
-		return fmt.Errorf("run feature %q with %q: %w", featureName, configuration.HeadlessCmd, err)
-	}
-
-	return nil
 }
 
 type syncRepository struct {
@@ -1223,27 +1152,6 @@ func cancelRepositorySync(repository state.Repository) error {
 	}
 
 	fmt.Printf("%s: rebase aborted\n", repository.Name)
-	return nil
-}
-
-func headlessArgs() []string {
-	return []string{"-i", headlessPrompt}
-}
-
-func appendTask(featureDir, task string) error {
-	taskFile, err := os.OpenFile(filepath.Join(featureDir, "TASK.md"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open task file: %w", err)
-	}
-
-	if _, err := fmt.Fprintln(taskFile, task); err != nil {
-		_ = taskFile.Close()
-		return fmt.Errorf("append task: %w", err)
-	}
-	if err := taskFile.Close(); err != nil {
-		return fmt.Errorf("close task file: %w", err)
-	}
-
 	return nil
 }
 
@@ -1672,5 +1580,5 @@ func normalizeRemoteRepositoryURL(remoteURL string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat <new|remove|open|run|sync|status|teardown|list|template|config|version|completion> [feature-selector ...] [options]")
+	return errors.New("usage: autofeat <new|remove|open|sync|status|teardown|list|template|config|version|completion> [feature-selector ...] [options]")
 }

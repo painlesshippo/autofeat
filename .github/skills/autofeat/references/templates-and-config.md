@@ -32,7 +32,7 @@ version and existing fields if you edit one.
 | --- | --- | --- |
 | `workspace_base_dir` | `~/.autofeat-workspaces` | Parent of feature directories |
 | `editor_cmd` | `code` | Used by `open`, `config`, and `open --devcontainer` (must support `--file-uri`) |
-| `headless_cmd` | `copilot` | Used by `open --copilot` and `run` |
+| `headless_cmd` | `copilot` | Used by `open --copilot` |
 | `hooks` | mise trust/install | Lifecycle commands; `[]` disables all |
 
 Hook shape:

@@ -22,7 +22,6 @@ session id and the Git branch name in every repository.
 | Open in editor | `autofeat open SELECTOR...` |
 | Open in Dev Container | `autofeat open SELECTOR... --devcontainer PATH/devcontainer.json` |
 | Open interactive agent | `autofeat open SELECTOR... --copilot` |
-| Run headless agent | `autofeat run SELECTOR... [--task TEXT]` |
 | Fetch and rebase onto base | `autofeat sync SELECTOR...` |
 | Abort a stuck sync rebase | `autofeat sync SELECTOR... --cancel` |
 | Detach one repo | `autofeat remove FEATURE (REPO \| --local PATH \| --remote URL)` |
@@ -38,8 +37,7 @@ session id and the Git branch name in every repository.
 1. Discover first: `autofeat list`, then `autofeat status FEATURE`. Both are
    offline and read-only.
 2. Quote wildcard selectors.
-3. Mutating commands: `new`, `run` (attaches the current repo when invoked
-   inside one), `sync`, `remove`, `teardown`. State what will change first.
+3. Mutating commands: `new`, `sync`, `remove`, `teardown`. State what will change first.
 4. Never pass `--force` without explicit user authorization to discard
    changes. "Remove" or "tear down" alone is not authorization.
 5. Surface autofeat's warnings verbatim (dirty worktrees, unpushed commits in

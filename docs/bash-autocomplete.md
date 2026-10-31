@@ -70,13 +70,12 @@ therefore remain inexpensive and offline.
 The Bash function understands these contexts:
 
 * Top-level command names.
-* Active feature names for `new`, `remove`, `open`, `run`, `sync`, `status`,
-  and `teardown`.
+* Active feature names for `new`, `remove`, `open`, `sync`, `status`, and
+  `teardown`.
 * `--local`, `--remote`, and `--force` for `remove`.
 * `--copilot` and `--devcontainer` for `open`.
 * `--cancel` for `sync`.
 * `--force` for `teardown`.
-* `--task` for `run`.
 * `bash` and `powershell` after `autofeat completion`.
 
 Already-selected feature names are removed. Thus:
@@ -90,9 +89,6 @@ will not suggest `feature/alpha` again.
 For `new`, active names support adding another repository to an existing
 feature. A feature name that has not been created yet remains free-form and is
 not available as a completion candidate.
-
-When the cursor is immediately after `--task`, the callback returns no feature
-suggestions because that position expects a free-form value.
 
 ## Failure Behavior
 

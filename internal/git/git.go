@@ -31,20 +31,6 @@ type RemoteBranchStatus struct {
 // ErrDetachedHead indicates that a worktree is not currently on a branch.
 var ErrDetachedHead = errors.New("detached HEAD")
 
-// IsInsideWorkTree reports whether the current directory is inside a Git worktree.
-func IsInsideWorkTree() (bool, error) {
-	output, err := exec.Command("git", "rev-parse", "--is-inside-work-tree").Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return false, nil
-		}
-		return false, fmt.Errorf("check Git worktree: %w", err)
-	}
-
-	return strings.TrimSpace(string(output)) == "true", nil
-}
-
 // GetRepoRoot returns the absolute path to the current repository's root.
 func GetRepoRoot() (string, error) {
 	output, err := run("rev-parse", "--show-toplevel")

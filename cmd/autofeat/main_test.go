@@ -440,45 +440,6 @@ func TestRemoveCommandArguments(t *testing.T) {
 	}
 }
 
-func TestRunCommandDispatch(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"feature/a", "feature/b"} {
-		if err := state.SaveSession(name, state.Session{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	originalRunFeatureCommand := runFeatureCommand
-	t.Cleanup(func() {
-		runFeatureCommand = originalRunFeatureCommand
-	})
-
-	var gotFeatureNames []string
-	var gotTask string
-	runFeatureCommand = func(featureName, task string) error {
-		gotFeatureNames = append(gotFeatureNames, featureName)
-		gotTask = task
-		return nil
-	}
-	if err := run([]string{"run", "feature/a"}); err != nil {
-		t.Fatalf("run(run feature/a) error = %v", err)
-	}
-	if len(gotFeatureNames) != 1 || gotFeatureNames[0] != "feature/a" || gotTask != "" {
-		t.Errorf("run command = (%q, %q), want ([feature/a], empty task)", gotFeatureNames, gotTask)
-	}
-
-	gotFeatureNames = nil
-	if err := run([]string{"run", "feature/*", "--task", "write tests"}); err != nil {
-		t.Fatalf("run(run feature/* --task) error = %v", err)
-	}
-	if len(gotFeatureNames) != 2 || gotFeatureNames[0] != "feature/a" || gotFeatureNames[1] != "feature/b" || gotTask != "write tests" {
-		t.Errorf("run wildcard = (%q, %q), want sorted features and task", gotFeatureNames, gotTask)
-	}
-
-	if err := run([]string{"run", "feature/a", "-task", "write tests"}); err == nil {
-		t.Error("run(run feature/a -task) error = nil, want unsupported legacy flag")
-	}
-}
-
 func TestOpenCommandCopilotDispatch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if err := state.SaveSession("feature/copilot", state.Session{}); err != nil {
@@ -2946,37 +2907,6 @@ func TestRemoveCompletesSessionRepositories(t *testing.T) {
 	}
 }
 
-func TestEnsureRepositoryAdded(t *testing.T) {
-	requireMainGit(t)
-	t.Setenv("HOME", t.TempDir())
-
-	repoPath := createMainRepository(t)
-	runMainGit(t, repoPath, "branch", "-M", "main")
-	t.Chdir(repoPath)
-
-	if err := ensureRepositoryAdded("feature/ensure"); err != nil {
-		t.Fatalf("ensureRepositoryAdded() error = %v", err)
-	}
-	session, err := state.GetSession("feature/ensure")
-	if err != nil {
-		t.Fatalf("GetSession() error = %v", err)
-	}
-	if len(session.Repos) != 1 {
-		t.Fatalf("session repos = %+v, want one repository", session.Repos)
-	}
-
-	if err := ensureRepositoryAdded("feature/ensure"); err != nil {
-		t.Fatalf("ensureRepositoryAdded() second call error = %v", err)
-	}
-	session, err = state.GetSession("feature/ensure")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(session.Repos) != 1 {
-		t.Errorf("session repos after repeated ensure = %+v, want one repository", session.Repos)
-	}
-}
-
 func TestOpenSessionInvokesEditorWithWorkspaceFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -3058,54 +2988,6 @@ func TestOpenCopilotSessionStartsAgentInFeatureDir(t *testing.T) {
 	}
 	if got, want := strings.TrimSpace(string(contents)), featureDir; got != want {
 		t.Errorf("Copilot invocation = %q, want cwd %q and no arguments", got, want)
-	}
-}
-
-func TestRunFeatureStartsHeadlessAgentInFeatureDir(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	scriptPath, logPath := writeStubCommand(t)
-	writeMainConfig(t, "code", scriptPath)
-	featureDir := t.TempDir()
-	if err := state.SaveSession("feature/agent", state.Session{FeatureDir: featureDir}); err != nil {
-		t.Fatal(err)
-	}
-	t.Chdir(t.TempDir())
-
-	if err := runFeature("feature/agent", "write tests"); err != nil {
-		t.Fatalf("runFeature() error = %v", err)
-	}
-
-	contents, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(contents)), "\n")
-	if len(lines) != 3 || lines[1] != "-i" || lines[2] != headlessPrompt {
-		t.Errorf("headless invocation = %q, want [cwd -i prompt]", lines)
-	}
-	if resolved, err := filepath.EvalSymlinks(featureDir); err != nil || lines[0] != resolved {
-		t.Errorf("headless cwd = %q, want feature directory %q", lines[0], resolved)
-	}
-	task, err := os.ReadFile(filepath.Join(featureDir, "TASK.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(task) != "write tests\n" {
-		t.Errorf("TASK.md = %q, want appended task", task)
-	}
-}
-
-func TestRunHeadlessMissingCommand(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	writeMainConfig(t, "code", filepath.Join(t.TempDir(), "does-not-exist"))
-	if err := state.SaveSession("feature/agent", state.Session{FeatureDir: t.TempDir()}); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := runHeadless("feature/agent", ""); err == nil {
-		t.Fatal("runHeadless() error = nil, want missing command error")
 	}
 }
 
@@ -3286,34 +3168,9 @@ func TestDetectBaseBranchFallsBackToStateDefault(t *testing.T) {
 	}
 }
 
-func TestAppendTask(t *testing.T) {
-	featureDir := t.TempDir()
-	if err := appendTask(featureDir, "first task"); err != nil {
-		t.Fatalf("appendTask() first write error = %v", err)
-	}
-	if err := appendTask(featureDir, "second task"); err != nil {
-		t.Fatalf("appendTask() second write error = %v", err)
-	}
-
-	contents, err := os.ReadFile(filepath.Join(featureDir, "TASK.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := string(contents), "first task\nsecond task\n"; got != want {
-		t.Errorf("TASK.md = %q, want %q", got, want)
-	}
-}
-
 func TestFeatureBranchName(t *testing.T) {
 	if got, want := featureBranchName("feature/potato"), "feature/potato"; got != want {
 		t.Errorf("featureBranchName() = %q, want feature name", got)
-	}
-}
-
-func TestHeadlessArgs(t *testing.T) {
-	got := headlessArgs()
-	if len(got) != 2 || got[0] != "-i" || got[1] != headlessPrompt {
-		t.Errorf("headlessArgs() = %q, want [-i %q]", got, headlessPrompt)
 	}
 }
 
