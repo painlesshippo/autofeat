@@ -221,6 +221,60 @@ func RemoveWorktree(destPath string, force bool) error {
 	return nil
 }
 
+// WorktreeRecord describes Git's record of a linked worktree.
+type WorktreeRecord struct {
+	Registered bool
+	Locked     bool
+}
+
+// FindWorktreeRecord looks up the record for worktreePath in the repository at
+// repoPath. The worktree directory itself does not need to exist.
+func FindWorktreeRecord(repoPath, worktreePath string) (WorktreeRecord, error) {
+	output, err := run("-C", repoPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return WorktreeRecord{}, fmt.Errorf("list worktrees in %q: %w", repoPath, err)
+	}
+
+	candidates := map[string]bool{filepath.Clean(worktreePath): true}
+	if parent, err := filepath.EvalSymlinks(filepath.Dir(worktreePath)); err == nil {
+		candidates[filepath.Join(parent, filepath.Base(worktreePath))] = true
+	}
+
+	var record WorktreeRecord
+	matching := false
+	for line := range strings.SplitSeq(output, "\n") {
+		if path, ok := strings.CutPrefix(line, "worktree "); ok {
+			matching = candidates[filepath.Clean(path)]
+			if matching {
+				record.Registered = true
+			}
+			continue
+		}
+		if matching && (line == "locked" || strings.HasPrefix(line, "locked ")) {
+			record.Locked = true
+		}
+	}
+
+	return record, nil
+}
+
+// RemoveMissingWorktree deletes the repository's record of the worktree at
+// worktreePath, whose directory no longer exists. Other worktree records are
+// left untouched. Git refuses locked records unless force is true.
+func RemoveMissingWorktree(repoPath, worktreePath string, force bool) error {
+	args := []string{"-C", repoPath, "worktree", "remove"}
+	if force {
+		args = append(args, "--force", "--force")
+	}
+	args = append(args, worktreePath)
+
+	if _, err := run(args...); err != nil {
+		return fmt.Errorf("remove worktree record %q: %w", worktreePath, err)
+	}
+
+	return nil
+}
+
 // DeleteBranch force-deletes branchName from the repository at repoPath.
 func DeleteBranch(repoPath, branchName string) error {
 	if _, err := run("-C", repoPath, "branch", "-D", branchName); err != nil {

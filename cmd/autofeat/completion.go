@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -59,6 +60,51 @@ func completeTemplateNames(_ *cobra.Command, args []string, toComplete string) (
 
 func completeNothing(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 	return nil, cobra.ShellCompDirectiveNoFileComp
+}
+
+func completeSessionRepositoryNames(command *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) == 0 {
+		return featureCompletions(nil, toComplete)
+	}
+	if len(args) > 1 || command.Flags().Changed("local") || command.Flags().Changed("remote") {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	return sessionRepositoryCompletions(args[0], toComplete, func(repository state.Repository) (string, bool) {
+		return filepath.Base(repository.WorktreePath), true
+	})
+}
+
+func completeSessionLocalRepositories(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) == 0 {
+		return nil, cobra.ShellCompDirectiveFilterDirs
+	}
+	return sessionRepositoryCompletions(args[0], toComplete, func(repository state.Repository) (string, bool) {
+		return repository.OriginalPath, !repository.IsRemoteClone
+	})
+}
+
+func completeSessionRemoteRepositories(_ *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) == 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	return sessionRepositoryCompletions(args[0], toComplete, func(repository state.Repository) (string, bool) {
+		return repository.OriginalPath, repository.IsRemoteClone
+	})
+}
+
+func sessionRepositoryCompletions(featureName, toComplete string, value func(state.Repository) (string, bool)) ([]string, cobra.ShellCompDirective) {
+	session, err := state.GetSession(featureName)
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	values := make([]string, 0, len(session.Repos))
+	for _, repository := range session.Repos {
+		if candidate, ok := value(repository); ok && strings.HasPrefix(candidate, toComplete) {
+			values = append(values, candidate)
+		}
+	}
+	sort.Strings(values)
+	return values, cobra.ShellCompDirectiveNoFileComp
 }
 
 func completeDirectories(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {

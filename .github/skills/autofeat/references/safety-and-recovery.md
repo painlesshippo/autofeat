@@ -8,15 +8,18 @@ Inspect the exact target before detaching or deleting resources:
 autofeat status feature/name
 ```
 
-Remove one repository by specifying the same kind of source used to add it:
+Remove one repository by its worktree directory name in the feature, or by the
+same kind of source used to add it:
 
 ```sh
+autofeat remove feature/name repository
 autofeat remove feature/name --local /path/to/repository
 autofeat remove feature/name --remote https://github.com/example/repository.git
 ```
 
 A local path may point inside the original repository. Removing the final
 repository tears down the entire session. Local feature branches are retained.
+A worktree that was already deleted is dropped from the session and only its own Git worktree record is removed. If that record is locked, removal and teardown stop unless `--force` is passed.
 
 Delete every worktree and remote clone in a session with:
 

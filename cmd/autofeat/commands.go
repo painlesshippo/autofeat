@@ -104,9 +104,22 @@ func newRemoveCommand() *cobra.Command {
 	var remoteURL string
 	var force bool
 	command := &cobra.Command{
-		Use:  "remove FEATURE",
-		Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		Use:  "remove FEATURE [REPO]",
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(command *cobra.Command, args []string) error {
+			selectorCount := len(args) - 1
+			if command.Flags().Changed("local") {
+				selectorCount++
+			}
+			if command.Flags().Changed("remote") {
+				selectorCount++
+			}
+			if selectorCount != 1 {
+				return usageError()
+			}
+			if len(args) == 2 {
+				return removeRepositoryByNameCommand(args[0], args[1], force)
+			}
 			if remoteURL != "" && !isRemoteURL(remoteURL) {
 				return usageError()
 			}
@@ -124,10 +137,9 @@ func newRemoveCommand() *cobra.Command {
 	command.Flags().StringVar(&remoteURL, "remote", "", "remote repository URL")
 	command.Flags().BoolVar(&force, "force", false, "discard uncommitted changes")
 	command.MarkFlagsMutuallyExclusive("local", "remote")
-	command.MarkFlagsOneRequired("local", "remote")
-	command.ValidArgsFunction = completeFeatureName
-	registerFlagCompletion(command, "local", completeDirectories)
-	registerFlagCompletion(command, "remote", completeNothing)
+	command.ValidArgsFunction = completeSessionRepositoryNames
+	registerFlagCompletion(command, "local", completeSessionLocalRepositories)
+	registerFlagCompletion(command, "remote", completeSessionRemoteRepositories)
 	return command
 }
 
