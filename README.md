@@ -4,7 +4,7 @@ development. A feature session can group worktrees from multiple repositories
 and open them together in one VS Code workspace.
 
 ## Requirements
-* Go 1.26.5 or later, only when building or installing the CLI from source.
+* Go 1.27.3 or later, only when building or installing the CLI from source.
 * Mise, when using the source installation and development tasks.
 * Git installed and available on `PATH`.
 * VS Code's `code` command on `PATH` to use the default workspace-opening
