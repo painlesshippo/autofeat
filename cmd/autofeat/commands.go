@@ -150,6 +150,7 @@ func newOpenCommand() *cobra.Command {
 
 func newSyncCommand() *cobra.Command {
 	var cancel bool
+	var keepConflicts bool
 	command := &cobra.Command{
 		Use:  "sync SELECTOR...",
 		Args: cobra.MinimumNArgs(1),
@@ -157,10 +158,12 @@ func newSyncCommand() *cobra.Command {
 			if cancel {
 				return runAllSelectedFeatures(args, cancelSyncCommand)
 			}
-			return runSelectedFeatures(args, syncFeatureCommand)
+			return syncSelectedFeatures(args, keepConflicts)
 		},
 	}
 	command.Flags().BoolVar(&cancel, "cancel", false, "abort in-progress rebases left by an interrupted synchronization")
+	command.Flags().BoolVar(&keepConflicts, "keep-conflicts", false, "leave a conflicted rebase in progress for manual resolution instead of rolling the session back")
+	command.MarkFlagsMutuallyExclusive("cancel", "keep-conflicts")
 	command.ValidArgsFunction = completeFeatureSelectors
 	return command
 }

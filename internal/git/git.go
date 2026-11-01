@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -478,13 +479,110 @@ func CachedRemoteBranchStatus(destPath, branchName string) (RemoteBranchStatus, 
 	return status, nil
 }
 
-// Rebase rebases the current branch in destPath onto baseRef.
+// Rebase rebases the current branch in destPath onto baseRef, dropping commits
+// that become empty because baseRef already contains their changes. Only the
+// current branch is rewritten: rebase.updateRefs is disabled so other branches
+// are never moved. When rerere replays recorded resolutions for every conflict
+// of a step, the rebase is continued automatically; it stops, leaving the
+// rebase in progress, only on conflicts that still need manual resolution.
+// Explicit rerere.enabled and rerere.autoUpdate settings are respected.
 func Rebase(destPath, baseRef string) error {
-	if _, err := run("-C", destPath, "rebase", baseRef); err != nil {
-		return fmt.Errorf("rebase repository %q onto %q: %w", destPath, baseRef, err)
+	output, err := run("-C", destPath, "rev-list", "--count", baseRef+"..HEAD")
+	if err != nil {
+		return fmt.Errorf("count commits to rebase in repository %q: %w", destPath, err)
+	}
+	steps, err := strconv.Atoi(strings.TrimSpace(output))
+	if err != nil {
+		return fmt.Errorf("parse commit count %q: %w", strings.TrimSpace(output), err)
+	}
+	configArgs := []string{"-c", "rebase.updateRefs=false"}
+	autoUpdateSet, err := configIsSet(destPath, "rerere.autoUpdate")
+	if err != nil {
+		return err
+	}
+	if !autoUpdateSet {
+		// Stage files rerere resolves so they no longer count as unmerged.
+		configArgs = append(configArgs, "-c", "rerere.autoUpdate=true")
+	}
+
+	_, rebaseErr := run(slices.Concat(configArgs, []string{"-C", destPath, "rebase", "--empty=drop", baseRef})...)
+	for step := 0; rebaseErr != nil && step < steps; step++ {
+		rebasing, err := IsRebaseInProgress(destPath)
+		if err != nil || !rebasing {
+			break
+		}
+		conflicts, err := UnmergedPaths(destPath)
+		if err != nil || len(conflicts) != 0 {
+			break
+		}
+		_, rebaseErr = runWithEnv([]string{"GIT_EDITOR=true"}, slices.Concat(configArgs, []string{"-C", destPath, "rebase", "--continue"})...)
+	}
+	if rebaseErr != nil {
+		return fmt.Errorf("rebase repository %q onto %q: %w", destPath, baseRef, rebaseErr)
 	}
 
 	return nil
+}
+
+// UnmergedPaths lists the paths with unresolved conflicts in destPath.
+func UnmergedPaths(destPath string) ([]string, error) {
+	output, err := run("-C", destPath, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return nil, fmt.Errorf("list conflicts in repository %q: %w", destPath, err)
+	}
+
+	return strings.Fields(output), nil
+}
+
+// HeadCommit returns the commit id HEAD points at in destPath.
+func HeadCommit(destPath string) (string, error) {
+	output, err := run("-C", destPath, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("resolve HEAD in repository %q: %w", destPath, err)
+	}
+
+	return strings.TrimSpace(output), nil
+}
+
+// ResetKeep moves the current branch in destPath to commit with
+// `git reset --keep`, which refuses rather than discards local changes that the
+// reset would overwrite.
+func ResetKeep(destPath, commit string) error {
+	if _, err := run("-C", destPath, "reset", "--quiet", "--keep", commit); err != nil {
+		return fmt.Errorf("reset repository %q to %s: %w", destPath, commit, err)
+	}
+
+	return nil
+}
+
+// EnableRerere turns on rerere in the repository at destPath so conflict
+// resolutions are recorded and replayed. An explicit rerere.enabled setting in
+// any configuration scope is left untouched.
+func EnableRerere(destPath string) error {
+	set, err := configIsSet(destPath, "rerere.enabled")
+	if err != nil || set {
+		return err
+	}
+	if _, err := run("-C", destPath, "config", "rerere.enabled", "true"); err != nil {
+		return fmt.Errorf("enable rerere in repository %q: %w", destPath, err)
+	}
+
+	return nil
+}
+
+// configIsSet reports whether key is set in any configuration scope that
+// applies to the repository at destPath.
+func configIsSet(destPath, key string) (bool, error) {
+	err := exec.Command("git", "-C", destPath, "config", "--get", key).Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+
+	return false, fmt.Errorf("read %s in repository %q: %w", key, destPath, err)
 }
 
 // AbortRebase aborts the rebase in progress in destPath, restoring the worktree
@@ -577,7 +675,14 @@ func LastActivity(destPath, baseRef string) (time.Time, error) {
 }
 
 func run(args ...string) (string, error) {
+	return runWithEnv(nil, args...)
+}
+
+func runWithEnv(env []string, args ...string) (string, error) {
 	command := exec.Command("git", args...)
+	if env != nil {
+		command.Env = append(os.Environ(), env...)
+	}
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))

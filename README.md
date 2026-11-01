@@ -172,8 +172,8 @@ given as a worktree name, a local path, or a remote URL.
 Primary targets remain positional: feature names, feature selectors, template names, repository sources for `new` and
 `remove`, and completion shells. Repository sources are detected automatically: values starting with `http://`,
 `https://`, or `git@` are remote URLs, and anything else is a local path. Named flags specify modes, secondary inputs,
-or safety overrides. For example, `new` uses `--template` and `--ref`; `sync` uses `--cancel`; and `remove` and
-`teardown` use `--force`.
+or safety overrides. For example, `new` uses `--template` and `--ref`; `sync` uses `--cancel` and `--keep-conflicts`;
+and `remove` and `teardown` use `--force`.
 
 | Command | Description |
 | --- | --- |
@@ -182,7 +182,8 @@ or safety overrides. For example, `new` uses `--template` and `--ref`; `sync` us
 | `autofeat new FEATURE --azure-build (ID \| URL) [--azure-org ORG --azure-project PROJECT] [--azure-url URL]` | Create a feature session from the repositories an Azure DevOps build resolved. |
 | `autofeat remove FEATURE (REPO \| PATH \| URL) [--force]` | Remove one repository from a feature session. |
 | `autofeat open SELECTOR... [--copilot \| --devcontainer PATH]` | Open matching sessions in the editor, the Dev Container at PATH, or Copilot CLI. |
-| `autofeat sync SELECTOR...` | Fetch and rebase matching sessions onto their base references. |
+| `autofeat sync SELECTOR...` | Fetch and rebase matching sessions onto their base references, rolling a session back on conflict. |
+| `autofeat sync SELECTOR... --keep-conflicts` | Synchronize, but leave a conflicted rebase in progress for manual resolution. |
 | `autofeat sync SELECTOR... --cancel` | Abort in-progress rebases left by an interrupted synchronization. |
 | `autofeat status [SELECTOR...]` | Inspect repository health; defaults to every session. |
 | `autofeat teardown SELECTOR... [--force]` | Remove matching sessions and their worktrees. |
@@ -445,13 +446,40 @@ autofeat sync feature/potato
 ```
 
 Every worktree in the session must be on the feature branch and have no staged,
-unstaged, or untracked changes before synchronization begins. Repositories are
-then synchronized sequentially. If a rebase conflicts, synchronization stops
-and leaves the rebase in progress so it can be resolved and continued, or
-cancelled with `autofeat sync --cancel`. Repositories without an `origin`
-remote rebase onto their local base branch without fetching. Origin branches
-are fetched before rebasing; tags, commit SHAs, and other immutable references
-are resolved locally and are not fetched.
+unstaged, or untracked changes before synchronization begins. The base of every
+origin-backed repository is then fetched, retrying transient failures, before
+any repository is rebased, so a network failure leaves the session untouched.
+Repositories without an `origin` remote rebase onto their local base branch
+without fetching. Origin branches are fetched before rebasing; tags, commit
+SHAs, and other immutable references are resolved locally and are not fetched.
+
+Repositories are rebased sequentially. Synchronization is all-or-nothing: if a
+rebase conflicts or fails, it is aborted and every repository already rebased
+is reset to its pre-synchronization commit with `git reset --keep`, so the
+session is never left half-synchronized. A repository that gained new commits
+or switched branches after it was rebased is left untouched and reported
+instead, so concurrent work is never discarded. Only the feature branch is
+rewritten; `rebase.updateRefs` is disabled so stacked branches never move. The
+conflicting files are reported.
+Pass `--keep-conflicts` to instead stop at the conflict and leave the rebase in
+progress so it can be resolved and continued, or cancelled with
+`autofeat sync --cancel`:
+
+```sh
+autofeat sync feature/potato --keep-conflicts
+```
+
+Synchronization enables Git's `rerere` in each rebased repository unless
+`rerere.enabled` is already set explicitly, so conflicts resolved once are
+resolved automatically on later synchronizations; an explicit `false` disables
+replay. When recorded resolutions settle every conflict of a commit, the rebase
+continues without stopping, unless `rerere.autoUpdate` is explicitly disabled.
+Commits that become empty because the base already contains their changes are
+dropped.
+
+Every selected session is synchronized even when another fails. When more than
+one session is selected, a summary of synchronized and failed sessions is
+printed, and any failure makes the command exit unsuccessfully.
 
 Cancel an interrupted synchronization when a conflict is not worth resolving
 right now:

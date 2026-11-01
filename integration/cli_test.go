@@ -351,6 +351,13 @@ func TestSyncCancelAbortsConflictedRebase(t *testing.T) {
 	if result.err == nil {
 		t.Fatalf("sync succeeded despite a conflict; stdout:\n%s\nstderr:\n%s", result.stdout, result.stderr)
 	}
+	requireOutputContains(t, result.stderr, "rolled back", "--keep-conflicts")
+	requireRebaseInProgress(t, repository.WorktreePath, environment, false)
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "sync", featureName, "--keep-conflicts")
+	if result.err == nil {
+		t.Fatalf("sync succeeded despite a conflict; stdout:\n%s\nstderr:\n%s", result.stdout, result.stderr)
+	}
 	requireOutputContains(t, result.stderr, "--cancel")
 	requireRebaseInProgress(t, repository.WorktreePath, environment, true)
 
