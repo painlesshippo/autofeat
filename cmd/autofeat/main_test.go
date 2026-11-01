@@ -775,7 +775,7 @@ func TestSyncCommandDispatch(t *testing.T) {
 	})
 
 	var gotFeatureName string
-	syncFeatureCommand = func(featureName string) error {
+	syncFeatureCommand = func(featureName string, _ bool) error {
 		gotFeatureName = featureName
 		return nil
 	}
@@ -908,7 +908,7 @@ func TestSyncFeatureFetchesAndRebases(t *testing.T) {
 	}}}); err != nil {
 		t.Fatalf("SaveSession() error = %v", err)
 	}
-	if err := syncFeature("feature/sync"); err != nil {
+	if err := syncFeature("feature/sync", false); err != nil {
 		t.Fatalf("syncFeature() error = %v", err)
 	}
 
@@ -937,7 +937,7 @@ func TestSyncFeatureAcceptsTagBaseWithoutFetchingBranch(t *testing.T) {
 	}}}); err != nil {
 		t.Fatalf("SaveSession() error = %v", err)
 	}
-	if err := syncFeature("feature/tag"); err != nil {
+	if err := syncFeature("feature/tag", false); err != nil {
 		t.Fatalf("syncFeature() tag error = %v", err)
 	}
 }
@@ -962,7 +962,7 @@ func TestSyncFeatureDirtyPreflightDoesNotFetch(t *testing.T) {
 	}}}); err != nil {
 		t.Fatalf("SaveSession() error = %v", err)
 	}
-	if err := syncFeature("feature/dirty"); err == nil {
+	if err := syncFeature("feature/dirty", false); err == nil {
 		t.Fatal("syncFeature() error = nil, want dirty worktree error")
 	}
 	if got := mainGitOutput(t, worktreePath, "rev-parse", "origin/main"); got != originalBase {
@@ -984,7 +984,7 @@ func TestSyncFeaturePreflightRejections(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err := syncFeature("feature/wrong")
+		err := syncFeature("feature/wrong", false)
 		if err == nil || !strings.Contains(err.Error(), "is on branch") {
 			t.Errorf("syncFeature() error = %v, want wrong-branch error", err)
 		}
@@ -1007,7 +1007,7 @@ func TestSyncFeaturePreflightRejections(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err := syncFeature("feature/rebasing")
+		err := syncFeature("feature/rebasing", false)
 		if err == nil || !strings.Contains(err.Error(), "rebase in progress") {
 			t.Errorf("syncFeature() error = %v, want rebase-in-progress error", err)
 		}
@@ -1020,13 +1020,13 @@ func TestSyncFeaturePreflightRejections(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := syncFeature("feature/missing"); err == nil {
+		if err := syncFeature("feature/missing", false); err == nil {
 			t.Error("syncFeature() error = nil, want missing worktree error")
 		}
 	})
 }
 
-func TestSyncFeatureConflictLeavesRebaseResumable(t *testing.T) {
+func TestSyncFeatureKeepConflictsLeavesRebaseResumable(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
 
@@ -1047,7 +1047,7 @@ func TestSyncFeatureConflictLeavesRebaseResumable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := syncFeature("feature/conflict"); err == nil {
+	if err := syncFeature("feature/conflict", true); err == nil {
 		t.Fatal("syncFeature() error = nil, want rebase conflict")
 	}
 	rebasing, err := gitcmd.IsRebaseInProgress(repoPath)
@@ -1056,6 +1056,238 @@ func TestSyncFeatureConflictLeavesRebaseResumable(t *testing.T) {
 	}
 	if !rebasing {
 		t.Error("rebase is not in progress after conflict, want resumable rebase")
+	}
+}
+
+func TestSyncFeatureConflictRollsBackSession(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	cleanPath := createMainRepository(t)
+	runMainGit(t, cleanPath, "branch", "-M", "main")
+	runMainGit(t, cleanPath, "checkout", "-qb", "feature/rollback")
+	writeAndCommitMainFile(t, cleanPath, "feature.txt", "feature\n", "feature change")
+	cleanHead := strings.TrimSpace(mainGitOutput(t, cleanPath, "rev-parse", "HEAD"))
+	// A stacked branch that rebase.updateRefs would otherwise rewrite.
+	runMainGit(t, cleanPath, "branch", "feature/stacked")
+	runMainGit(t, cleanPath, "config", "rebase.updateRefs", "true")
+	runMainGit(t, cleanPath, "checkout", "main")
+	writeAndCommitMainFile(t, cleanPath, "base.txt", "base\n", "base change")
+	runMainGit(t, cleanPath, "checkout", "feature/rollback")
+
+	conflictPath := createMainRepository(t)
+	runMainGit(t, conflictPath, "branch", "-M", "main")
+	runMainGit(t, conflictPath, "checkout", "-qb", "feature/rollback")
+	writeAndCommitMainFile(t, conflictPath, "README.md", "feature\n", "feature change")
+	conflictHead := strings.TrimSpace(mainGitOutput(t, conflictPath, "rev-parse", "HEAD"))
+	runMainGit(t, conflictPath, "checkout", "main")
+	writeAndCommitMainFile(t, conflictPath, "README.md", "base\n", "base change")
+	runMainGit(t, conflictPath, "checkout", "feature/rollback")
+	t.Cleanup(func() {
+		_ = exec.Command("git", "-C", conflictPath, "rebase", "--abort").Run()
+	})
+
+	if err := state.SaveSession("feature/rollback", state.Session{Repos: []state.Repository{
+		{Name: "clean", WorktreePath: cleanPath, BaseBranch: "main"},
+		{Name: "conflicting", WorktreePath: conflictPath, BaseBranch: "main"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := syncFeature("feature/rollback", false)
+	if err == nil {
+		t.Fatal("syncFeature() error = nil, want rebase conflict")
+	}
+	for _, want := range []string{`"conflicting"`, "README.md", "rolled back"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("syncFeature() error = %v, want it to mention %q", err, want)
+		}
+	}
+	for path, wantHead := range map[string]string{cleanPath: cleanHead, conflictPath: conflictHead} {
+		rebasing, err := gitcmd.IsRebaseInProgress(path)
+		if err != nil {
+			t.Fatalf("IsRebaseInProgress(%s) error = %v", path, err)
+		}
+		if rebasing {
+			t.Errorf("rebase still in progress in %s after rollback", path)
+		}
+		if got := strings.TrimSpace(mainGitOutput(t, path, "rev-parse", "HEAD")); got != wantHead {
+			t.Errorf("HEAD in %s after rollback = %q, want %q", path, got, wantHead)
+		}
+		if got := strings.TrimSpace(mainGitOutput(t, path, "status", "--porcelain")); got != "" {
+			t.Errorf("worktree %s after rollback = %q, want clean", path, got)
+		}
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, cleanPath, "rev-parse", "feature/stacked")); got != cleanHead {
+		t.Errorf("feature/stacked after rollback = %q, want untouched %q", got, cleanHead)
+	}
+}
+
+func TestSyncFeatureRollbackPreservesConcurrentCommits(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	cleanPath := createMainRepository(t)
+	runMainGit(t, cleanPath, "branch", "-M", "main")
+	runMainGit(t, cleanPath, "checkout", "-qb", "feature/concurrent")
+	writeAndCommitMainFile(t, cleanPath, "feature.txt", "feature\n", "feature change")
+	runMainGit(t, cleanPath, "checkout", "main")
+	writeAndCommitMainFile(t, cleanPath, "base.txt", "base\n", "base change")
+	runMainGit(t, cleanPath, "checkout", "feature/concurrent")
+
+	conflictPath := createMainRepository(t)
+	runMainGit(t, conflictPath, "branch", "-M", "main")
+	runMainGit(t, conflictPath, "checkout", "-qb", "feature/concurrent")
+	writeAndCommitMainFile(t, conflictPath, "README.md", "feature\n", "feature change")
+	runMainGit(t, conflictPath, "checkout", "main")
+	writeAndCommitMainFile(t, conflictPath, "README.md", "base\n", "base change")
+	runMainGit(t, conflictPath, "checkout", "feature/concurrent")
+	t.Cleanup(func() {
+		_ = exec.Command("git", "-C", conflictPath, "rebase", "--abort").Run()
+	})
+	// Simulate an agent committing to the already synchronized repository
+	// while the second repository is being rebased.
+	hookPath := filepath.Join(conflictPath, ".git", "hooks", "pre-rebase")
+	hook := "#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\n" +
+		"git -C '" + cleanPath + "' commit --allow-empty -qm 'concurrent work'\n"
+	if err := os.WriteFile(hookPath, []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := state.SaveSession("feature/concurrent", state.Session{Repos: []state.Repository{
+		{Name: "clean", WorktreePath: cleanPath, BaseBranch: "main"},
+		{Name: "conflicting", WorktreePath: conflictPath, BaseBranch: "main"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := syncFeature("feature/concurrent", false)
+	if err == nil {
+		t.Fatal("syncFeature() error = nil, want rebase conflict")
+	}
+	for _, want := range []string{"could not be fully rolled back", `"clean"`, "preserve new work"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("syncFeature() error = %v, want it to mention %q", err, want)
+		}
+	}
+	if got := strings.TrimSpace(mainGitOutput(t, cleanPath, "log", "-1", "--format=%s")); got != "concurrent work" {
+		t.Errorf("clean repository HEAD subject = %q, want the concurrent commit preserved", got)
+	}
+}
+
+func TestSyncFeatureReplaysRecordedResolution(t *testing.T) {
+	requireMainGit(t)
+
+	tests := []struct {
+		name         string
+		disable      bool
+		wantReplayed bool
+	}{
+		{name: "rerere enabled by sync", wantReplayed: true},
+		{name: "rerere explicitly disabled", disable: true, wantReplayed: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+
+			repoPath := createMainRepository(t)
+			runMainGit(t, repoPath, "branch", "-M", "main")
+			runMainGit(t, repoPath, "checkout", "-qb", "feature/rerere")
+			writeAndCommitMainFile(t, repoPath, "README.md", "feature\n", "feature change")
+			featureCommit := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD"))
+			runMainGit(t, repoPath, "checkout", "main")
+			writeAndCommitMainFile(t, repoPath, "README.md", "base\n", "base change")
+			runMainGit(t, repoPath, "checkout", "feature/rerere")
+			t.Cleanup(func() {
+				_ = exec.Command("git", "-C", repoPath, "rebase", "--abort").Run()
+			})
+			if err := state.SaveSession("feature/rerere", state.Session{Repos: []state.Repository{{
+				Name: "repository", WorktreePath: repoPath, BaseBranch: "main",
+			}}}); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := syncFeature("feature/rerere", true); err == nil {
+				t.Fatal("first syncFeature() error = nil, want rebase conflict")
+			}
+			if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("resolved\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runMainGit(t, repoPath, "add", "README.md")
+			runMainGit(t, repoPath, "-c", "core.editor=true", "rebase", "--continue")
+			runMainGit(t, repoPath, "reset", "-q", "--hard", featureCommit)
+			if test.disable {
+				runMainGit(t, repoPath, "config", "rerere.enabled", "false")
+			}
+
+			err := syncFeature("feature/rerere", false)
+			if !test.wantReplayed {
+				if err == nil {
+					t.Fatal("second syncFeature() error = nil, want a conflict with rerere disabled")
+				}
+				if got := strings.TrimSpace(mainGitOutput(t, repoPath, "rev-parse", "HEAD")); got != featureCommit {
+					t.Errorf("HEAD after rolled back sync = %q, want %q", got, featureCommit)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("second syncFeature() error = %v, want the recorded resolution to be replayed", err)
+			}
+			content, err := os.ReadFile(filepath.Join(repoPath, "README.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(content) != "resolved\n" {
+				t.Errorf("README.md after replayed resolution = %q, want %q", content, "resolved\n")
+			}
+			status, err := gitcmd.CachedBaseStatus(repoPath, "main")
+			if err != nil {
+				t.Fatalf("CachedBaseStatus() error = %v", err)
+			}
+			if status.Ahead != 1 || status.Behind != 0 {
+				t.Errorf("status after sync = (%d ahead, %d behind), want (1, 0)", status.Ahead, status.Behind)
+			}
+		})
+	}
+}
+
+func TestSyncContinuesPastFailedFeatures(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, name := range []string{"feature/one", "feature/two"} {
+		if err := state.SaveSession(name, state.Session{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	originalSyncFeatureCommand := syncFeatureCommand
+	t.Cleanup(func() {
+		syncFeatureCommand = originalSyncFeatureCommand
+	})
+
+	var gotFeatureNames []string
+	var gotKeepConflicts []bool
+	syncFeatureCommand = func(featureName string, keepConflicts bool) error {
+		gotFeatureNames = append(gotFeatureNames, featureName)
+		gotKeepConflicts = append(gotKeepConflicts, keepConflicts)
+		if featureName == "feature/one" {
+			return errors.New("conflict")
+		}
+		return nil
+	}
+
+	err := run([]string{"sync", "feature/*", "--keep-conflicts"})
+	if err == nil || !strings.Contains(err.Error(), `"feature/one"`) {
+		t.Errorf("run(sync feature/*) error = %v, want failure naming feature/one", err)
+	}
+	if len(gotFeatureNames) != 2 || gotFeatureNames[1] != "feature/two" {
+		t.Errorf("synchronized features = %q, want both despite the first failing", gotFeatureNames)
+	}
+	for _, keepConflicts := range gotKeepConflicts {
+		if !keepConflicts {
+			t.Error("keepConflicts = false, want --keep-conflicts forwarded")
+		}
+	}
+	if err := run([]string{"sync", "feature/two", "--cancel", "--keep-conflicts"}); err == nil {
+		t.Error("run(sync --cancel --keep-conflicts) error = nil, want mutually exclusive flags error")
 	}
 }
 
@@ -1258,7 +1490,7 @@ func TestCancelSyncCommandDispatch(t *testing.T) {
 
 	var syncedFeatureNames []string
 	var cancelledFeatureNames []string
-	syncFeatureCommand = func(featureName string) error {
+	syncFeatureCommand = func(featureName string, _ bool) error {
 		syncedFeatureNames = append(syncedFeatureNames, featureName)
 		return nil
 	}

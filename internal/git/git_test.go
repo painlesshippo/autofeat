@@ -490,6 +490,28 @@ func TestAbortRebaseRestoresPreRebaseState(t *testing.T) {
 	}
 }
 
+func TestEnableRerereRespectsExplicitSetting(t *testing.T) {
+	requireGit(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	repoPath := createRepository(t)
+	if err := EnableRerere(repoPath); err != nil {
+		t.Fatalf("EnableRerere() error = %v", err)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, repoPath, "config", "--get", "rerere.enabled")); got != "true" {
+		t.Errorf("rerere.enabled = %q, want true", got)
+	}
+
+	runGit(t, repoPath, "config", "rerere.enabled", "false")
+	if err := EnableRerere(repoPath); err != nil {
+		t.Fatalf("EnableRerere() error = %v", err)
+	}
+	if got := strings.TrimSpace(runGitOutput(t, repoPath, "config", "--get", "rerere.enabled")); got != "false" {
+		t.Errorf("rerere.enabled = %q, want explicit false preserved", got)
+	}
+}
+
 func TestAbortRebaseWithoutRebaseInProgressFails(t *testing.T) {
 	requireGit(t)
 

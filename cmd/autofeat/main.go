@@ -1019,7 +1019,10 @@ type syncRepository struct {
 	fetchBranch string
 }
 
-func syncFeature(featureName string) error {
+// syncFeature fetches every repository's base and rebases onto it. Unless
+// keepConflicts is set, a failure rolls the whole session back to its
+// pre-synchronization commits instead of leaving it partially rebased.
+func syncFeature(featureName string, keepConflicts bool) error {
 	session, err := state.GetSession(featureName)
 	if err != nil {
 		return err
@@ -1079,33 +1082,171 @@ func syncFeature(featureName string) error {
 	}
 
 	for _, syncRepo := range repositories {
-		repository := syncRepo.repository
 		if syncRepo.fetchBranch != "" {
-			if err := gitcmd.FetchBase(repository.WorktreePath, syncRepo.fetchBranch); err != nil {
+			if err := fetchBaseWithRetry(syncRepo.repository.WorktreePath, syncRepo.fetchBranch); err != nil {
 				return err
 			}
 		}
+	}
+
+	var rebased []rebasedRepository
+	for _, syncRepo := range repositories {
+		repository := syncRepo.repository
 		baseRef := syncRepo.baseRef
 		ahead, behind, err := gitcmd.AheadBehind(repository.WorktreePath, baseRef)
 		if err != nil {
-			return err
+			return rollBackSync(repository, rebased, keepConflicts, err)
 		}
 		fmt.Printf("%s: %d ahead, %d behind %s\n", repository.Name, ahead, behind, baseRef)
 		if behind == 0 {
 			continue
 		}
-		if err := gitcmd.Rebase(repository.WorktreePath, baseRef); err != nil {
-			fmt.Fprintf(os.Stderr, "Resolve conflicts in %s, then run `git -C %s rebase --continue`, or cancel the synchronization with `autofeat sync %s --cancel`.\n", repository.Name, repository.WorktreePath, featureName)
-			return err
+		originalHead, err := gitcmd.HeadCommit(repository.WorktreePath)
+		if err != nil {
+			return rollBackSync(repository, rebased, keepConflicts, err)
 		}
+		if err := gitcmd.EnableRerere(repository.WorktreePath); err != nil {
+			return rollBackSync(repository, rebased, keepConflicts, err)
+		}
+		if err := gitcmd.Rebase(repository.WorktreePath, baseRef); err != nil {
+			conflicts, _ := gitcmd.UnmergedPaths(repository.WorktreePath)
+			if len(conflicts) != 0 {
+				err = fmt.Errorf("repository %q conflicts with %s in %s: %w", repository.Name, baseRef, strings.Join(conflicts, ", "), err)
+			}
+			if keepConflicts {
+				fmt.Fprintf(os.Stderr, "Resolve conflicts in %s, then run `git -C %s rebase --continue`, or cancel the synchronization with `autofeat sync %s --cancel`.\n", repository.Name, repository.WorktreePath, featureName)
+				return err
+			}
+			if len(conflicts) != 0 {
+				fmt.Fprintf(os.Stderr, "Rerun `autofeat sync %s --keep-conflicts` to resolve the conflicts in %s manually.\n", featureName, repository.Name)
+			}
+			return rollBackSync(repository, rebased, keepConflicts, err)
+		}
+		rebasedHead, err := gitcmd.HeadCommit(repository.WorktreePath)
+		if err != nil {
+			return rollBackSync(repository, rebased, keepConflicts, err)
+		}
+		rebased = append(rebased, rebasedRepository{
+			repository:   repository,
+			branch:       featureBranchName(featureName),
+			originalHead: originalHead,
+			rebasedHead:  rebasedHead,
+		})
 		ahead, behind, err = gitcmd.AheadBehind(repository.WorktreePath, baseRef)
 		if err != nil {
-			return err
+			return rollBackSync(repository, rebased, keepConflicts, err)
 		}
 		fmt.Printf("%s: synchronized (%d ahead, %d behind)\n", repository.Name, ahead, behind)
 	}
 
 	return nil
+}
+
+type rebasedRepository struct {
+	repository   state.Repository
+	branch       string
+	originalHead string
+	rebasedHead  string
+}
+
+// rollBackSync keeps a failed synchronization all-or-nothing: it aborts the
+// rebase left in failing and resets every repository already rebased to its
+// pre-synchronization commit. A repository that moved since it was rebased,
+// for example because an agent committed to it, is left untouched and reported
+// so that work is never discarded. With keepConflicts, cause is returned
+// unchanged.
+func rollBackSync(failing state.Repository, rebased []rebasedRepository, keepConflicts bool, cause error) error {
+	if keepConflicts {
+		return cause
+	}
+
+	failures := []error{cause}
+	rebasing, err := gitcmd.IsRebaseInProgress(failing.WorktreePath)
+	if err != nil {
+		failures = append(failures, err)
+	} else if rebasing {
+		if err := gitcmd.AbortRebase(failing.WorktreePath); err != nil {
+			failures = append(failures, err)
+		} else {
+			fmt.Printf("%s: rebase aborted\n", failing.Name)
+		}
+	}
+	for index := len(rebased) - 1; index >= 0; index-- {
+		if err := restoreRebasedRepository(rebased[index]); err != nil {
+			failures = append(failures, fmt.Errorf("restore repository %q to %s: %w", rebased[index].repository.Name, rebased[index].originalHead, err))
+			continue
+		}
+		fmt.Printf("%s: restored to %s\n", rebased[index].repository.Name, rebased[index].originalHead)
+	}
+	if len(failures) != 1 {
+		return fmt.Errorf("synchronization failed and could not be fully rolled back: %w", errors.Join(failures...))
+	}
+
+	return fmt.Errorf("%w; synchronization rolled back", cause)
+}
+
+func restoreRebasedRepository(rebased rebasedRepository) error {
+	worktreePath := rebased.repository.WorktreePath
+	branchName, err := gitcmd.CurrentBranch(worktreePath)
+	if err != nil {
+		return err
+	}
+	if branchName != rebased.branch {
+		return fmt.Errorf("worktree switched to branch %q since it was synchronized; left unchanged", branchName)
+	}
+	head, err := gitcmd.HeadCommit(worktreePath)
+	if err != nil {
+		return err
+	}
+	if head != rebased.rebasedHead {
+		return fmt.Errorf("branch moved from synchronized commit %s to %s; left unchanged to preserve new work", rebased.rebasedHead, head)
+	}
+
+	return gitcmd.ResetKeep(worktreePath, rebased.originalHead)
+}
+
+// fetchBaseRetryDelay is the wait before the first fetch retry; later retries
+// wait proportionally longer.
+var fetchBaseRetryDelay = 2 * time.Second
+
+const fetchBaseAttempts = 3
+
+func fetchBaseWithRetry(worktreePath, baseBranch string) error {
+	var err error
+	for attempt := 1; attempt <= fetchBaseAttempts; attempt++ {
+		if err = gitcmd.FetchBase(worktreePath, baseBranch); err == nil {
+			return nil
+		}
+		if attempt < fetchBaseAttempts {
+			fmt.Fprintf(os.Stderr, "Fetch attempt %d of %d failed, retrying: %v\n", attempt, fetchBaseAttempts, err)
+			time.Sleep(time.Duration(attempt) * fetchBaseRetryDelay)
+		}
+	}
+
+	return err
+}
+
+// syncSelectedFeatures synchronizes every selected feature, continuing past
+// failures, and summarizes the outcome when more than one feature was selected.
+func syncSelectedFeatures(selectors []string, keepConflicts bool) error {
+	var synchronized, failed []string
+	err := runAllSelectedFeatures(selectors, func(featureName string) error {
+		if err := syncFeatureCommand(featureName, keepConflicts); err != nil {
+			failed = append(failed, featureName)
+			return fmt.Errorf("sync feature %q: %w", featureName, err)
+		}
+		synchronized = append(synchronized, featureName)
+		return nil
+	})
+	if total := len(synchronized) + len(failed); total > 1 {
+		fmt.Printf("Synchronized %d of %d sessions", len(synchronized), total)
+		if len(failed) != 0 {
+			fmt.Printf("; failed: %s", strings.Join(failed, ", "))
+		}
+		fmt.Println()
+	}
+
+	return err
 }
 
 // cancelSync abandons an interrupted synchronization by aborting the rebase
