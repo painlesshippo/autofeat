@@ -90,20 +90,60 @@ func TestLoadFromPathReturnsEmptyStateWhenMissing(t *testing.T) {
 	}
 }
 
-func TestLoadFromPathDefaultsMissingGlobalBaseBranch(t *testing.T) {
+func TestLoadFromPathSchemaMigrationsAndDefaults(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "state.json")
-	if err := os.WriteFile(path, []byte(`{"sessions":{}}`), 0o600); err != nil {
-		t.Fatal(err)
+	tests := map[string]struct {
+		contents       string
+		wantBaseBranch string
+		wantSession    bool
+	}{
+		"defaults missing global base branch": {
+			contents:       `{"sessions":{}}`,
+			wantBaseBranch: DefaultBaseBranch,
+		},
+		"normalizes legacy schema version zero": {
+			contents:       `{"schema_version":0,"sessions":{}}`,
+			wantBaseBranch: DefaultBaseBranch,
+		},
+		"migrates schema version one": {
+			contents:       `{"schema_version":1,"default_base_branch":"main","sessions":{}}`,
+			wantBaseBranch: "main",
+		},
+		"migrates schema version two": {
+			contents: `{"schema_version":2,"default_base_branch":"main","repository_base_branches":{},` +
+				`"sessions":{"feature":{"feature_dir":"/tmp/f","repos":[{"name":"repo","worktree_path":"/tmp/f/repo"}]}}}`,
+			wantBaseBranch: "main",
+			wantSession:    true,
+		},
 	}
 
-	state, err := LoadFromPath(path)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-	if state.DefaultBaseBranch != DefaultBaseBranch {
-		t.Errorf("DefaultBaseBranch = %q, want %q", state.DefaultBaseBranch, DefaultBaseBranch)
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "state.json")
+			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := LoadFromPath(path)
+			if err != nil {
+				t.Fatalf("LoadFromPath() error = %v", err)
+			}
+			if got.SchemaVersion != currentSchemaVersion {
+				t.Errorf("SchemaVersion = %d, want %d", got.SchemaVersion, currentSchemaVersion)
+			}
+			if got.DefaultBaseBranch != test.wantBaseBranch {
+				t.Errorf("DefaultBaseBranch = %q, want %q", got.DefaultBaseBranch, test.wantBaseBranch)
+			}
+			if got.RepositoryBaseBranches == nil {
+				t.Error("RepositoryBaseBranches = nil, want empty map")
+			}
+			if test.wantSession && len(got.Sessions["feature"].Artifacts) != 0 {
+				t.Errorf("Artifacts = %+v, want none", got.Sessions["feature"].Artifacts)
+			}
+		})
 	}
 }
 
@@ -117,68 +157,6 @@ func TestLoadFromPathRejectsCorruptState(t *testing.T) {
 
 	if _, err := LoadFromPath(path); err == nil {
 		t.Fatal("LoadFromPath() error = nil, want parse error")
-	}
-}
-
-func TestLoadFromPathNormalizesLegacySchemaVersion(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "state.json")
-	if err := os.WriteFile(path, []byte(`{"schema_version":0,"sessions":{}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	state, err := LoadFromPath(path)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-	if state.SchemaVersion != currentSchemaVersion {
-		t.Errorf("SchemaVersion = %d, want %d", state.SchemaVersion, currentSchemaVersion)
-	}
-	if state.DefaultBaseBranch != DefaultBaseBranch {
-		t.Errorf("DefaultBaseBranch = %q, want %q", state.DefaultBaseBranch, DefaultBaseBranch)
-	}
-}
-
-func TestLoadFromPathMigratesVersionOne(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "state.json")
-	if err := os.WriteFile(path, []byte(`{"schema_version":1,"default_base_branch":"main","sessions":{}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	state, err := LoadFromPath(path)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-	if state.SchemaVersion != currentSchemaVersion {
-		t.Errorf("SchemaVersion = %d, want %d", state.SchemaVersion, currentSchemaVersion)
-	}
-	if state.RepositoryBaseBranches == nil {
-		t.Error("RepositoryBaseBranches = nil, want empty map")
-	}
-}
-
-func TestLoadFromPathMigratesVersionTwo(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "state.json")
-	contents := `{"schema_version":2,"default_base_branch":"main","repository_base_branches":{},` +
-		`"sessions":{"feature":{"feature_dir":"/tmp/f","repos":[{"name":"repo","worktree_path":"/tmp/f/repo"}]}}}`
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	state, err := LoadFromPath(path)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-	if state.SchemaVersion != currentSchemaVersion {
-		t.Errorf("SchemaVersion = %d, want %d", state.SchemaVersion, currentSchemaVersion)
-	}
-	if got := state.Sessions["feature"].Artifacts; len(got) != 0 {
-		t.Errorf("Artifacts = %+v, want none", got)
 	}
 }
 
@@ -299,6 +277,10 @@ func TestSaveToPathValidatesState(t *testing.T) {
 			state: State{SchemaVersion: currentSchemaVersion + 1},
 			want:  "unsupported schema version",
 		},
+		"blank default base branch": {
+			state: State{DefaultBaseBranch: " "},
+			want:  "default_base_branch is required",
+		},
 		"blank session name": {
 			state: State{Sessions: map[string]Session{" ": {}}},
 			want:  "session name is required",
@@ -399,9 +381,31 @@ func TestSessionOperationsOnMissingSession(t *testing.T) {
 }
 
 func TestSaveSessionRejectsEmptyName(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
 	if err := SaveSession("", Session{}); err == nil {
 		t.Fatal("SaveSession(\"\") error = nil, want error")
+	}
+
+	// Corrupt state file propagates Load() errors through session helpers.
+	statePath := filepath.Join(home, ".autofeat", "state.json")
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetSession("feature1"); err == nil {
+		t.Error("GetSession(corrupt) error = nil, want error")
+	}
+	if _, err := ListSessions(); err == nil {
+		t.Error("ListSessions(corrupt) error = nil, want error")
+	}
+	if err := SaveSession("feature1", Session{}); err == nil {
+		t.Error("SaveSession(corrupt) error = nil, want error")
+	}
+	if err := DeleteSession("feature1"); err == nil {
+		t.Error("DeleteSession(corrupt) error = nil, want error")
 	}
 }

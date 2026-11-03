@@ -172,14 +172,26 @@ func TestArtifactPlainIDsAreScopedByTypeAndRepository(t *testing.T) {
 func TestArtifactCommandDispatch(t *testing.T) {
 	saveArtifactSession(t)
 
+	if err := run([]string{"artifact"}); err == nil {
+		t.Error("run(artifact) without subcommand error = nil")
+	}
 	if err := run([]string{"artifact", "add", "feature/art", "https://example.com/doc"}); err != nil {
 		t.Fatalf("run(artifact add) error = %v", err)
 	}
 	if err := run([]string{"artifact", "add", "feature/art", "x", "--type", "bogus"}); err == nil {
 		t.Error("run(artifact add --type bogus) error = nil")
 	}
+	if err := run([]string{"artifact", "list", "feature/art"}); err != nil {
+		t.Fatalf("run(artifact list feature/art) error = %v", err)
+	}
 	if err := run([]string{"artifact", "list"}); err == nil {
 		t.Error("run(artifact list) without feature error = nil")
+	}
+	if err := run([]string{"artifact", "remove", "feature/art", "https://example.com/doc"}); err != nil {
+		t.Fatalf("run(artifact remove) error = %v", err)
+	}
+	if err := run([]string{"artifact", "add", "feature/art", "https://example.com/doc"}); err != nil {
+		t.Fatalf("run(artifact add) error = %v", err)
 	}
 	session, err := state.GetSession("feature/art")
 	if err != nil {
@@ -189,7 +201,14 @@ func TestArtifactCommandDispatch(t *testing.T) {
 		t.Errorf("artifacts = %+v, want one link", session.Artifacts)
 	}
 
-	values, _ := completeArtifactTypes(nil, nil, "github-p")
+	values, _ := completeFeatureThenNothing(nil, nil, "feature/")
+	if len(values) != 1 || values[0] != "feature/art" {
+		t.Errorf("completeFeatureThenNothing(0 args) = %v, want [feature/art]", values)
+	}
+	if values, _ := completeFeatureThenNothing(nil, []string{"feature/art"}, ""); values != nil {
+		t.Errorf("completeFeatureThenNothing(1 arg) = %v, want nil", values)
+	}
+	values, _ = completeArtifactTypes(nil, nil, "github-p")
 	if len(values) != 1 || values[0] != "github-pull-request" {
 		t.Errorf("completeArtifactTypes(github-p) = %v", values)
 	}
@@ -197,9 +216,25 @@ func TestArtifactCommandDispatch(t *testing.T) {
 	if strings.Join(values, ",") != "svc-1,svc-2" {
 		t.Errorf("completeArtifactRepositories(svc) = %v", values)
 	}
+	if values, _ := completeArtifactRepositories(nil, nil, ""); values != nil {
+		t.Errorf("completeArtifactRepositories(0 args) = %v, want nil", values)
+	}
+	if values, _ := completeArtifactRepositories(nil, []string{"feature/missing"}, ""); values != nil {
+		t.Errorf("completeArtifactRepositories(missing) = %v, want nil", values)
+	}
+	values, _ = completeArtifactReferences(nil, nil, "feature/")
+	if len(values) != 1 || values[0] != "feature/art" {
+		t.Errorf("completeArtifactReferences(0 args) = %v, want [feature/art]", values)
+	}
 	values, _ = completeArtifactReferences(nil, []string{"feature/art"}, "https://ex")
 	if len(values) != 1 || values[0] != "https://example.com/doc" {
 		t.Errorf("completeArtifactReferences() = %v", values)
+	}
+	if values, _ := completeArtifactReferences(nil, []string{"feature/art", "extra"}, ""); values != nil {
+		t.Errorf("completeArtifactReferences(2 args) = %v, want nil", values)
+	}
+	if values, _ := completeArtifactReferences(nil, []string{"feature/missing"}, ""); values != nil {
+		t.Errorf("completeArtifactReferences(missing) = %v, want nil", values)
 	}
 }
 

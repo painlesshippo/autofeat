@@ -13,7 +13,7 @@ run = "bash ./scripts/build.sh"
 
 [tasks.test]
 description = "Run the test suite"
-run = "go test -v ./..."
+run = "go test -race -v ./..."
 
 [tasks.test-integration]
 description = "Run the compiled CLI integration tests"

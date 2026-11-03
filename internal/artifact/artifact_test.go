@@ -41,6 +41,9 @@ func TestInfer(t *testing.T) {
 		{"github commit", "https://github.com/o/r/commit/deadbeef", GitHubCommit, "deadbeef"},
 		{"github run", "https://github.com/o/r/actions/runs/987/job/1", GitHubRun, "987"},
 		{"github repo", "https://github.com/o/r", Link, ""},
+		{"github unknown section", "https://github.com/o/r/releases/tag/v1", Link, ""},
+		{"ado git without repo", "https://dev.azure.com/org/Proj/_git", Link, ""},
+		{"portal incomplete subscription path", "https://portal.azure.com/#@tenant/resource/subscriptions/only-sub", Link, ""},
 		{"generic link", "  https://example.com/x  ", Link, ""},
 	}
 	for _, test := range tests {
@@ -187,4 +190,54 @@ func TestValidate(t *testing.T) {
 	if err := (Artifact{Type: Link}).Validate(); err == nil {
 		t.Error("Validate() with empty value error = nil")
 	}
+}
+
+func TestTypesReturnsDefensiveCopy(t *testing.T) {
+	t.Parallel()
+
+	all := Types()
+	if len(all) == 0 {
+		t.Fatal("Types() returned empty slice")
+	}
+	first := all[0]
+	all[0] = "mutated"
+	if Types()[0] != first {
+		t.Error("Types() did not return a defensive copy")
+	}
+	if got := decode("bad%ZZescape"); got != "bad%ZZescape" {
+		t.Errorf("decode(invalid escape) = %q, want original segment", got)
+	}
+}
+
+func FuzzParseAndInfer(f *testing.F) {
+	for _, seed := range []struct {
+		value  string
+		forced string
+	}{
+		{"https://dev.azure.com/org/Proj/_build/results?buildId=123", ""},
+		{"AB#4567", ""},
+		{"!45", ""},
+		{"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stapp/overview", ""},
+		{"https://github.com/o/r/pull/12", "link"},
+		{"123", "ado-build"},
+		{"https://portal.azure.com/#@t/resource/subscriptions/s/resourceGroups/rg", ""},
+	} {
+		f.Add(seed.value, seed.forced)
+	}
+	f.Fuzz(func(t *testing.T, value, forced string) {
+		_, _, _ = Infer(value)
+		got, err := Parse(value, Type(forced))
+		if err != nil {
+			return
+		}
+		if err := got.Validate(); err != nil {
+			t.Fatalf("Parse(%q, %q) produced invalid Artifact %+v: %v", value, forced, got, err)
+		}
+		if key := got.Key(); key == "" || key != got.Key() {
+			t.Fatalf("Key() for %+v = %q, want non-empty deterministic key", got, key)
+		}
+		if forced != "" && got.Type != Type(forced) {
+			t.Fatalf("Parse(%q, %q) Type = %q, want %q", value, forced, got.Type, forced)
+		}
+	})
 }

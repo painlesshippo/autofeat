@@ -30,6 +30,23 @@ func TestGetRepoRoot(t *testing.T) {
 	if root != repoPath {
 		t.Errorf("GetRepoRoot() = %q, want %q", root, repoPath)
 	}
+
+	rootAt, err := GetRepoRootAt(subdirectory)
+	if err != nil {
+		t.Fatalf("GetRepoRootAt() error = %v", err)
+	}
+	if rootAt != repoPath {
+		t.Errorf("GetRepoRootAt() = %q, want %q", rootAt, repoPath)
+	}
+
+	notARepo := t.TempDir()
+	if _, err := GetRepoRootAt(notARepo); err == nil {
+		t.Error("GetRepoRootAt(non-repo) error = nil, want error")
+	}
+	changeDirectory(t, notARepo)
+	if _, err := GetRepoRoot(); err == nil {
+		t.Error("GetRepoRoot(non-repo) error = nil, want error")
+	}
 }
 
 func TestCurrentBranchReportsDetachedHead(t *testing.T) {
@@ -443,6 +460,13 @@ func TestRebaseConflictRemainsInProgress(t *testing.T) {
 	}
 	if !rebasing {
 		t.Error("IsRebaseInProgress() = false, want true after conflict")
+	}
+	unmerged, err := UnmergedPaths(repoPath)
+	if err != nil {
+		t.Fatalf("UnmergedPaths() error = %v", err)
+	}
+	if !slices.Equal(unmerged, []string{"README.md"}) {
+		t.Errorf("UnmergedPaths() = %v, want [README.md]", unmerged)
 	}
 }
 
@@ -1073,6 +1097,165 @@ func TestDiffShowsMergeBaseChangesAndUntrackedFiles(t *testing.T) {
 	}
 	if len(untracked) != 1 || untracked[0] != "new.txt" {
 		t.Errorf("UntrackedFiles() = %v, want [new.txt]", untracked)
+	}
+
+	coloredDiff, err := Diff(repoPath, "main", true)
+	if err != nil {
+		t.Fatalf("Diff(color=true) error = %v", err)
+	}
+	if !strings.Contains(coloredDiff, "\x1b[") {
+		t.Errorf("Diff(color=true) missing ANSI escapes:\n%s", coloredDiff)
+	}
+}
+
+func TestAddWorktreeAtDeleteBranchHeadCommitAndResetKeep(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	initialHead, err := HeadCommit(repoPath)
+	if err != nil {
+		t.Fatalf("HeadCommit() error = %v", err)
+	}
+	if len(initialHead) != 40 {
+		t.Errorf("HeadCommit() = %q, want 40-char commit SHA", initialHead)
+	}
+	if _, err := HeadCommit(t.TempDir()); err == nil {
+		t.Error("HeadCommit(non-repo) error = nil, want error")
+	}
+
+	worktreePath := filepath.Join(t.TempDir(), "wt")
+	created, err := AddWorktreeAt(repoPath, "feature/at", worktreePath, "main")
+	if err != nil {
+		t.Fatalf("AddWorktreeAt() error = %v", err)
+	}
+	if !created {
+		t.Error("AddWorktreeAt() created = false, want true")
+	}
+	writeFile(t, worktreePath, "second.txt", "second\n")
+	runGit(t, worktreePath, "add", "second.txt")
+	runGit(t, worktreePath, "commit", "-qm", "second commit")
+
+	// Dirty tracked file modified since initialHead must cause ResetKeep to fail.
+	writeFile(t, worktreePath, "second.txt", "uncommitted edit\n")
+	if err := ResetKeep(worktreePath, initialHead); err == nil {
+		t.Error("ResetKeep(conflicting dirty file) error = nil, want error")
+	}
+	runGit(t, worktreePath, "checkout", "--", "second.txt")
+
+	if err := ResetKeep(worktreePath, initialHead); err != nil {
+		t.Fatalf("ResetKeep(clean) error = %v", err)
+	}
+	headAfterReset, err := HeadCommit(worktreePath)
+	if err != nil {
+		t.Fatalf("HeadCommit() after reset error = %v", err)
+	}
+	if headAfterReset != initialHead {
+		t.Errorf("HeadCommit() after ResetKeep = %q, want %q", headAfterReset, initialHead)
+	}
+
+	writeFile(t, worktreePath, "README.md", "dirty\n")
+	if err := RemoveWorktree(worktreePath, true); err != nil {
+		t.Fatalf("RemoveWorktree(force=true) error = %v", err)
+	}
+	if err := DeleteBranch(repoPath, "feature/at"); err != nil {
+		t.Fatalf("DeleteBranch() error = %v", err)
+	}
+	if err := DeleteBranch(repoPath, "feature/at"); err == nil {
+		t.Error("DeleteBranch(missing) error = nil, want error")
+	}
+}
+
+func TestCheckoutBranchReusesExistingLocalBranch(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	runGit(t, repoPath, "branch", "feature/reuse")
+
+	created, err := CheckoutBranch(repoPath, "feature/reuse", "main")
+	if err != nil {
+		t.Fatalf("CheckoutBranch(existing) error = %v", err)
+	}
+	if created {
+		t.Error("CheckoutBranch(existing) created = true, want false")
+	}
+}
+
+func TestRebaseAutoContinuesWithRerereAndDetectsRebaseApply(t *testing.T) {
+	requireGit(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	if err := EnableRerere(repoPath); err != nil {
+		t.Fatalf("EnableRerere() error = %v", err)
+	}
+	runGit(t, repoPath, "checkout", "-qb", "feature/rerere")
+	writeFile(t, repoPath, "README.md", "feature\n")
+	runGit(t, repoPath, "commit", "-qam", "feature change")
+	featureCommit, err := HeadCommit(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repoPath, "checkout", "main")
+	writeFile(t, repoPath, "README.md", "base\n")
+	runGit(t, repoPath, "commit", "-qam", "base change")
+	runGit(t, repoPath, "checkout", "feature/rerere")
+	t.Cleanup(func() {
+		_, _ = run("-C", repoPath, "rebase", "--abort")
+	})
+
+	if err := Rebase(repoPath, "main"); err == nil {
+		t.Fatal("first Rebase() error = nil, want conflict")
+	}
+	writeFile(t, repoPath, "README.md", "resolved\n")
+	runGit(t, repoPath, "add", "README.md")
+	runGit(t, repoPath, "-c", "core.editor=true", "rebase", "--continue")
+	runGit(t, repoPath, "reset", "-q", "--hard", featureCommit)
+
+	if err := Rebase(repoPath, "main"); err != nil {
+		t.Fatalf("second Rebase() with recorded rerere resolution error = %v", err)
+	}
+	rebasing, err := IsRebaseInProgress(repoPath)
+	if err != nil || rebasing {
+		t.Errorf("IsRebaseInProgress() after auto-continued rebase = (%t, %v), want (false, nil)", rebasing, err)
+	}
+
+	// Verify rebase-apply detection as well.
+	applyDir := strings.TrimSpace(runGitOutput(t, repoPath, "rev-parse", "--git-path", "rebase-apply"))
+	if !filepath.IsAbs(applyDir) {
+		applyDir = filepath.Join(repoPath, applyDir)
+	}
+	if err := os.MkdirAll(applyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(applyDir) })
+	rebasing, err = IsRebaseInProgress(repoPath)
+	if err != nil || !rebasing {
+		t.Errorf("IsRebaseInProgress(rebase-apply) = (%t, %v), want (true, nil)", rebasing, err)
+	}
+}
+
+func TestLastActivityHandlesStagedRename(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	runGit(t, repoPath, "checkout", "-qb", "feature/rename")
+	renameTime := time.Date(2031, 5, 6, 7, 8, 9, 0, time.UTC)
+	runGit(t, repoPath, "mv", "README.md", "RENAMED.md")
+	if err := os.Chtimes(filepath.Join(repoPath, "RENAMED.md"), renameTime, renameTime); err != nil {
+		t.Fatal(err)
+	}
+
+	activity, err := LastActivity(repoPath, "main")
+	if err != nil {
+		t.Fatalf("LastActivity(staged rename) error = %v", err)
+	}
+	if !activity.Equal(renameTime) {
+		t.Errorf("LastActivity(staged rename) = %v, want %v", activity, renameTime)
 	}
 }
 

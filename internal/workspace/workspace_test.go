@@ -34,4 +34,8 @@ func TestWriteProducesWorkspaceJSON(t *testing.T) {
 	if string(contents) != want {
 		t.Errorf("workspace contents = %q, want %q", contents, want)
 	}
+
+	if err := Write(filepath.Join(path, "nested.code-workspace"), []string{"repo1"}); err == nil {
+		t.Error("Write(under regular file) error = nil, want directory creation error")
+	}
 }

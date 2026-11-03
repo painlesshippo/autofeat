@@ -67,57 +67,72 @@ func TestLoadFromPathRejectsMissingRequiredFields(t *testing.T) {
 	}
 }
 
-func TestLoadFromPathDefaultsMissingHeadlessCommand(t *testing.T) {
+func TestLoadFromPathNormalizationAndDefaults(t *testing.T) {
 	t.Parallel()
 
-	configPath := filepath.Join(t.TempDir(), "config.json")
-	contents := []byte(`{"workspace_base_dir":"/tmp/autofeat-workspaces","editor_cmd":"code"}`)
-	if err := os.WriteFile(configPath, contents, 0o600); err != nil {
-		t.Fatal(err)
+	tests := map[string]struct {
+		contents string
+		want     Config
+	}{
+		"defaults missing headless command and hooks": {
+			contents: `{"workspace_base_dir":"/tmp/autofeat-workspaces","editor_cmd":"code"}`,
+			want: Config{
+				SchemaVersion:    currentSchemaVersion,
+				WorkspaceBaseDir: "/tmp/autofeat-workspaces",
+				EditorCmd:        "code",
+				HeadlessCmd:      defaultHeadlessCommand,
+				Hooks:            defaultHooks(),
+			},
+		},
+		"defaults missing hooks when headless command is set": {
+			contents: `{"workspace_base_dir":"/tmp/autofeat-workspaces","editor_cmd":"code","headless_cmd":"copilot"}`,
+			want: Config{
+				SchemaVersion:    currentSchemaVersion,
+				WorkspaceBaseDir: "/tmp/autofeat-workspaces",
+				EditorCmd:        "code",
+				HeadlessCmd:      "copilot",
+				Hooks:            defaultHooks(),
+			},
+		},
+		"preserves explicit empty hooks slice": {
+			contents: `{"workspace_base_dir":"/tmp/autofeat-workspaces","editor_cmd":"code","headless_cmd":"copilot","hooks":[]}`,
+			want: Config{
+				SchemaVersion:    currentSchemaVersion,
+				WorkspaceBaseDir: "/tmp/autofeat-workspaces",
+				EditorCmd:        "code",
+				HeadlessCmd:      "copilot",
+				Hooks:            []hooks.Definition{},
+			},
+		},
+		"normalizes legacy schema version zero": {
+			contents: `{"schema_version":0,"workspace_base_dir":"/tmp/workspaces","editor_cmd":"code"}`,
+			want: Config{
+				SchemaVersion:    currentSchemaVersion,
+				WorkspaceBaseDir: "/tmp/workspaces",
+				EditorCmd:        "code",
+				HeadlessCmd:      defaultHeadlessCommand,
+				Hooks:            defaultHooks(),
+			},
+		},
 	}
 
-	config, err := LoadFromPath(configPath)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-	if config.HeadlessCmd != defaultHeadlessCommand {
-		t.Errorf("HeadlessCmd = %q, want %q", config.HeadlessCmd, defaultHeadlessCommand)
-	}
-}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-func TestLoadFromPathDefaultsMissingHooks(t *testing.T) {
-	t.Parallel()
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(configPath, []byte(test.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
 
-	configPath := filepath.Join(t.TempDir(), "config.json")
-	contents := []byte(`{"workspace_base_dir":"/tmp/autofeat-workspaces","editor_cmd":"code","headless_cmd":"copilot"}`)
-	if err := os.WriteFile(configPath, contents, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	config, err := LoadFromPath(configPath)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-	if !reflect.DeepEqual(config.Hooks, defaultHooks()) {
-		t.Errorf("Hooks = %#v, want defaults %#v", config.Hooks, defaultHooks())
-	}
-}
-
-func TestLoadFromPathPreservesEmptyHooks(t *testing.T) {
-	t.Parallel()
-
-	configPath := filepath.Join(t.TempDir(), "config.json")
-	contents := []byte(`{"workspace_base_dir":"/tmp/autofeat-workspaces","editor_cmd":"code","headless_cmd":"copilot","hooks":[]}`)
-	if err := os.WriteFile(configPath, contents, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	config, err := LoadFromPath(configPath)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
-	}
-	if config.Hooks == nil || len(config.Hooks) != 0 {
-		t.Errorf("Hooks = %#v, want empty non-nil slice", config.Hooks)
+			got, err := LoadFromPath(configPath)
+			if err != nil {
+				t.Fatalf("LoadFromPath() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Errorf("LoadFromPath() = %#v, want %#v", got, test.want)
+			}
+		})
 	}
 }
 
@@ -152,7 +167,8 @@ func TestLoadCreatesDefaultConfigOnFirstUse(t *testing.T) {
 	if !reflect.DeepEqual(config, want) {
 		t.Errorf("Load() first use = %+v, want %+v", config, want)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".autofeat", "config.json")); err != nil {
+	configFile := filepath.Join(home, ".autofeat", "config.json")
+	if _, err := os.Stat(configFile); err != nil {
 		t.Errorf("default config file was not created: %v", err)
 	}
 
@@ -167,29 +183,20 @@ func TestLoadCreatesDefaultConfigOnFirstUse(t *testing.T) {
 	if !reflect.DeepEqual(got, config) {
 		t.Errorf("Load() second use = %+v, want persisted %+v", got, config)
 	}
-}
 
-func TestLoadFromPathNormalizesLegacySchemaVersion(t *testing.T) {
-	t.Parallel()
-
-	configPath := filepath.Join(t.TempDir(), "config.json")
-	contents := []byte(`{"schema_version":0,"workspace_base_dir":"/tmp/workspaces","editor_cmd":"code"}`)
-	if err := os.WriteFile(configPath, contents, 0o600); err != nil {
+	if err := os.WriteFile(configFile, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := Load(); err == nil {
+		t.Error("Load() with corrupt config error = nil, want error")
+	}
 
-	config, err := LoadFromPath(configPath)
-	if err != nil {
-		t.Fatalf("LoadFromPath() error = %v", err)
+	blockingFile := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blockingFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if config.SchemaVersion != currentSchemaVersion {
-		t.Errorf("SchemaVersion = %d, want %d", config.SchemaVersion, currentSchemaVersion)
-	}
-	if config.HeadlessCmd != defaultHeadlessCommand {
-		t.Errorf("HeadlessCmd = %q, want %q", config.HeadlessCmd, defaultHeadlessCommand)
-	}
-	if !reflect.DeepEqual(config.Hooks, defaultHooks()) {
-		t.Errorf("Hooks = %#v, want defaults %#v", config.Hooks, defaultHooks())
+	if err := SaveToPath(filepath.Join(blockingFile, "config.json"), config); err == nil {
+		t.Error("SaveToPath(under regular file) error = nil, want directory creation error")
 	}
 }
 

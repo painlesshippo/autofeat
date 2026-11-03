@@ -68,7 +68,14 @@ func TestRunMatchesAnyFileAndUsesWorktreeDirectory(t *testing.T) {
 
 func TestRunSkipsNonmatchingHooks(t *testing.T) {
 	worktreePath := t.TempDir()
-	definitions := []Definition{{When: PostAdd, IfFiles: []string{"mise.toml"}, Run: "touch hook-ran"}}
+	// A directory matching an IfFiles name is not a regular file and must not trigger the hook.
+	if err := os.Mkdir(filepath.Join(worktreePath, "mise.toml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	definitions := []Definition{
+		{When: PostTeardown, Run: "touch teardown-ran"},
+		{When: PostAdd, IfFiles: []string{"mise.toml"}, Run: "touch hook-ran"},
+	}
 
 	if err := Run(definitions, PostAdd, worktreePath); err != nil {
 		t.Fatalf("Run() error = %v", err)
