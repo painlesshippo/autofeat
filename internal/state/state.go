@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/painlesshippo/autofeat/internal/artifact"
+	"github.com/painlesshippo/autofeat/internal/atomicfile"
+	"github.com/painlesshippo/autofeat/internal/filelock"
 )
 
 const (
@@ -64,7 +66,14 @@ func Path() (string, error) {
 
 // SaveSession adds or replaces a session in the global state file.
 func SaveSession(name string, session Session) error {
-	return saveSession(name, session, false)
+	if name == "" {
+		return errors.New("session name is required")
+	}
+
+	return Update(func(state *State) error {
+		state.Sessions[name] = session
+		return nil
+	})
 }
 
 // GetSession returns the session named name.
@@ -92,43 +101,74 @@ func ListSessions() (map[string]Session, error) {
 	return state.Sessions, nil
 }
 
-// UpdateSession replaces an existing session in the global state file.
-func UpdateSession(name string, session Session) error {
-	return saveSession(name, session, true)
+// UpdateSession applies change to the latest persisted version of the existing
+// session named name and saves the result.
+func UpdateSession(name string, change func(*Session) error) error {
+	return Update(func(state *State) error {
+		session, ok := state.Sessions[name]
+		if !ok {
+			return fmt.Errorf("%w: %s", ErrSessionNotFound, name)
+		}
+		if err := change(&session); err != nil {
+			return err
+		}
+		state.Sessions[name] = session
+		return nil
+	})
 }
 
 // DeleteSession removes the session named name from the global state file.
 func DeleteSession(name string) error {
-	state, err := Load()
-	if err != nil {
-		return err
-	}
-	if _, ok := state.Sessions[name]; !ok {
-		return fmt.Errorf("%w: %s", ErrSessionNotFound, name)
-	}
-
-	delete(state.Sessions, name)
-	return Save(state)
+	return Update(func(state *State) error {
+		if _, ok := state.Sessions[name]; !ok {
+			return fmt.Errorf("%w: %s", ErrSessionNotFound, name)
+		}
+		delete(state.Sessions, name)
+		return nil
+	})
 }
 
 // Load reads the global state. A missing state file represents an empty state.
 func Load() (State, error) {
-	path, err := Path()
-	if err != nil {
-		return State{}, err
-	}
-
-	return LoadFromPath(path)
+	var state State
+	err := withLock(func(path string) error {
+		var err error
+		state, err = LoadFromPath(path)
+		return err
+	})
+	return state, err
 }
 
-// Save writes the complete state to the global state file.
-func Save(state State) error {
+// Update applies change to the latest global state and saves the result while
+// holding an exclusive lock, so concurrent autofeat processes never overwrite
+// each other's changes. No state is written when change returns an error.
+func Update(change func(*State) error) error {
+	return withLock(func(path string) error {
+		state, err := LoadFromPath(path)
+		if err != nil {
+			return err
+		}
+		if err := change(&state); err != nil {
+			return err
+		}
+		return SaveToPath(path, state)
+	})
+}
+
+func withLock(action func(path string) error) (err error) {
 	path, err := Path()
 	if err != nil {
 		return err
 	}
+	unlock, err := filelock.Lock(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = errors.Join(err, unlock())
+	}()
 
-	return SaveToPath(path, state)
+	return action(path)
 }
 
 // LoadFromPath reads state from path. A missing file returns an empty state.
@@ -208,7 +248,7 @@ func SaveToPath(path string, state State) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
-	if err := os.WriteFile(path, contents, 0o600); err != nil {
+	if err := atomicfile.WriteFile(path, contents); err != nil {
 		return fmt.Errorf("write state %q: %w", path, err)
 	}
 
@@ -296,23 +336,4 @@ func rejectTrailingJSON(decoder *json.Decoder) error {
 	}
 
 	return nil
-}
-
-func saveSession(name string, session Session, mustExist bool) error {
-	if name == "" {
-		return errors.New("session name is required")
-	}
-
-	state, err := Load()
-	if err != nil {
-		return err
-	}
-	if mustExist {
-		if _, ok := state.Sessions[name]; !ok {
-			return fmt.Errorf("%w: %s", ErrSessionNotFound, name)
-		}
-	}
-
-	state.Sessions[name] = session
-	return Save(state)
 }

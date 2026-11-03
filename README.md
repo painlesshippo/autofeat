@@ -55,6 +55,15 @@ a newer, unsupported schema requires a newer autofeat binary. Unknown fields
 are rejected so manual editing mistakes do not silently discard data on the
 next write.
 
+Concurrent `autofeat` processes can safely share one home directory. Every
+state change is applied to the latest `state.json` while holding
+`state.json.lock`, files are replaced atomically, and `git worktree add` and
+`remove` are serialized through `worktree.lock`, because Git can fail when
+several worktrees are registered at once. `new`, `remove`, and `teardown` also
+hold a per-feature lock in `locks/`, so commands for the same feature, or for
+feature names that map to the same directory, run one at a time. All lock files
+live in `$HOME/.autofeat` and are safe to leave in place.
+
 `$HOME/.autofeat/state.json` stores `default_base_branch`, which defaults to
 `master`, and `repository_base_branches`, which remembers base references
 selected with `new --ref`. Despite their compatibility-preserving names, these

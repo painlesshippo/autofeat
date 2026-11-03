@@ -63,19 +63,21 @@ func newFeatureCommand() *cobra.Command {
 			if err := validateFeatureName(featureName); err != nil {
 				return err
 			}
-			if templateName != "" {
-				return instantiateTemplate(featureName, templateName)
-			}
-			if azureBuild != "" {
-				return addAzureBuildWorkspace(featureName, azureBuild, azureOrg, azureProject, azureURL)
-			}
-			if source == "" {
-				return addRepositoryWithRef(featureName, baseBranch)
-			}
-			if isRemoteURL(source) {
-				return addRemoteRepositoryWithRef(featureName, source, baseBranch)
-			}
-			return addLocalRepositoryWithRef(featureName, source, baseBranch)
+			return withFeatureLock(featureName, func() error {
+				if templateName != "" {
+					return instantiateTemplate(featureName, templateName)
+				}
+				if azureBuild != "" {
+					return addAzureBuildWorkspace(featureName, azureBuild, azureOrg, azureProject, azureURL)
+				}
+				if source == "" {
+					return addRepositoryWithRef(featureName, baseBranch)
+				}
+				if isRemoteURL(source) {
+					return addRemoteRepositoryWithRef(featureName, source, baseBranch)
+				}
+				return addLocalRepositoryWithRef(featureName, source, baseBranch)
+			})
 		},
 	}
 	command.Flags().StringVar(&templateName, "template", "", "create the feature from a template")
@@ -107,13 +109,15 @@ func newRemoveCommand() *cobra.Command {
 			if repository == "" {
 				return usageError()
 			}
-			if isRemoteURL(repository) {
-				return removeRepositoryCommand(featureName, normalizeRemoteRepositoryURL(repository), true, force)
-			}
-			if repositoryRoot, ok := attachedLocalRepositoryRoot(featureName, repository); ok {
-				return removeRepositoryCommand(featureName, repositoryRoot, false, force)
-			}
-			return removeRepositoryByNameCommand(featureName, repository, force)
+			return withFeatureLock(featureName, func() error {
+				if isRemoteURL(repository) {
+					return removeRepositoryCommand(featureName, normalizeRemoteRepositoryURL(repository), true, force)
+				}
+				if repositoryRoot, ok := attachedLocalRepositoryRoot(featureName, repository); ok {
+					return removeRepositoryCommand(featureName, repositoryRoot, false, force)
+				}
+				return removeRepositoryByNameCommand(featureName, repository, force)
+			})
 		},
 	}
 	command.Flags().BoolVar(&force, "force", false, "discard uncommitted changes")
@@ -194,7 +198,9 @@ func newTeardownCommand() *cobra.Command {
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return runSelectedFeatures(args, func(featureName string) error {
-				return teardownCommand(featureName, force)
+				return withFeatureLock(featureName, func() error {
+					return teardownCommand(featureName, force)
+				})
 			})
 		},
 	}

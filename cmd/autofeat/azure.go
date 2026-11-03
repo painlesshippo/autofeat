@@ -266,18 +266,17 @@ func addAzureRepository(featureName, cloneURL, commit, refName string) error {
 		return err
 	}
 
-	session.Repos = append(session.Repos, state.Repository{
+	// Persist state before writing the workspace file, so a state failure leaves
+	// no orphaned workspace file, and mark the clone kept only once state is
+	// durable. A later workspace-write failure is recovered by session rollback.
+	session, err = persistRepository(featureName, session, state.Repository{
 		Name:          repoName,
 		OriginalPath:  cloneURL,
 		WorktreePath:  worktreePath,
 		IsRemoteClone: true,
 		BaseBranch:    commit,
-	})
-	// Persist state before writing the workspace file, so a state failure leaves
-	// no orphaned workspace file, and mark the clone kept only once state is
-	// durable. A later workspace-write failure is recovered by session rollback.
-	currentState.Sessions[featureName] = session
-	if err := state.Save(currentState); err != nil {
+	}, "", "")
+	if err != nil {
 		return err
 	}
 	repositoryPersisted = true

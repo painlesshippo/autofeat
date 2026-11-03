@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/painlesshippo/autofeat/internal/atomicfile"
 	"github.com/painlesshippo/autofeat/internal/hooks"
 )
 
@@ -158,7 +159,7 @@ func SaveToPath(path string, config Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create config directory: %w", err)
 	}
-	if err := os.WriteFile(path, contents, 0o600); err != nil {
+	if err := atomicfile.WriteFile(path, contents); err != nil {
 		return fmt.Errorf("write config %q: %w", path, err)
 	}
 

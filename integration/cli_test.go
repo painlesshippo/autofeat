@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -182,6 +183,124 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 	}
 	if _, ok := loadState(t, statePath).Sessions[featureName]; ok {
 		t.Errorf("session %q remains after forced teardown", featureName)
+	}
+}
+
+func TestConcurrentSessionCommands(t *testing.T) {
+	requireCommand(t, "git")
+
+	homeDir := t.TempDir()
+	environment := environmentWithHome(homeDir)
+	repositoryPath := filepath.Join(t.TempDir(), "repository")
+	if err := os.Mkdir(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initializeRepository(t, repositoryPath, environment)
+	statePath := filepath.Join(homeDir, ".autofeat", "state.json")
+	outsideRepository := t.TempDir()
+
+	const sessionCount = 8
+	featureNames := make([]string, sessionCount)
+	for i := range featureNames {
+		featureNames[i] = fmt.Sprintf("feature/concurrent-%d", i)
+	}
+
+	for _, result := range runConcurrently(sessionCount, func(i int) commandResult {
+		return runAutofeat(autofeatBinaryPath, repositoryPath, environment, "new", featureNames[i])
+	}) {
+		requireSuccess(t, result)
+	}
+	sessions := loadState(t, statePath).Sessions
+	for _, featureName := range featureNames {
+		if session, ok := sessions[featureName]; !ok || len(session.Repos) != 1 {
+			t.Errorf("session %q = %+v (present %t), want one repository", featureName, session, ok)
+		}
+	}
+	if got := countWorktrees(t, repositoryPath, environment); got != sessionCount+1 {
+		t.Errorf("worktrees after concurrent new = %d, want %d", got, sessionCount+1)
+	}
+
+	for _, result := range runConcurrently(sessionCount, func(i int) commandResult {
+		return runAutofeat(autofeatBinaryPath, outsideRepository, environment, "artifact", "add", featureNames[0], fmt.Sprintf("AB#%d", i+1))
+	}) {
+		requireSuccess(t, result)
+	}
+	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "artifact", "list", featureNames[0], "--json")
+	requireSuccess(t, result)
+	var artifacts []json.RawMessage
+	if err := json.Unmarshal([]byte(result.stdout), &artifacts); err != nil {
+		t.Fatalf("parse artifact list JSON: %v\n%s", err, result.stdout)
+	}
+	if len(artifacts) != sessionCount {
+		t.Errorf("artifacts after concurrent add = %d, want %d:\n%s", len(artifacts), sessionCount, result.stdout)
+	}
+
+	for _, result := range runConcurrently(sessionCount, func(i int) commandResult {
+		return runAutofeat(autofeatBinaryPath, outsideRepository, environment, "teardown", featureNames[i])
+	}) {
+		requireSuccess(t, result)
+	}
+	if sessions := loadState(t, statePath).Sessions; len(sessions) != 0 {
+		t.Errorf("sessions after concurrent teardown = %+v, want none", sessions)
+	}
+	if got := countWorktrees(t, repositoryPath, environment); got != 1 {
+		t.Errorf("worktrees after concurrent teardown = %d, want 1", got)
+	}
+}
+
+func TestConcurrentNewWithCollidingFeatureDirectories(t *testing.T) {
+	requireCommand(t, "git")
+
+	homeDir := t.TempDir()
+	environment := environmentWithHome(homeDir)
+	repositoryPaths := make([]string, 2)
+	for i, name := range []string{"alpha", "beta"} {
+		repositoryPaths[i] = filepath.Join(t.TempDir(), name)
+		if err := os.Mkdir(repositoryPaths[i], 0o755); err != nil {
+			t.Fatal(err)
+		}
+		initializeRepository(t, repositoryPaths[i], environment)
+	}
+	statePath := filepath.Join(homeDir, ".autofeat", "state.json")
+	outsideRepository := t.TempDir()
+	featureNames := []string{"feature/collide", "feature-collide"}
+
+	for round := range 3 {
+		results := runConcurrently(len(featureNames), func(i int) commandResult {
+			return runAutofeat(autofeatBinaryPath, repositoryPaths[i], environment, "new", featureNames[i])
+		})
+		winner := -1
+		for i, result := range results {
+			if result.err == nil {
+				if winner != -1 {
+					t.Fatalf("round %d: both colliding features were created:\n%s\n%s", round, results[0].stderr, results[1].stderr)
+				}
+				winner = i
+				continue
+			}
+			requireOutputContains(t, result.stderr, "already used by feature")
+		}
+		if winner == -1 {
+			t.Fatalf("round %d: no feature was created:\n%s\n%s", round, results[0].stderr, results[1].stderr)
+		}
+		loser := 1 - winner
+
+		sessions := loadState(t, statePath).Sessions
+		if _, exists := sessions[featureNames[loser]]; exists {
+			t.Errorf("round %d: failed feature %q was recorded", round, featureNames[loser])
+		}
+		session, exists := sessions[featureNames[winner]]
+		if !exists || len(session.Repos) != 1 {
+			t.Fatalf("round %d: session %q = %+v (present %t), want one repository", round, featureNames[winner], session, exists)
+		}
+		if _, err := os.Stat(session.Repos[0].WorktreePath); err != nil {
+			t.Errorf("round %d: winning worktree: %v", round, err)
+		}
+		if got := countWorktrees(t, repositoryPaths[loser], environment); got != 1 {
+			t.Errorf("round %d: worktrees left in losing repository = %d, want 1", round, got)
+		}
+
+		requireSuccess(t, runAutofeat(autofeatBinaryPath, outsideRepository, environment, "teardown", featureNames[winner]))
 	}
 }
 
@@ -572,6 +691,22 @@ func runAutofeat(binaryPath, directory string, environment []string, args ...str
 	command.Stderr = &stderr
 	err := command.Run()
 	return commandResult{stdout: stdout.String(), stderr: stderr.String(), err: err}
+}
+
+func runConcurrently(count int, run func(int) commandResult) []commandResult {
+	results := make([]commandResult, count)
+	var waitGroup sync.WaitGroup
+	for i := range count {
+		waitGroup.Go(func() { results[i] = run(i) })
+	}
+	waitGroup.Wait()
+	return results
+}
+
+func countWorktrees(t *testing.T, repositoryPath string, environment []string) int {
+	t.Helper()
+	output := runRequiredCommand(t, repositoryPath, environment, "git", "worktree", "list", "--porcelain")
+	return strings.Count(output, "worktree ")
 }
 
 func runRequiredCommand(t *testing.T, directory string, environment []string, name string, args ...string) string {
