@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/painlesshippo/autofeat/internal/artifact"
 	"github.com/painlesshippo/autofeat/internal/state"
 )
 
@@ -327,6 +328,38 @@ func TestDashboardModelDetailShowsSessionOpenInVSCode(t *testing.T) {
 	model = pressKeys(t, model, "j")
 	if detail := model.renderDetail(80, 20); strings.Contains(detail, "open in VS Code") {
 		t.Errorf("detail of a closed session shows the VS Code line:\n%s", detail)
+	}
+}
+
+func TestDashboardModelDetailLinksArtifacts(t *testing.T) {
+	t.Parallel()
+
+	buildURL := "https://dev.azure.com/org/Project/_build/results?buildId=123"
+	armID := "/subscriptions/s/resourceGroups/rg"
+	session := dashboardSession{name: "feature/links", lastActivity: time.Now(), drift: "current", session: state.Session{Artifacts: []artifact.Artifact{
+		{Type: artifact.ADOBuild, Value: buildURL, ID: "123"},
+		{Type: artifact.AzureResource, Value: armID, ID: armID},
+		{Type: artifact.ADOWorkItem, Value: "AB#4567", ID: "4567"},
+	}}}
+	model := newDashboardModel("autofeat", defaultStaleAfter)
+	updated, _ := model.Update(dashboardLoadedMsg{sessions: []dashboardSession{session}})
+	model = updated.(dashboardModel)
+
+	for _, width := range []int{120, 24} {
+		detail := model.renderDetail(width, 40)
+		for _, link := range []string{buildURL, "https://portal.azure.com/#resource" + armID} {
+			if !strings.Contains(detail, "\x1b]8;;"+link) {
+				t.Errorf("width %d: detail lacks a hyperlink to %s:\n%q", width, link, detail)
+			}
+		}
+		if got := strings.Count(detail, "\x1b]8;;\x1b\\") + strings.Count(detail, "\x1b]8;;\a"); got != 2 {
+			t.Errorf("width %d: detail closes %d hyperlinks, want 2:\n%q", width, got, detail)
+		}
+		for _, line := range strings.Split(detail, "\n") {
+			if got := lipgloss.Width(line); got > width {
+				t.Errorf("width %d: detail line is %d columns wide: %q", width, got, line)
+			}
+		}
 	}
 }
 

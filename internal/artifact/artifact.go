@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/painlesshippo/autofeat/internal/azuredevops"
 )
@@ -151,6 +152,27 @@ func (a Artifact) Key() string {
 		value = "AB#" + match[1]
 	}
 	return string(a.Type) + "\x00" + a.Repo + "\x00" + value
+}
+
+// URL returns a web address for the artifact: the recorded value when it is
+// an http or https URL, or the Azure portal page of an ARM resource id.
+func (a Artifact) URL() (string, bool) {
+	value := a.Value
+	if a.Type == AzureResource {
+		if id, ok := armID(value); ok {
+			value = "https://portal.azure.com/#resource" + id
+		}
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return "", false
+	}
+	link := parsed.String()
+	// The link is embedded in terminal escape sequences.
+	if strings.ContainsFunc(link, unicode.IsControl) {
+		return "", false
+	}
+	return link, true
 }
 
 func normalizeURL(value string) (string, bool) {

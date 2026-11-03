@@ -563,6 +563,7 @@ var (
 	dashboardRedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	dashboardMagentaStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
 	dashboardCyanStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	dashboardLinkStyle     = lipgloss.NewStyle().Underline(true)
 )
 
 func (m dashboardModel) View() tea.View {
@@ -737,7 +738,11 @@ func (m dashboardModel) renderDetail(width, height int) string {
 	if artifacts := session.session.Artifacts; len(artifacts) != 0 {
 		lines = append(lines, "", dashboardTitleStyle.Render("artifacts"))
 		for _, recorded := range artifacts {
-			line := fmt.Sprintf("  %s %s", recorded.Type, artifactLabel(recorded))
+			label := artifactLabel(recorded)
+			if link, ok := recorded.URL(); ok {
+				label = dashboardLinkStyle.Hyperlink(link).Render(label)
+			}
+			line := fmt.Sprintf("  %s %s", recorded.Type, label)
 			if recorded.Repo != "" {
 				line += " · " + recorded.Repo
 			}
