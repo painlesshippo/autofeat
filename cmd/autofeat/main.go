@@ -36,6 +36,7 @@ const fallbackFeatureDirectoryName = "feature"
 
 var (
 	statusCommand                 = statusSessions
+	dashboardCommand              = runDashboard
 	openConfigCommand             = openConfig
 	openFeatureCommand            = openSession
 	openCopilotCommand            = openCopilotSession
@@ -1745,5 +1746,5 @@ func normalizeRemoteRepositoryURL(remoteURL string) string {
 }
 
 func usageError() error {
-	return errors.New("usage: autofeat <new|remove|open|sync|status|teardown|list|template|config|version|completion> [feature-selector ...] [options]")
+	return errors.New("usage: autofeat <new|remove|open|sync|status|teardown|list|dash|template|config|version|completion> [feature-selector ...] [options]")
 }

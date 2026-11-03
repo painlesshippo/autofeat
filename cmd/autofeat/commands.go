@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -27,6 +28,7 @@ func newRootCommand() *cobra.Command {
 		newStatusCommand(),
 		newTeardownCommand(),
 		newListCommand(),
+		newDashCommand(),
 		newTemplateCommand(),
 		newConfigCommand(),
 		newVersionCommand(),
@@ -209,6 +211,20 @@ func newListCommand() *cobra.Command {
 			return listSessionsTo(command.OutOrStdout())
 		},
 	}
+}
+
+func newDashCommand() *cobra.Command {
+	var staleAfter time.Duration
+	command := &cobra.Command{
+		Use:               "dash",
+		Args:              cobra.NoArgs,
+		ValidArgsFunction: completeNothing,
+		RunE: func(*cobra.Command, []string) error {
+			return dashboardCommand(staleAfter)
+		},
+	}
+	command.Flags().DurationVar(&staleAfter, "stale-after", defaultStaleAfter, "mark sessions idle for at least this long as stale (0 disables)")
+	return command
 }
 
 func newTemplateCommand() *cobra.Command {

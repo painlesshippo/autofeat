@@ -2,9 +2,11 @@ package git
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1022,4 +1024,112 @@ func parseUnix(t *testing.T, value string) int64 {
 		t.Fatal(err)
 	}
 	return parsed
+}
+
+func TestDiffShowsMergeBaseChangesAndUntrackedFiles(t *testing.T) {
+	requireGit(t)
+
+	repoPath := createRepository(t)
+	runGit(t, repoPath, "branch", "-M", "main")
+	runGit(t, repoPath, "checkout", "-qb", "feature/diff")
+	writeFile(t, repoPath, "committed.txt", "committed\n")
+	runGit(t, repoPath, "add", "committed.txt")
+	runGit(t, repoPath, "commit", "-qm", "feature change")
+	runGit(t, repoPath, "checkout", "-q", "main")
+	writeFile(t, repoPath, "base-only.txt", "base\n")
+	runGit(t, repoPath, "add", "base-only.txt")
+	runGit(t, repoPath, "commit", "-qm", "base change")
+	runGit(t, repoPath, "checkout", "-q", "feature/diff")
+	writeFile(t, repoPath, "README.md", "edited\n")
+	writeFile(t, repoPath, "new.txt", "untracked\n")
+
+	diff, err := Diff(repoPath, "main", false)
+	if err != nil {
+		t.Fatalf("Diff() error = %v", err)
+	}
+	for _, want := range []string{"+committed", "+edited", "b/new.txt", "+untracked"} {
+		if !strings.Contains(diff, want) {
+			t.Errorf("Diff() missing %q:\n%s", want, diff)
+		}
+	}
+	if strings.Contains(diff, "base-only.txt") {
+		t.Errorf("Diff() includes base-only change, want merge-base comparison:\n%s", diff)
+	}
+	if strings.Contains(diff, "\x1b[") {
+		t.Error("Diff(color=false) contains ANSI escapes")
+	}
+
+	stat, err := DiffStat(repoPath, "main")
+	if err != nil {
+		t.Fatalf("DiffStat() error = %v", err)
+	}
+	if !strings.Contains(stat, "committed.txt") || !strings.Contains(stat, "README.md") || strings.Contains(stat, "new.txt") {
+		t.Errorf("DiffStat() = %q, want tracked changes only", stat)
+	}
+
+	untracked, err := UntrackedFiles(repoPath)
+	if err != nil {
+		t.Fatalf("UntrackedFiles() error = %v", err)
+	}
+	if len(untracked) != 1 || untracked[0] != "new.txt" {
+		t.Errorf("UntrackedFiles() = %v, want [new.txt]", untracked)
+	}
+}
+
+func TestChangesMerged(t *testing.T) {
+	requireGit(t)
+
+	tests := []struct {
+		name    string
+		commits int
+		merge   []string
+		want    bool
+	}{
+		{name: "fresh session", want: false},
+		{name: "fresh session behind base", merge: []string{"commit", "-q", "--allow-empty", "-m", "noop"}, want: false},
+		{name: "unmerged commits", commits: 2, want: false},
+		{name: "merge commit", commits: 2, merge: []string{"merge", "-q", "--no-ff", "-m", "merge", "feature/merged"}, want: true},
+		{name: "rebase merge", commits: 2, merge: []string{"cherry-pick", "main..feature/merged"}, want: true},
+		{name: "squash merge", commits: 2, merge: []string{"merge", "-q", "--squash", "feature/merged"}, want: true},
+		{name: "fast-forward merge", commits: 2, merge: []string{"merge", "-q", "--ff-only", "feature/merged"}, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repoPath := createRepository(t)
+			runGit(t, repoPath, "branch", "-M", "main")
+			runGit(t, repoPath, "checkout", "-qb", "feature/merged")
+			for index := range test.commits {
+				name := fmt.Sprintf("feature-%d.txt", index)
+				writeFile(t, repoPath, name, name+"\n")
+				runGit(t, repoPath, "add", name)
+				runGit(t, repoPath, "commit", "-qm", name)
+			}
+
+			if test.merge != nil {
+				runGit(t, repoPath, "checkout", "-q", "main")
+				if !slices.Contains(test.merge, "--ff-only") {
+					writeFile(t, repoPath, "other.txt", "other\n")
+					runGit(t, repoPath, "add", "other.txt")
+					runGit(t, repoPath, "commit", "-qm", "unrelated base work")
+				}
+				runGit(t, repoPath, test.merge...)
+				if slices.Contains(test.merge, "--squash") {
+					runGit(t, repoPath, "commit", "-qm", "squash merge")
+				}
+				runGit(t, repoPath, "checkout", "-q", "feature/merged")
+			}
+
+			merged, err := ChangesMerged(repoPath, "main")
+			if err != nil || merged != test.want {
+				t.Fatalf("ChangesMerged() = %v, %v; want %v, nil", merged, err, test.want)
+			}
+		})
+	}
+}
+
+func writeFile(t *testing.T, directory, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

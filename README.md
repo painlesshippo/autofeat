@@ -188,6 +188,7 @@ and `remove` and `teardown` use `--force`.
 | `autofeat status [SELECTOR...]` | Inspect repository health; defaults to every session. |
 | `autofeat teardown SELECTOR... [--force]` | Remove matching sessions and their worktrees. |
 | `autofeat list` | List active sessions, most recently active first, with their cached base drift. |
+| `autofeat dash [--stale-after DURATION]` | Browse sessions, review their diffs, and sync, open, or tear them down interactively. |
 | `autofeat template list` | List saved templates. |
 | `autofeat template show NAME` | Show the repositories in a template. |
 | `autofeat template save NAME --from FEATURE` | Save an active session as a template. |
@@ -558,6 +559,41 @@ Summary states include `ready`, `dirty`, `behind-base`, `unpushed`,
 continues with the other repositories. A completed report exits successfully
 regardless of repository health; invalid selectors and failures to load state
 or write the report still return an error.
+
+Browse every session in an interactive terminal dashboard:
+
+```sh
+autofeat dash
+```
+
+The left pane lists sessions in the same order as `list`, most recent activity
+first; press `,` to sort by name, creation time, stale sessions first, or most
+commits behind the base instead. Badges mark uncommitted changes (`●`), cached
+base drift (`↓N`), in-progress rebases, inspection problems (`!`), and stale
+sessions. The right pane shows each
+repository's `status` fields and a `git diff --stat` summary. Press `enter` to
+review the full diff of the selected session as a pull request would show it:
+the working tree, including uncommitted and untracked files, compared to its
+merge-base with the base branch. Press `tab` to move between repositories and
+`esc` to return. Press `pgup` and `pgdn` to scroll long session details.
+
+A session is marked stale when one of these holds:
+
+* `merged`: no repository has uncommitted changes or unmerged commits, and at
+  least one has commits that the cached base already contains through a merge
+  commit, or whose changes it contains after a rebase or squash merge. A
+  fast-forward merge looks like a fresh session and is not detected.
+* `missing`: every worktree is gone.
+* `idle`: its last activity is at least `--stale-after` old (default `336h`,
+  14 days; `0` disables this rule).
+
+Stale sessions are only highlighted. Press `t` to tear down the selected session
+after confirming; `s` syncs it, `o` opens it, `r` refreshes, and `/` filters by
+feature name. These keys run the corresponding `autofeat` command in the
+terminal, and `sync` and `teardown` keep their output on screen until you press
+Enter. Like `status`, the dashboard itself never fetches, so merged detection
+uses the base branch as of the last `sync`. `dash` requires an interactive
+terminal.
 
 Print the build version, commit, and timestamp:
 
