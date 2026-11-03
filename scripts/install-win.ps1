@@ -51,7 +51,16 @@ try {
             throw "No checksum found for $Archive."
         }
         $ExpectedChecksum = ($ChecksumLine -split '\s+')[0]
-        $ActualChecksum = (Get-FileHash $ArchivePath -Algorithm SHA256).Hash
+        # Avoid Get-FileHash: Windows PowerShell can't load it when PSModulePath includes PowerShell 7 modules.
+        $Sha256 = [Security.Cryptography.SHA256]::Create()
+        $ArchiveStream = [IO.File]::OpenRead($ArchivePath)
+        try {
+            $ActualChecksum = [BitConverter]::ToString($Sha256.ComputeHash($ArchiveStream)).Replace("-", "")
+        }
+        finally {
+            $ArchiveStream.Dispose()
+            $Sha256.Dispose()
+        }
         if ($ActualChecksum -ne $ExpectedChecksum) {
             throw "Checksum verification failed for $Archive."
         }
