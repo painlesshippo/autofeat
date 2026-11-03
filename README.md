@@ -580,9 +580,13 @@ autofeat dash
 
 The left pane lists sessions in the same order as `list`, most recent activity
 first; press `,` to sort by name, creation time, stale sessions first, or most
-commits behind the base instead. Badges mark uncommitted changes (`●`), cached
-base drift (`↓N`), in-progress rebases, inspection problems (`!`), and stale
-sessions. The right pane shows each
+commits behind the base instead. Badges mark sessions open in VS Code (`open`),
+uncommitted changes (`●`), cached base drift (`↓N`), in-progress rebases,
+inspection problems (`!`), and stale sessions. The `open` badge covers local and
+Remote-WSL windows of stable VS Code, detected from the lock each window keeps in
+its workspace storage; Dev Container and SSH windows are not detected. A window
+opened with `o` gets its badge on the next `r` once it has loaded. The right
+pane shows each
 repository's `status` fields and a `git diff --stat` summary. Press `enter` to
 review the full diff of the selected session as a pull request would show it:
 the working tree, including uncommitted and untracked files, compared to its

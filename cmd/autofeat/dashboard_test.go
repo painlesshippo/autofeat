@@ -312,6 +312,24 @@ func TestDashboardModelDetailScrollsAndFitsWidth(t *testing.T) {
 	}
 }
 
+func TestDashboardModelDetailShowsSessionOpenInVSCode(t *testing.T) {
+	t.Parallel()
+
+	model := newDashboardModel("autofeat", defaultStaleAfter)
+	updated, _ := model.Update(dashboardLoadedMsg{sessions: []dashboardSession{
+		{name: "feature/open", lastActivity: time.Now(), drift: "current", editorOpen: true},
+		{name: "feature/closed", drift: "current"},
+	}})
+	model = updated.(dashboardModel)
+	if detail := model.renderDetail(80, 20); !strings.Contains(detail, "open in VS Code") {
+		t.Errorf("detail of an open session lacks the VS Code line:\n%s", detail)
+	}
+	model = pressKeys(t, model, "j")
+	if detail := model.renderDetail(80, 20); strings.Contains(detail, "open in VS Code") {
+		t.Errorf("detail of a closed session shows the VS Code line:\n%s", detail)
+	}
+}
+
 func writeMainFile(t *testing.T, directory, name, contents string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(directory, name), []byte(contents), 0o644); err != nil {
@@ -576,6 +594,12 @@ func TestDashboardBadgesFormatAgeAndExec(t *testing.T) {
 		if !strings.Contains(badges, want) {
 			t.Errorf("sessionBadges() = %q, missing %q", badges, want)
 		}
+	}
+	if strings.Contains(badges, "open") {
+		t.Errorf("sessionBadges() = %q, want no open badge for a session closed in VS Code", badges)
+	}
+	if badges := sessionBadges(dashboardSession{drift: "current", editorOpen: true}); !strings.Contains(badges, "open") {
+		t.Errorf("sessionBadges(editorOpen) = %q, missing %q", badges, "open")
 	}
 
 	// dashboardExec without and with pause.
