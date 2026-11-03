@@ -29,10 +29,29 @@ autofeat teardown FEATURE
   affected.
 - Remote clones with unpushed commits trigger a warning. `--force` does not
   make those commits recoverable. Tell the user.
+- Local feature branches stay in their source repos; remote clones are deleted
+  entirely.
 
-## Rebase Recovery
+## Sync Conflicts And Rollback
 
-If `sync` stops on a conflict, preserve the worktree and choose one path:
+A plain `sync` attempts to roll the session back on a rebase conflict or
+failure. Read the rollback diagnostic before choosing the next step.
+
+- `synchronization rolled back`: the pre-sync commits were restored. Report
+  the conflicting files, then leave the session as is to retry later or rerun
+  with `autofeat sync FEATURE --keep-conflicts` to resolve them now.
+- `could not be fully rolled back`: inspect every reported repository error
+  and run `autofeat status FEATURE` before retrying. Address any remaining
+  rebase or failed restoration while preserving new work.
+
+Rollback can fail while inspecting or aborting a rebase, or restoring an
+already rebased repo with `git reset --keep`. For example, new local changes
+can prevent restoration. A repo that gained commits or switched branches
+after it was rebased is deliberately left unchanged. Do not assume a failed
+rollback restored every repo.
+
+After `--keep-conflicts` (or an interrupted sync), preserve the worktree and
+choose one path:
 
 | Goal | Action |
 | --- | --- |
@@ -43,7 +62,8 @@ If `sync` stops on a conflict, preserve the worktree and choose one path:
 - `--cancel` runs `git rebase --abort` only where a rebase is in progress. It
   never discards commits and reports each failure. A partial failure exits
   non-zero.
-- Do not start another `sync` while a rebase is still in progress.
+- `sync` refuses to start while a rebase is in progress; finish or cancel it
+  first.
 
 ## Hook Failures
 
