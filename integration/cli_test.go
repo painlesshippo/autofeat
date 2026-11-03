@@ -185,39 +185,6 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 	}
 }
 
-func TestExplicitLocalRepositoryCreatesWorktree(t *testing.T) {
-	requireCommand(t, "git")
-
-	homeDir := t.TempDir()
-	environment := environmentWithHome(homeDir)
-	repositoryPath := filepath.Join(t.TempDir(), "repository")
-	if err := os.Mkdir(repositoryPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	initializeRepository(t, repositoryPath, environment)
-
-	const featureName = "feature/explicit-local"
-	outsideRepository := t.TempDir()
-	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", featureName, repositoryPath)
-	requireSuccess(t, result)
-
-	statePath := filepath.Join(homeDir, ".autofeat", "state.json")
-	session := loadState(t, statePath).Sessions[featureName]
-	if len(session.Repos) != 1 {
-		t.Fatalf("session repositories = %+v, want one repository", session.Repos)
-	}
-	repository := session.Repos[0]
-	if repository.IsRemoteClone {
-		t.Error("explicit local repository was recorded as a remote clone")
-	}
-	if got := strings.TrimSpace(runRequiredCommand(t, repository.WorktreePath, environment, "git", "branch", "--show-current")); got != featureName {
-		t.Errorf("worktree branch = %q, want %q", got, featureName)
-	}
-
-	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "teardown", featureName)
-	requireSuccess(t, result)
-}
-
 func TestRemoveLocalRepositoryLifecycle(t *testing.T) {
 	requireCommand(t, "git")
 
@@ -247,6 +214,12 @@ func TestRemoveLocalRepositoryLifecycle(t *testing.T) {
 		t.Fatalf("session repositories = %+v, want two repositories", before.Repos)
 	}
 	removedRepository := before.Repos[0]
+	if removedRepository.IsRemoteClone {
+		t.Error("explicit local repository was recorded as a remote clone")
+	}
+	if got := strings.TrimSpace(runRequiredCommand(t, removedRepository.WorktreePath, environment, "git", "branch", "--show-current")); got != featureName {
+		t.Errorf("worktree branch = %q, want %q", got, featureName)
+	}
 	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "remove", featureName, repositoryPaths[0])
 	requireSuccess(t, result)
 	requireOutputContains(t, result.stdout, "Removed", removedRepository.Name, featureName)
@@ -417,6 +390,118 @@ func TestSyncCancelAbortsConflictedRebase(t *testing.T) {
 	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "sync", featureName, "--cancel")
 	requireSuccess(t, result)
 	requireOutputContains(t, result.stdout, repository.Name, "no rebase in progress")
+}
+
+func TestTemplateLifecycle(t *testing.T) {
+	requireCommand(t, "git")
+
+	homeDir := t.TempDir()
+	environment := environmentWithHome(homeDir)
+	repositoryPaths := []string{
+		filepath.Join(t.TempDir(), "api"),
+		filepath.Join(t.TempDir(), "web"),
+	}
+	for _, repositoryPath := range repositoryPaths {
+		if err := os.Mkdir(repositoryPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		initializeRepository(t, repositoryPath, environment)
+	}
+
+	outsideRepository := t.TempDir()
+	for _, repositoryPath := range repositoryPaths {
+		requireSuccess(t, runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", "feature/tpl-source", repositoryPath))
+	}
+
+	result := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "template", "save", "pair", "--from", "feature/tpl-source")
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "Saved template pair from feature feature/tpl-source")
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "template", "list")
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "NAME", "REPOSITORIES", "pair", "2")
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "template", "show", "pair")
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "KIND", "SOURCE", "local", repositoryPaths[0], repositoryPaths[1])
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", "feature/from-tpl", "--template", "pair")
+	requireSuccess(t, result)
+
+	statePath := filepath.Join(homeDir, ".autofeat", "state.json")
+	session := loadState(t, statePath).Sessions["feature/from-tpl"]
+	if len(session.Repos) != 2 {
+		t.Fatalf("template session repos = %+v, want 2", session.Repos)
+	}
+	for _, repo := range session.Repos {
+		if got := strings.TrimSpace(runRequiredCommand(t, repo.WorktreePath, environment, "git", "branch", "--show-current")); got != "feature/from-tpl" {
+			t.Errorf("worktree branch = %q, want feature/from-tpl", got)
+		}
+	}
+
+	requireSuccess(t, runAutofeat(autofeatBinaryPath, outsideRepository, environment, "teardown", "feature/*"))
+}
+
+func TestOpenConfigVersionAndCompletionCommands(t *testing.T) {
+	requireCommand(t, "git")
+
+	homeDir := t.TempDir()
+	binDir := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "invocations.log")
+	for _, name := range []string{"stub-editor", "stub-copilot"} {
+		script := fmt.Sprintf("#!/bin/sh\nprintf '%s:%%s:%%s\\n' \"$PWD\" \"$*\" >> %q\n", name, logPath)
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	environment := append(environmentWithHome(homeDir), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	configDir := filepath.Join(homeDir, ".autofeat")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configJSON := fmt.Sprintf(`{"schema_version":1,"workspace_base_dir":%q,"editor_cmd":"stub-editor","headless_cmd":"stub-copilot","hooks":[]}`,
+		filepath.Join(homeDir, ".autofeat-workspaces"))
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(configJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	repositoryPath := filepath.Join(t.TempDir(), "service")
+	if err := os.Mkdir(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initializeRepository(t, repositoryPath, environment)
+	devcontainerPath := filepath.Join(t.TempDir(), "devcontainer.json")
+	if err := os.WriteFile(devcontainerPath, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outsideRepository := t.TempDir()
+	requireSuccess(t, runAutofeat(autofeatBinaryPath, outsideRepository, environment, "new", "feature/open", repositoryPath))
+	requireSuccess(t, runAutofeat(autofeatBinaryPath, outsideRepository, environment, "config"))
+	requireSuccess(t, runAutofeat(autofeatBinaryPath, outsideRepository, environment, "open", "feature/open"))
+	requireSuccess(t, runAutofeat(autofeatBinaryPath, outsideRepository, environment, "open", "feature/open", "--copilot"))
+	requireSuccess(t, runAutofeat(autofeatBinaryPath, outsideRepository, environment, "open", "feature/open", "--devcontainer", devcontainerPath))
+
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read invocation log: %v", err)
+	}
+	requireOutputContains(t, string(logged),
+		"stub-editor:",
+		"config.json",
+		"feature-open.code-workspace",
+		"stub-copilot:",
+		"--file-uri vscode-remote://dev-container+",
+	)
+
+	versionResult := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "version")
+	requireSuccess(t, versionResult)
+	requireOutputContains(t, versionResult.stdout, "autofeat ", "commit: ")
+
+	completionResult := runAutofeat(autofeatBinaryPath, outsideRepository, environment, "completion", "bash")
+	requireSuccess(t, completionResult)
+	requireOutputContains(t, completionResult.stdout, "__start_autofeat")
 }
 
 func requireRebaseInProgress(t *testing.T, worktreePath string, environment []string, want bool) {

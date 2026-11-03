@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -444,7 +446,121 @@ func TestGetBuildNotFound(t *testing.T) {
 }
 
 func TestNewClientRequiresToken(t *testing.T) {
-	if _, err := NewClient("https://dev.azure.com/org", "proj", "  ", nil); err == nil {
-		t.Fatal("NewClient() error = nil, want missing token error")
+	for _, tc := range []struct {
+		name    string
+		orgURL  string
+		project string
+		pat     string
+	}{
+		{"missing org", " ", "proj", "tok"},
+		{"missing project", "https://dev.azure.com/org", " ", "tok"},
+		{"missing token", "https://dev.azure.com/org", "proj", "  "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewClient(tc.orgURL, tc.project, tc.pat, nil); err == nil {
+				t.Fatalf("NewClient(%q, %q, %q) error = nil, want error", tc.orgURL, tc.project, tc.pat)
+			}
+		})
+	}
+	if client, err := NewClient("https://dev.azure.com/org/", "proj", "tok", nil); err != nil || client.httpClient == nil {
+		t.Errorf("NewClient(nil httpClient) = (%+v, %v), want default httpClient", client, err)
+	}
+}
+
+func TestSplitWebURLAndParseBuildID(t *testing.T) {
+	t.Parallel()
+
+	urlTests := []struct {
+		rawURL   string
+		wantOrg  string
+		wantRest []string
+		wantOK   bool
+	}{
+		{"https://dev.azure.com/contoso/Proj/_build", "https://dev.azure.com/contoso", []string{"Proj", "_build"}, true},
+		{"https://dev.azure.com/", "", nil, true},
+		{"https://contoso.visualstudio.com/Proj/_build", "https://contoso.visualstudio.com", []string{"Proj", "_build"}, true},
+		{"https://example.com/contoso/Proj", "", nil, false},
+	}
+	for _, test := range urlTests {
+		parsed, err := url.Parse(test.rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotOrg, gotRest, gotOK := SplitWebURL(parsed)
+		if gotOrg != test.wantOrg || !slices.Equal(gotRest, test.wantRest) || gotOK != test.wantOK {
+			t.Errorf("SplitWebURL(%q) = (%q, %v, %t), want (%q, %v, %t)", test.rawURL, gotOrg, gotRest, gotOK, test.wantOrg, test.wantRest, test.wantOK)
+		}
+	}
+
+	if id, err := ParseBuildID(" 42 "); err != nil || id != 42 {
+		t.Errorf("ParseBuildID(42) = (%d, %v), want (42, nil)", id, err)
+	}
+	for _, invalid := range []string{"", "0", "-3", "abc"} {
+		if _, err := ParseBuildID(invalid); err == nil {
+			t.Errorf("ParseBuildID(%q) error = nil, want error", invalid)
+		}
+	}
+}
+
+func TestResolveRepositoriesAndClientEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	baseBuild := Build{
+		Repository:    Repository{Type: "TfsGit", Name: "app", URL: "https://dev.azure.com/org/proj/_git/app"},
+		SourceVersion: "1111111111111111111111111111111111111111",
+	}
+
+	// Bitbucket declaration.
+	resolved, err := resolveRepositories("https://dev.azure.com/org", "proj", baseBuild, &Run{
+		FinalYAML: "resources:\n  repositories:\n  - repository: bb\n    type: bitbucket\n    name: team/repo\n",
+		Repositories: map[string]RepositoryResource{
+			"bb": {Repository: Repository{Type: "bitbucket"}, Version: "2222222222222222222222222222222222222222"},
+		},
+	})
+	if err != nil || len(resolved) != 2 || resolved[1].CloneURL != "https://bitbucket.org/team/repo.git" {
+		t.Errorf("bitbucket resolve = (%+v, %v)", resolved, err)
+	}
+
+	// Invalid YAML in FinalYAML.
+	if _, err := resolveRepositories("https://dev.azure.com/org", "proj", baseBuild, &Run{FinalYAML: ":\n  - ["}); err == nil {
+		t.Error("resolveRepositories(invalid YAML) error = nil, want error")
+	}
+
+	// Empty declaration name and "Project/" with empty repo name.
+	for _, yamlText := range []string{
+		"resources:\n  repositories:\n  - repository: bad\n    type: git\n    name: \"\"\n",
+		"resources:\n  repositories:\n  - repository: bad\n    type: git\n    name: OtherProject/\n",
+	} {
+		_, err := resolveRepositories("https://dev.azure.com/org", "proj", baseBuild, &Run{
+			FinalYAML:    yamlText,
+			Repositories: map[string]RepositoryResource{"bad": {Version: "2"}},
+		})
+		if !errors.Is(err, ErrUnresolvableRepository) {
+			t.Errorf("resolveRepositories(%q) error = %v, want ErrUnresolvableRepository", yamlText, err)
+		}
+	}
+
+	// PipelineID == 0 and Definition 404.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/_apis/build/builds/1"):
+			fmt.Fprint(w, `{"id":1,"definition":{"id":0},"sourceVersion":"1111111111111111111111111111111111111111","repository":{"type":"TfsGit","name":"app","url":"https://dev.azure.com/org/proj/_git/app"}}`)
+		case strings.HasSuffix(r.URL.Path, "/_apis/build/builds/2"):
+			fmt.Fprint(w, `{"id":2,"definition":{"id":99},"sourceVersion":"1111111111111111111111111111111111111111","repository":{"type":"TfsGit","name":"app","url":"https://dev.azure.com/org/proj/_git/app"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL+"/org", "proj", "token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := client.ResolveBuildRepositories(context.Background(), 1); err != nil || len(got) != 1 {
+		t.Errorf("ResolveBuildRepositories(pipelineID=0) = (%+v, %v), want 1 repo", got, err)
+	}
+	if _, err := client.ResolveBuildRepositories(context.Background(), 2); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ResolveBuildRepositories(definition 404) error = %v, want ErrNotFound", err)
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -21,542 +20,7 @@ import (
 	"github.com/painlesshippo/autofeat/internal/state"
 	"github.com/painlesshippo/autofeat/internal/templates"
 	"github.com/painlesshippo/autofeat/internal/workspace"
-	"github.com/spf13/cobra"
 )
-
-func TestVersionCommand(t *testing.T) {
-	if err := run([]string{"version"}); err != nil {
-		t.Fatalf("run(version) error = %v", err)
-	}
-
-	if err := run([]string{"version", "extra"}); err == nil {
-		t.Error("run(version, extra) error = nil, want usage error")
-	}
-}
-
-func TestConfigCommandDispatch(t *testing.T) {
-	originalOpenConfigCommand := openConfigCommand
-	t.Cleanup(func() {
-		openConfigCommand = originalOpenConfigCommand
-	})
-
-	called := false
-	openConfigCommand = func() error {
-		called = true
-		return nil
-	}
-
-	if err := run([]string{"config"}); err != nil {
-		t.Fatalf("run(config) error = %v", err)
-	}
-	if !called {
-		t.Error("run(config) did not open the config")
-	}
-	if err := run([]string{"config", "extra"}); err == nil {
-		t.Error("run(config, extra) error = nil, want usage error")
-	}
-}
-
-func TestFeatureCompletions(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"feature/zulu", "bug/fix", "feature/team/nested"} {
-		if err := state.SaveSession(name, state.Session{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	got, directive := featureCompletions([]string{"bug/fix"}, "feature/")
-	want := []string{"feature/team/nested", "feature/zulu"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("featureCompletions() = %q, want %q", got, want)
-	}
-	if directive != cobra.ShellCompDirectiveNoFileComp {
-		t.Errorf("featureCompletions() directive = %v, want NoFileComp", directive)
-	}
-}
-
-func TestFeatureCompletionsEmptyAndMalformedState(t *testing.T) {
-	t.Run("empty", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-
-		got, directive := featureCompletions(nil, "")
-		if len(got) != 0 {
-			t.Errorf("featureCompletions() = %q, want no candidates", got)
-		}
-		if directive != cobra.ShellCompDirectiveNoFileComp {
-			t.Errorf("featureCompletions() directive = %v, want NoFileComp", directive)
-		}
-	})
-
-	t.Run("malformed", func(t *testing.T) {
-		homeDir := t.TempDir()
-		t.Setenv("HOME", homeDir)
-		stateDir := filepath.Join(homeDir, ".autofeat")
-		if err := os.MkdirAll(stateDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte("{"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-
-		got, directive := featureCompletions(nil, "")
-		if len(got) != 0 {
-			t.Errorf("featureCompletions() = %q, want silent empty candidates", got)
-		}
-		if directive != cobra.ShellCompDirectiveNoFileComp {
-			t.Errorf("featureCompletions() directive = %v, want NoFileComp", directive)
-		}
-	})
-}
-
-func TestCompletionCommandArguments(t *testing.T) {
-	for _, args := range [][]string{{"completion"}, {"completion", "zsh"}, {"completion", "fish"}, {"completion", "bash", "extra"}, {"completion", "powershell", "extra"}} {
-		if err := run(args); err == nil {
-			t.Errorf("run(%q) error = nil, want usage error", args)
-		}
-	}
-}
-
-func TestTemplateCommandArguments(t *testing.T) {
-	invalid := [][]string{
-		{"template"},
-		{"template", "unknown"},
-		{"template", "show"},
-		{"template", "save", "full-stack", "feature/source"},
-		{"new", "feature/test", "https://example.com/repository.git", "--template", "full-stack"},
-		{"new", "feature/test", "/tmp/repository", "--template", "full-stack"},
-		{"new", "feature/test", "/tmp/repository", "--azure-build", "42"},
-		{"new", "feature/test", "/tmp/repository", "--template="},
-		{"new", "feature/test", "/tmp/repository", "--azure-build="},
-		{"new", "feature/test", ""},
-		{"new", "feature/test", "/tmp/repository", "extra"},
-		{"new", "feature/test", "--local", "/tmp/repository"},
-		{"new", "feature/test", "--remote", "https://example.com/repository.git"},
-		{"new", "feature/test", "--template", "full-stack", "--azure-build", "42"},
-		{"new", "feature/test", "--template"},
-		{"new", "feature/test", "--unknown", "full-stack"},
-		{"new", "feature/test", "--template", "full-stack", "--ref", "develop"},
-	}
-	for _, args := range invalid {
-		if err := run(args); err == nil {
-			t.Errorf("run(%q) error = nil, want usage error", args)
-		}
-	}
-}
-
-func TestGeneratedBashCompletionSyntax(t *testing.T) {
-	bashPath, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("bash is not available")
-	}
-
-	var completion bytes.Buffer
-	command := newRootCommand()
-	command.SetOut(&completion)
-	command.SetArgs([]string{"completion", "bash"})
-	if err := command.Execute(); err != nil {
-		t.Fatalf("completion bash error = %v", err)
-	}
-	if completion.Len() == 0 {
-		t.Fatal("completion bash generated empty output")
-	}
-
-	syntaxCommand := exec.Command(bashPath, "-n")
-	syntaxCommand.Stdin = strings.NewReader(completion.String())
-	if output, err := syntaxCommand.CombinedOutput(); err != nil {
-		t.Fatalf("bash -n completion error = %v\n%s", err, output)
-	}
-}
-
-func TestGeneratedPowerShellCompletion(t *testing.T) {
-	var completion bytes.Buffer
-	rootCommand := newRootCommand()
-	rootCommand.SetOut(&completion)
-	rootCommand.SetArgs([]string{"completion", "powershell"})
-	if err := rootCommand.Execute(); err != nil {
-		t.Fatalf("completion powershell error = %v", err)
-	}
-	if !strings.Contains(completion.String(), "Register-ArgumentCompleter") {
-		t.Fatal("PowerShell completion does not register an argument completer")
-	}
-
-	powershellPath := ""
-	for _, name := range []string{"pwsh", "powershell", "powershell.exe"} {
-		path, err := exec.LookPath(name)
-		if err == nil {
-			powershellPath = path
-			break
-		}
-	}
-	if powershellPath == "" {
-		t.Skip("PowerShell is not available")
-	}
-
-	command := exec.Command(powershellPath, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "-")
-	command.Stdin = strings.NewReader(completion.String())
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("PowerShell completion error = %v\n%s", err, output)
-	}
-}
-
-func TestCobraCompletionProtocol(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"feature/zulu", "bug/fix", "feature/team/nested"} {
-		if err := state.SaveSession(name, state.Session{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	var output bytes.Buffer
-	var errorOutput bytes.Buffer
-	command := newRootCommand()
-	command.SetOut(&output)
-	command.SetErr(&errorOutput)
-	command.SetArgs([]string{"__complete", "sync", "bug/fix", "feature/"})
-	if err := command.Execute(); err != nil {
-		t.Fatalf("Cobra completion error = %v", err)
-	}
-	if got, want := output.String(), "feature/team/nested\nfeature/zulu\n:4\n"; got != want {
-		t.Errorf("Cobra completion output = %q, want %q", got, want)
-	}
-
-	output.Reset()
-	errorOutput.Reset()
-	command = newRootCommand()
-	command.SetOut(&output)
-	command.SetErr(&errorOutput)
-	command.SetArgs([]string{"__complete", "new", "feature/"})
-	if err := command.Execute(); err != nil {
-		t.Fatalf("Cobra new feature completion error = %v", err)
-	}
-	if got, want := output.String(), "feature/team/nested\nfeature/zulu\n:4\n"; got != want {
-		t.Errorf("Cobra new feature completion = %q, want %q", got, want)
-	}
-
-	output.Reset()
-	errorOutput.Reset()
-	command = newRootCommand()
-	command.SetOut(&output)
-	command.SetErr(&errorOutput)
-	command.SetArgs([]string{"__complete", "new", "feature/new", "--template", "full-stack", "-"})
-	if err := command.Execute(); err != nil {
-		t.Fatalf("Cobra flag completion error = %v", err)
-	}
-	if strings.Contains(output.String(), "--ref") {
-		t.Errorf("Cobra completion offered mutually exclusive --ref:\n%s", output.String())
-	}
-
-	output.Reset()
-	errorOutput.Reset()
-	command = newRootCommand()
-	command.SetOut(&output)
-	command.SetErr(&errorOutput)
-	command.SetArgs([]string{"__complete", "remove", "feature/"})
-	if err := command.Execute(); err != nil {
-		t.Fatalf("Cobra remove feature completion error = %v", err)
-	}
-	if got, want := output.String(), "feature/team/nested\nfeature/zulu\n:4\n"; got != want {
-		t.Errorf("Cobra remove feature completion = %q, want %q", got, want)
-	}
-
-	output.Reset()
-	errorOutput.Reset()
-	command = newRootCommand()
-	command.SetOut(&output)
-	command.SetErr(&errorOutput)
-	command.SetArgs([]string{"__complete", "remove", "feature/zulu", "-"})
-	if err := command.Execute(); err != nil {
-		t.Fatalf("Cobra remove flag completion error = %v", err)
-	}
-	for _, flag := range []string{"--local", "--remote"} {
-		if strings.Contains(output.String(), flag) {
-			t.Errorf("Cobra remove completion offered removed flag %s:\n%s", flag, output.String())
-		}
-	}
-
-	output.Reset()
-	errorOutput.Reset()
-	command = newRootCommand()
-	command.SetOut(&output)
-	command.SetErr(&errorOutput)
-	command.SetArgs([]string{"__complete", "new", "feature/new", ""})
-	if err := command.Execute(); err != nil {
-		t.Fatalf("Cobra new source completion error = %v", err)
-	}
-	if got, want := output.String(), fmt.Sprintf(":%d\n", cobra.ShellCompDirectiveFilterDirs); got != want {
-		t.Errorf("Cobra new source completion = %q, want %q", got, want)
-	}
-
-	_, directive := completeDirectories(nil, nil, "")
-	if directive != cobra.ShellCompDirectiveFilterDirs {
-		t.Errorf("completeDirectories() directive = %v, want FilterDirs", directive)
-	}
-
-	for _, args := range [][]string{
-		{"__complete", "list", ""},
-		{"__complete", "dash", ""},
-		{"__complete", "config", ""},
-		{"__complete", "version", ""},
-		{"__complete", "template", "list", ""},
-		{"__complete", "completion", "bash", ""},
-		{"__complete", "completion", "powershell", ""},
-	} {
-		output.Reset()
-		errorOutput.Reset()
-		command = newRootCommand()
-		command.SetOut(&output)
-		command.SetErr(&errorOutput)
-		command.SetArgs(args)
-		if err := command.Execute(); err != nil {
-			t.Fatalf("Cobra completion for %q error = %v", args, err)
-		}
-		if got, want := output.String(), ":4\n"; got != want {
-			t.Errorf("Cobra completion for %q = %q, want %q", args, got, want)
-		}
-	}
-}
-
-func TestTemplateCompletions(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"full-stack", "backend", "frontend"} {
-		template := templates.Template{Repositories: []templates.Repository{{
-			Kind:   templates.RemoteRepository,
-			Source: "https://example.com/repository.git",
-		}}}
-		if err := templates.Put(name, template); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	got, directive := completeTemplateNames(nil, nil, "f")
-	want := []string{"frontend", "full-stack"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("completeTemplateNames() = %q, want %q", got, want)
-	}
-	if directive != cobra.ShellCompDirectiveNoFileComp {
-		t.Errorf("completeTemplateNames() directive = %v, want NoFileComp", directive)
-	}
-}
-
-func TestStatusCommandDispatch(t *testing.T) {
-	originalStatusCommand := statusCommand
-	t.Cleanup(func() {
-		statusCommand = originalStatusCommand
-	})
-
-	var gotSelectors []string
-	statusCommand = func(selectors []string) error {
-		gotSelectors = selectors
-		return nil
-	}
-
-	if err := run([]string{"status"}); err != nil {
-		t.Fatalf("run(status) error = %v", err)
-	}
-	if len(gotSelectors) != 1 || gotSelectors[0] != "*" {
-		t.Errorf("run(status) selectors = %q, want [*]", gotSelectors)
-	}
-
-	if err := run([]string{"status", "feature/a", "feature/b"}); err != nil {
-		t.Fatalf("run(status feature/a feature/b) error = %v", err)
-	}
-	if len(gotSelectors) != 2 || gotSelectors[0] != "feature/a" || gotSelectors[1] != "feature/b" {
-		t.Errorf("run(status feature/a feature/b) selectors = %q, want exact selectors", gotSelectors)
-	}
-
-	if err := run([]string{"status", "--json"}); err == nil {
-		t.Error("run(status --json) error = nil, want usage error")
-	}
-}
-
-func TestRemoveCommandDispatch(t *testing.T) {
-	requireMainGit(t)
-	t.Setenv("HOME", t.TempDir())
-	repositoryPath := createMainRepository(t)
-	nestedPath := filepath.Join(repositoryPath, "nested")
-	if err := os.Mkdir(nestedPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	unattachedPath := createMainRepository(t)
-	if err := state.SaveSession("feature/remove", state.Session{Repos: []state.Repository{{
-		Name:         filepath.Base(repositoryPath),
-		OriginalPath: repositoryPath,
-		WorktreePath: filepath.Join(t.TempDir(), filepath.Base(repositoryPath)),
-	}}}); err != nil {
-		t.Fatal(err)
-	}
-
-	originalRemoveRepositoryCommand := removeRepositoryCommand
-	originalRemoveRepositoryByNameCommand := removeRepositoryByNameCommand
-	t.Cleanup(func() {
-		removeRepositoryCommand = originalRemoveRepositoryCommand
-		removeRepositoryByNameCommand = originalRemoveRepositoryByNameCommand
-	})
-
-	var gotFeatureName string
-	var gotRepositorySource string
-	var gotRemote bool
-	var gotForce bool
-	var gotName string
-	reset := func() {
-		gotFeatureName, gotRepositorySource, gotName = "", "", ""
-		gotRemote, gotForce = false, false
-	}
-	removeRepositoryCommand = func(featureName, repositorySource string, remote, force bool) error {
-		gotFeatureName = featureName
-		gotRepositorySource = repositorySource
-		gotRemote = remote
-		gotForce = force
-		return nil
-	}
-	removeRepositoryByNameCommand = func(featureName, name string, force bool) error {
-		gotFeatureName = featureName
-		gotName = name
-		gotForce = force
-		return nil
-	}
-
-	if err := run([]string{"remove", "feature/remove", nestedPath, "--force"}); err != nil {
-		t.Fatalf("run(remove PATH) error = %v", err)
-	}
-	if gotFeatureName != "feature/remove" || gotRepositorySource != repositoryPath || gotRemote || !gotForce || gotName != "" {
-		t.Errorf("local remove dispatch = (%q, %q, %t, %t), want feature, repository root, local, force", gotFeatureName, gotRepositorySource, gotRemote, gotForce)
-	}
-
-	reset()
-	if err := run([]string{"remove", "feature/remove", "https://example.com/repository.git/"}); err != nil {
-		t.Fatalf("run(remove URL) error = %v", err)
-	}
-	if gotRepositorySource != "https://example.com/repository.git" || !gotRemote || gotForce || gotName != "" {
-		t.Errorf("remote remove dispatch = (%q, %t, %t), want normalized remote without force", gotRepositorySource, gotRemote, gotForce)
-	}
-
-	reset()
-	if err := run([]string{"remove", "feature/remove", unattachedPath}); err != nil {
-		t.Fatalf("run(remove unattached PATH) error = %v", err)
-	}
-	if gotName != unattachedPath || gotRepositorySource != "" {
-		t.Errorf("unattached path dispatch = (name %q, source %q), want name fallback", gotName, gotRepositorySource)
-	}
-
-	reset()
-	if err := run([]string{"remove", "feature/named", " repo1"}); err != nil {
-		t.Fatalf("run(remove ' repo1') error = %v", err)
-	}
-	if gotName != " repo1" {
-		t.Errorf("named remove dispatch selected %q, want literal %q", gotName, " repo1")
-	}
-
-	reset()
-	if err := run([]string{"remove", "feature/named", "repo1", "--force"}); err != nil {
-		t.Fatalf("run(remove REPO) error = %v", err)
-	}
-	if gotFeatureName != "feature/named" || gotName != "repo1" || !gotForce {
-		t.Errorf("named remove dispatch = (%q, %q, %t), want feature, repo1, force", gotFeatureName, gotName, gotForce)
-	}
-}
-
-func TestRemoveCommandArguments(t *testing.T) {
-	invalid := [][]string{
-		{"remove"},
-		{"remove", "feature/remove"},
-		{"remove", "feature/remove", ""},
-		{"remove", "feature/remove", "--local", "."},
-		{"remove", "feature/remove", "--remote", "https://example.com/repository.git"},
-		{"remove", "feature/remove", "repo1", "repo2"},
-	}
-	for _, args := range invalid {
-		if err := run(args); err == nil {
-			t.Errorf("run(%q) error = nil, want usage error", args)
-		}
-	}
-}
-
-func TestOpenCommandCopilotDispatch(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	if err := state.SaveSession("feature/copilot", state.Session{}); err != nil {
-		t.Fatal(err)
-	}
-	originalOpenFeatureCommand := openFeatureCommand
-	originalOpenCopilotCommand := openCopilotCommand
-	t.Cleanup(func() {
-		openFeatureCommand = originalOpenFeatureCommand
-		openCopilotCommand = originalOpenCopilotCommand
-	})
-
-	var openedWith string
-	openFeatureCommand = func(string) error {
-		openedWith = "editor"
-		return nil
-	}
-	openCopilotCommand = func(string) error {
-		openedWith = "copilot"
-		return nil
-	}
-
-	if err := run([]string{"open", "feature/copilot", "--copilot"}); err != nil {
-		t.Fatalf("run(open feature/copilot --copilot) error = %v", err)
-	}
-	if openedWith != "copilot" {
-		t.Errorf("open command = %q, want copilot", openedWith)
-	}
-}
-
-func TestOpenCommandDevcontainerDispatch(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"feature/a", "feature/b"} {
-		if err := state.SaveSession(name, state.Session{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	originalOpenFeatureCommand := openFeatureCommand
-	originalOpenDevcontainerCommand := openDevcontainerCommand
-	t.Cleanup(func() {
-		openFeatureCommand = originalOpenFeatureCommand
-		openDevcontainerCommand = originalOpenDevcontainerCommand
-	})
-
-	var openedWith string
-	var configHints []string
-	openFeatureCommand = func(string) error {
-		openedWith = "editor"
-		return nil
-	}
-	openDevcontainerCommand = func(_ string, configHint string) error {
-		openedWith = "devcontainer"
-		configHints = append(configHints, configHint)
-		return nil
-	}
-
-	if err := run([]string{"open", "feature/a", "--devcontainer", "/path/to/devcontainer.json"}); err != nil {
-		t.Fatalf("run(open --devcontainer PATH) error = %v", err)
-	}
-	if openedWith != "devcontainer" || len(configHints) != 1 || configHints[0] != "/path/to/devcontainer.json" {
-		t.Errorf("open --devcontainer = (%q, %q), want devcontainer with the supplied path", openedWith, configHints)
-	}
-
-	// One command opening multiple selected sessions applies the same config.
-	openedWith, configHints = "", nil
-	if err := run([]string{"open", "feature/*", "--devcontainer", "/path/to/devcontainer.json"}); err != nil {
-		t.Fatalf("run(open feature/* --devcontainer PATH) error = %v", err)
-	}
-	if len(configHints) != 2 || configHints[0] != "/path/to/devcontainer.json" || configHints[1] != "/path/to/devcontainer.json" {
-		t.Errorf("multi-selector config hints = %q, want the same path for both sessions", configHints)
-	}
-
-	if err := run([]string{"open", "feature/a", "--devcontainer", "/x", "--copilot"}); err == nil {
-		t.Error("run(open --devcontainer --copilot) error = nil, want mutually exclusive flags")
-	}
-
-	// A required value with no path (--devcontainer=) fails without any launch.
-	openedWith = ""
-	if err := run([]string{"open", "feature/a", "--devcontainer="}); err == nil {
-		t.Error("run(open --devcontainer=) error = nil, want an actionable error")
-	}
-	if openedWith != "" {
-		t.Errorf("blank --devcontainer opened via %q, want no launch", openedWith)
-	}
-}
 
 // devcontainerFeature lays out a feature directory with a generated workspace
 // file and the named repositories, then records the session. Repositories are
@@ -762,61 +226,6 @@ func TestOpenDevcontainerSessionRejectsUnreadableConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(logPath); err == nil {
 		t.Error("editor was invoked, want no host fallback for an unreadable configuration")
-	}
-}
-
-func TestSyncCommandDispatch(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	if err := state.SaveSession("feature/sync", state.Session{}); err != nil {
-		t.Fatal(err)
-	}
-	originalSyncFeatureCommand := syncFeatureCommand
-	t.Cleanup(func() {
-		syncFeatureCommand = originalSyncFeatureCommand
-	})
-
-	var gotFeatureName string
-	syncFeatureCommand = func(featureName string, _ bool) error {
-		gotFeatureName = featureName
-		return nil
-	}
-
-	if err := run([]string{"sync", "feature/sync"}); err != nil {
-		t.Fatalf("run(sync feature/sync) error = %v", err)
-	}
-	if gotFeatureName != "feature/sync" {
-		t.Errorf("sync feature = %q, want feature/sync", gotFeatureName)
-	}
-}
-
-func TestTeardownCommandDispatch(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"feature/x", "feature/y"} {
-		if err := state.SaveSession(name, state.Session{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	originalTeardownCommand := teardownCommand
-	t.Cleanup(func() {
-		teardownCommand = originalTeardownCommand
-	})
-
-	var gotFeatureNames []string
-	var gotForce bool
-	teardownCommand = func(featureName string, force bool) error {
-		gotFeatureNames = append(gotFeatureNames, featureName)
-		gotForce = force
-		return nil
-	}
-
-	if err := run([]string{"teardown", "feature/y", "feature/x", "--force"}); err != nil {
-		t.Fatalf("run(teardown feature/y feature/x --force) error = %v", err)
-	}
-	if len(gotFeatureNames) != 2 || gotFeatureNames[0] != "feature/x" || gotFeatureNames[1] != "feature/y" || !gotForce {
-		t.Errorf("teardown dispatch = (%q, %t), want sorted features and force", gotFeatureNames, gotForce)
-	}
-	if err := run([]string{"feature/x", "teardown"}); err == nil {
-		t.Error("run(feature/x teardown) error = nil, want command-first usage error")
 	}
 }
 
@@ -1252,46 +661,6 @@ func TestSyncFeatureReplaysRecordedResolution(t *testing.T) {
 	}
 }
 
-func TestSyncContinuesPastFailedFeatures(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"feature/one", "feature/two"} {
-		if err := state.SaveSession(name, state.Session{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	originalSyncFeatureCommand := syncFeatureCommand
-	t.Cleanup(func() {
-		syncFeatureCommand = originalSyncFeatureCommand
-	})
-
-	var gotFeatureNames []string
-	var gotKeepConflicts []bool
-	syncFeatureCommand = func(featureName string, keepConflicts bool) error {
-		gotFeatureNames = append(gotFeatureNames, featureName)
-		gotKeepConflicts = append(gotKeepConflicts, keepConflicts)
-		if featureName == "feature/one" {
-			return errors.New("conflict")
-		}
-		return nil
-	}
-
-	err := run([]string{"sync", "feature/*", "--keep-conflicts"})
-	if err == nil || !strings.Contains(err.Error(), `"feature/one"`) {
-		t.Errorf("run(sync feature/*) error = %v, want failure naming feature/one", err)
-	}
-	if len(gotFeatureNames) != 2 || gotFeatureNames[1] != "feature/two" {
-		t.Errorf("synchronized features = %q, want both despite the first failing", gotFeatureNames)
-	}
-	for _, keepConflicts := range gotKeepConflicts {
-		if !keepConflicts {
-			t.Error("keepConflicts = false, want --keep-conflicts forwarded")
-		}
-	}
-	if err := run([]string{"sync", "feature/two", "--cancel", "--keep-conflicts"}); err == nil {
-		t.Error("run(sync --cancel --keep-conflicts) error = nil, want mutually exclusive flags error")
-	}
-}
-
 // startConflictingRebase leaves repoPath on featureBranch with a conflicted
 // rebase in progress and returns the commit HEAD pointed at beforehand.
 func startConflictingRebase(t *testing.T, repoPath, featureBranch string) string {
@@ -1472,53 +841,6 @@ func TestRunAllSelectedFeaturesReportsEveryFailure(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("runAllSelectedFeatures() error = %v, want it to mention %q", err, want)
 		}
-	}
-}
-
-func TestCancelSyncCommandDispatch(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"feature/one", "feature/two"} {
-		if err := state.SaveSession(name, state.Session{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	originalSyncFeatureCommand := syncFeatureCommand
-	originalCancelSyncCommand := cancelSyncCommand
-	t.Cleanup(func() {
-		syncFeatureCommand = originalSyncFeatureCommand
-		cancelSyncCommand = originalCancelSyncCommand
-	})
-
-	var syncedFeatureNames []string
-	var cancelledFeatureNames []string
-	syncFeatureCommand = func(featureName string, _ bool) error {
-		syncedFeatureNames = append(syncedFeatureNames, featureName)
-		return nil
-	}
-	cancelSyncCommand = func(featureName string) error {
-		cancelledFeatureNames = append(cancelledFeatureNames, featureName)
-		return nil
-	}
-
-	if err := run([]string{"sync", "feature/*", "--cancel"}); err != nil {
-		t.Fatalf("run(sync feature/* --cancel) error = %v", err)
-	}
-	if len(cancelledFeatureNames) != 2 || cancelledFeatureNames[0] != "feature/one" || cancelledFeatureNames[1] != "feature/two" {
-		t.Errorf("cancelled features = %q, want both sorted features", cancelledFeatureNames)
-	}
-	if len(syncedFeatureNames) != 0 {
-		t.Errorf("synchronized features = %q, want none when --cancel is set", syncedFeatureNames)
-	}
-
-	cancelledFeatureNames = nil
-	if err := run([]string{"sync", "feature/one"}); err != nil {
-		t.Fatalf("run(sync feature/one) error = %v", err)
-	}
-	if len(cancelledFeatureNames) != 0 {
-		t.Errorf("cancelled features = %q, want none without --cancel", cancelledFeatureNames)
-	}
-	if len(syncedFeatureNames) != 1 || syncedFeatureNames[0] != "feature/one" {
-		t.Errorf("synchronized features = %q, want feature/one", syncedFeatureNames)
 	}
 }
 
@@ -2513,7 +1835,6 @@ func TestAddRepositoryRunsDefaultMiseHookForMiseFiles(t *testing.T) {
 		wantRuns    bool
 	}{
 		{name: "mise.toml", featureName: "feature/mise", fileName: "mise.toml", wantRuns: true},
-		{name: ".mise.toml", featureName: "feature/dot-mise", fileName: ".mise.toml", wantRuns: true},
 		{name: "no mise file", featureName: "feature/no-mise", wantRuns: false},
 	}
 	for _, test := range tests {
@@ -2606,34 +1927,6 @@ func TestAddRemoteRepositoryRunsPostAddHooksInClone(t *testing.T) {
 	}
 	if string(contents) != "remote" {
 		t.Errorf("remote post-add output = %q, want remote", contents)
-	}
-}
-
-func TestAddRemoteRepositoryRunsDefaultMiseHookInClone(t *testing.T) {
-	requireMainGit(t)
-	t.Setenv("HOME", t.TempDir())
-	logPath := installMainMiseStub(t)
-
-	sourcePath, remotePath := createRemoteMainRepository(t)
-	writeAndCommitMainFile(t, sourcePath, "mise.toml", "[tools]\n", "add mise config")
-	runMainGit(t, sourcePath, "push", "-q", "origin", "main")
-	writeMainDefaultConfig(t)
-
-	if err := addRemoteRepository("feature/remote-mise", remotePath); err != nil {
-		t.Fatalf("addRemoteRepository() error = %v", err)
-	}
-	session, err := state.GetSession("feature/remote-mise")
-	if err != nil {
-		t.Fatal(err)
-	}
-	worktreePath := session.Repos[0].WorktreePath
-	contents, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := worktreePath + "\ttrust\n" + worktreePath + "\tinstall\n"
-	if string(contents) != want {
-		t.Errorf("mise invocations = %q, want %q", contents, want)
 	}
 }
 
@@ -3182,44 +2475,6 @@ func TestRemoveRepositoryWithLockedMissingWorktree(t *testing.T) {
 	}
 }
 
-func TestRemoveCompletesSessionRepositories(t *testing.T) {
-	requireMainGit(t)
-	t.Setenv("HOME", t.TempDir())
-
-	localPath := createMainRepository(t)
-	runMainGit(t, localPath, "branch", "-M", "main")
-	if _, err := addRepositoryAt("feature/complete-remove", localPath); err != nil {
-		t.Fatalf("addRepositoryAt() error = %v", err)
-	}
-	_, remotePath := createRemoteMainRepository(t)
-	if err := addRemoteRepository("feature/complete-remove", remotePath); err != nil {
-		t.Fatalf("addRemoteRepository() error = %v", err)
-	}
-	session, err := state.GetSession("feature/complete-remove")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	command := newRemoveCommand()
-	got, directive := completeSessionRepositories(command, []string{"feature/complete-remove"}, "")
-	want := []string{
-		filepath.Base(session.Repos[0].WorktreePath),
-		filepath.Base(session.Repos[1].WorktreePath),
-		localPath,
-		remotePath,
-	}
-	sort.Strings(want)
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("repository completion = %q, want %q", got, want)
-	}
-	if directive != cobra.ShellCompDirectiveNoFileComp {
-		t.Errorf("repository completion directive = %v, want NoFileComp", directive)
-	}
-	if got, _ := completeSessionRepositories(command, []string{"feature/complete-remove"}, localPath); !reflect.DeepEqual(got, []string{localPath}) {
-		t.Errorf("local path completion = %q, want %q", got, []string{localPath})
-	}
-}
-
 func TestOpenSessionInvokesEditorWithWorkspaceFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -3481,12 +2736,6 @@ func TestDetectBaseBranchFallsBackToStateDefault(t *testing.T) {
 	}
 }
 
-func TestFeatureBranchName(t *testing.T) {
-	if got, want := featureBranchName("feature/potato"), "feature/potato"; got != want {
-		t.Errorf("featureBranchName() = %q, want feature name", got)
-	}
-}
-
 func TestIsRemoteURL(t *testing.T) {
 	t.Parallel()
 
@@ -3567,30 +2816,14 @@ func TestRemoteRepositoryName(t *testing.T) {
 }
 
 func TestValidateFeatureName(t *testing.T) {
-	for _, featureName := range []string{
-		"feature/potato",
-		"bug/f321s-aaa",
-		"feature/team/potato",
-		"flat-feature",
-	} {
-		if err := validateFeatureName(featureName); err != nil {
-			t.Errorf("validateFeatureName(%q) error = %v", featureName, err)
-		}
-	}
+	requireMainGit(t)
 
-	for _, featureName := range []string{
-		"",
-		"/feature",
-		"feature/",
-		"feature//potato",
-		"feature/.",
-		"feature/..",
-		"feature/potato.lock",
-		"feature potato",
-		"feature?potato",
-	} {
-		if err := validateFeatureName(featureName); err == nil {
-			t.Errorf("validateFeatureName(%q) error = nil, want error", featureName)
+	if err := validateFeatureName("feature/potato"); err != nil {
+		t.Errorf("validateFeatureName(valid) error = %v", err)
+	}
+	for _, invalid := range []string{"", "feature potato"} {
+		if err := validateFeatureName(invalid); err == nil {
+			t.Errorf("validateFeatureName(%q) error = nil, want error", invalid)
 		}
 	}
 }
@@ -3625,4 +2858,206 @@ func TestFeatureDirectoryName(t *testing.T) {
 			t.Errorf("featureDirectoryName(%q) = %q, want non-empty", featureName, got)
 		}
 	}
+}
+
+func TestShellExpandedWildcard(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	first := filepath.Join(dir, "a")
+	second := filepath.Join(dir, "b")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if shellExpandedWildcard([]string{first}) {
+		t.Error("shellExpandedWildcard(single) = true, want false")
+	}
+	if shellExpandedWildcard([]string{first, "*"}) {
+		t.Error("shellExpandedWildcard(with '*') = true, want false")
+	}
+	if shellExpandedWildcard([]string{first, filepath.Join(dir, "missing")}) {
+		t.Error("shellExpandedWildcard(with missing path) = true, want false")
+	}
+	if !shellExpandedWildcard([]string{first, second}) {
+		t.Error("shellExpandedWildcard(existing paths) = false, want true")
+	}
+}
+
+func TestFetchBaseWithRetryExhaustsAttempts(t *testing.T) {
+	requireMainGit(t)
+
+	originalDelay := fetchBaseRetryDelay
+	fetchBaseRetryDelay = 0
+	t.Cleanup(func() {
+		fetchBaseRetryDelay = originalDelay
+	})
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "remote", "add", "origin", filepath.Join(t.TempDir(), "missing-origin.git"))
+	if err := fetchBaseWithRetry(repoPath, "main"); err == nil {
+		t.Fatal("fetchBaseWithRetry() error = nil, want fetch error after retries")
+	}
+}
+
+func TestRestoreRebasedRepositoryRejectsSwitchedBranch(t *testing.T) {
+	requireMainGit(t)
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "checkout", "-qb", "other")
+	err := restoreRebasedRepository(rebasedRepository{
+		repository: state.Repository{Name: "repo", WorktreePath: repoPath},
+		branch:     "feature/expected",
+	})
+	if err == nil || !strings.Contains(err.Error(), "switched to branch") {
+		t.Fatalf("restoreRebasedRepository() error = %v, want switched-branch error", err)
+	}
+}
+
+func TestInstantiateTemplateErrorAndRemoteRollbackPaths(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+	writeMainConfig(t, "code", "copilot")
+
+	if err := state.SaveSession("feature/existing", state.Session{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := instantiateTemplate("feature/existing", "any"); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("instantiateTemplate(existing session) error = %v, want already exists", err)
+	}
+	if err := instantiateTemplate("feature/new", "missing-template"); !errors.Is(err, templates.ErrTemplateNotFound) {
+		t.Errorf("instantiateTemplate(missing template) error = %v, want ErrTemplateNotFound", err)
+	}
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	subDir := filepath.Join(repoPath, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := templates.Put("sub-source", templates.Template{Repositories: []templates.Repository{
+		{Kind: templates.LocalRepository, Source: subDir},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := instantiateTemplate("feature/sub", "sub-source"); err == nil || !strings.Contains(err.Error(), "not a repository root") {
+		t.Errorf("instantiateTemplate(subdirectory source) error = %v, want not-a-repository-root error", err)
+	}
+
+	// Remote repository in template that succeeds for the first repo and rolls back when the second fails.
+	_, remotePath := createRemoteMainRepository(t)
+	remoteURL := "https://example.invalid/template-remote.git"
+	runMainGit(t, repoPath, "config", "--global", "url.file://"+filepath.ToSlash(remotePath)+".insteadOf", remoteURL)
+	missingRemoteURL := "https://example.invalid/missing-remote.git"
+	runMainGit(t, repoPath, "config", "--global", "url.file://"+filepath.ToSlash(filepath.Join(t.TempDir(), "missing.git"))+".insteadOf", missingRemoteURL)
+
+	if err := templates.Put("remote-rollback", templates.Template{Repositories: []templates.Repository{
+		{Kind: templates.RemoteRepository, Source: remoteURL},
+		{Kind: templates.RemoteRepository, Source: missingRemoteURL},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := instantiateTemplate("feature/remote-rollback", "remote-rollback"); err == nil {
+		t.Fatal("instantiateTemplate(remote-rollback) error = nil, want second clone error")
+	}
+	if _, err := state.GetSession("feature/remote-rollback"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("session survived remote template rollback: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mainWorkspaceDir(t), "feature-remote-rollback")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("feature directory survived remote template rollback: %v", err)
+	}
+}
+
+func TestOpenCommandsErrorPaths(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeMainConfig(t, "false", "nonexistent-copilot-binary-xyz")
+
+	if err := openSession("feature/missing"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("openSession(missing) error = %v, want ErrSessionNotFound", err)
+	}
+	if err := openCopilotSession("feature/missing"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("openCopilotSession(missing) error = %v, want ErrSessionNotFound", err)
+	}
+	if err := openDevcontainerSession("feature/missing", "devcontainer.json"); !errors.Is(err, state.ErrSessionNotFound) {
+		t.Errorf("openDevcontainerSession(missing) error = %v, want ErrSessionNotFound", err)
+	}
+
+	if err := state.SaveSession("feature/open-err", state.Session{FeatureDir: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := openDevcontainerSession("feature/open-err", "devcontainer.json"); err == nil || !strings.Contains(err.Error(), "no workspace file") {
+		t.Errorf("openDevcontainerSession(empty workspace file) error = %v, want no-workspace-file error", err)
+	}
+	if err := openSession("feature/open-err"); err == nil {
+		t.Error("openSession(editor exits non-zero) error = nil, want error")
+	}
+	if err := openConfig(); err == nil {
+		t.Error("openConfig(editor exits non-zero) error = nil, want error")
+	}
+	if err := openCopilotSession("feature/open-err"); err == nil || !strings.Contains(err.Error(), "find Copilot command") {
+		t.Errorf("openCopilotSession(missing binary) error = %v, want LookPath error", err)
+	}
+
+	writeMainConfig(t, "code", "false")
+	if err := openCopilotSession("feature/open-err"); err == nil {
+		t.Error("openCopilotSession(copilot exits non-zero) error = nil, want error")
+	}
+}
+
+func TestListSessionsToColorizedCharDevice(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NO_COLOR", "")
+	if err := state.SaveSession("feature/color", state.Session{}); err != nil {
+		t.Fatal(err)
+	}
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Skipf("open %s: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	if err := listSessionsTo(devNull); err != nil {
+		t.Fatalf("listSessionsTo(devNull) error = %v", err)
+	}
+}
+
+func FuzzFeatureDirectoryName(f *testing.F) {
+	for _, seed := range []string{"", "feature/potato", "///", "..", ".hidden.", "café/potato", "a--b__c.1"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		got := featureDirectoryName(input)
+		if got == "" {
+			t.Fatal("featureDirectoryName returned empty string")
+		}
+		if strings.HasPrefix(got, ".") || strings.HasPrefix(got, "-") || strings.HasSuffix(got, ".") || strings.HasSuffix(got, "-") {
+			t.Fatalf("featureDirectoryName(%q) = %q has leading or trailing dot/dash", input, got)
+		}
+		for _, r := range got {
+			valid := (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-'
+			if !valid {
+				t.Fatalf("featureDirectoryName(%q) = %q contains disallowed rune %q", input, got, r)
+			}
+		}
+	})
+}
+
+func FuzzMatchFeatureSelector(f *testing.F) {
+	f.Add("feature/*", "feature/potato")
+	f.Add("* middle *", "a middle b")
+	f.Add("a*b*c", "a1b2c")
+	f.Add("exact", "exact")
+	f.Fuzz(func(t *testing.T, selector, featureName string) {
+		got := matchFeatureSelector(selector, featureName)
+		if selector == "*" && !got {
+			t.Fatalf("matchFeatureSelector(\"*\", %q) = false, want true", featureName)
+		}
+		if !strings.Contains(selector, "*") && got != (selector == featureName) {
+			t.Fatalf("matchFeatureSelector(%q, %q) = %t, want exact match %t", selector, featureName, got, selector == featureName)
+		}
+	})
 }

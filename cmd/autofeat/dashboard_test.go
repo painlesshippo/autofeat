@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -333,6 +336,14 @@ func keyPress(key string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEscape}
 	case "pgdown":
 		return tea.KeyPressMsg{Code: tea.KeyPgDown}
+	case "pgup":
+		return tea.KeyPressMsg{Code: tea.KeyPgUp}
+	case "tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+	case "ctrl+c":
+		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	}
 	return tea.KeyPressMsg{Code: rune(key[0]), Text: key}
 }
@@ -383,5 +394,226 @@ func TestDashboardModelSortCyclesOrdersAndKeepsSelection(t *testing.T) {
 	model = updated.(dashboardModel)
 	if got := names(); !slices.Equal(got, []string{"feature/a", "feature/b", "feature/c", "feature/d"}) {
 		t.Errorf("reload while sorted by name = %v, want name order", got)
+	}
+}
+
+func TestDashboardInitViewDiffActionsAndStates(t *testing.T) {
+	requireMainGit(t)
+	t.Setenv("HOME", t.TempDir())
+
+	repoPath := createMainRepository(t)
+	runMainGit(t, repoPath, "branch", "-M", "main")
+	runMainGit(t, repoPath, "checkout", "-qb", "feature/dash")
+	writeMainFile(t, repoPath, "untracked.txt", "new\n")
+	if err := state.SaveSession("feature/dash", state.Session{Repos: []state.Repository{
+		{Name: "api", WorktreePath: repoPath, BaseBranch: "main"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	model := newDashboardModel("autofeat", defaultStaleAfter)
+	// Loading state before first message.
+	if rendered := model.render(); !strings.Contains(rendered, "Inspecting sessions…") {
+		t.Errorf("initial loading render = %q, want Inspecting sessions…", rendered)
+	}
+	view := model.View()
+	if !view.AltScreen || view.WindowTitle != "autofeat dash" {
+		t.Errorf("View() = (AltScreen %t, WindowTitle %q), want true and autofeat dash", view.AltScreen, view.WindowTitle)
+	}
+
+	initCmd := model.Init()
+	if initCmd == nil {
+		t.Fatal("Init() = nil, want loadCmd")
+	}
+	loadedMsg := initCmd()
+	updated, _ := model.Update(loadedMsg)
+	model = updated.(dashboardModel)
+	if len(model.sessions) != 1 || !strings.Contains(model.render(), "1 session · 0 stale") {
+		t.Fatalf("after Init() load: sessions = %d, render:\n%s", len(model.sessions), model.render())
+	}
+
+	// Execute diffCmd for the loaded repository (has valid baseRef) and for a repository without baseRef.
+	updated, diffCmd := model.Update(keyPress("d"))
+	model = updated.(dashboardModel)
+	if model.mode != dashboardDiff || diffCmd == nil {
+		t.Fatal("d did not enter diff mode")
+	}
+	if !strings.Contains(model.render(), "Loading diff…") {
+		t.Errorf("unloaded diff render missing Loading diff…:\n%s", model.render())
+	}
+	diffMsg := diffCmd().(dashboardDiffMsg)
+	if diffMsg.err != nil || !strings.Contains(diffMsg.content, "untracked.txt") {
+		t.Errorf("diffCmd() = %+v, want untracked.txt diff", diffMsg)
+	}
+
+	// Ignored stale diff message for another feature, then empty diff, then error diff.
+	updated, _ = model.Update(dashboardDiffMsg{feature: "other", repository: 0, content: "ignored"})
+	model = updated.(dashboardModel)
+	if model.diffLoaded {
+		t.Error("mismatched dashboardDiffMsg marked diff as loaded")
+	}
+	updated, _ = model.Update(dashboardDiffMsg{feature: "feature/dash", repository: 0, content: "   "})
+	model = updated.(dashboardModel)
+	if !strings.Contains(model.render(), "No changes against the base branch.") {
+		t.Errorf("empty diff render = %q, want no-changes message", model.render())
+	}
+	updated, _ = model.Update(dashboardDiffMsg{feature: "feature/dash", repository: 0, err: errors.New("boom")})
+	model = updated.(dashboardModel)
+	if !strings.Contains(model.render(), "error: boom") {
+		t.Errorf("error diff render = %q, want error: boom", model.render())
+	}
+
+	// Multi-repo tab/shift+tab in diff mode, plus missing baseRef error in diffCmd.
+	model.sessions[0].repos = append(model.sessions[0].repos, dashboardRepository{
+		status: repositoryStatus{repositoryName: "web", baseBranch: "main", detail: "no base"},
+	})
+	updated, tabCmd := model.Update(keyPress("tab"))
+	model = updated.(dashboardModel)
+	if model.diffRepo != 1 || tabCmd == nil {
+		t.Fatalf("tab in diff mode: diffRepo = %d, cmd = %v; want 1 and non-nil cmd", model.diffRepo, tabCmd)
+	}
+	noBaseMsg := tabCmd().(dashboardDiffMsg)
+	if noBaseMsg.err == nil || !strings.Contains(noBaseMsg.err.Error(), "base branch is unavailable") {
+		t.Errorf("diffCmd(no baseRef) = %+v, want base branch unavailable error", noBaseMsg)
+	}
+	updated, _ = model.Update(keyPress("shift+tab"))
+	model = updated.(dashboardModel)
+	if model.diffRepo != 0 {
+		t.Errorf("shift+tab in diff mode: diffRepo = %d, want 0", model.diffRepo)
+	}
+
+	// Reload while in diff mode: stays in diff mode when repo exists, exits to list when repos disappear.
+	updated, reloadDiffCmd := model.Update(dashboardLoadedMsg{sessions: model.sessions})
+	model = updated.(dashboardModel)
+	if model.mode != dashboardDiff || reloadDiffCmd == nil {
+		t.Errorf("reload in diff mode with valid repo: mode = %v, cmd = %v", model.mode, reloadDiffCmd)
+	}
+	updated, _ = model.Update(dashboardLoadedMsg{sessions: []dashboardSession{{name: "feature/dash"}}})
+	model = updated.(dashboardModel)
+	if model.mode != dashboardList {
+		t.Errorf("reload in diff mode without repos: mode = %v, want dashboardList", model.mode)
+	}
+
+	// Actions (s, o, r), action messages, navigation keys (k, pgup, q, ctrl+c), and error/filter states.
+	updated, syncCmd := model.Update(keyPress("s"))
+	model = updated.(dashboardModel)
+	if syncCmd == nil {
+		t.Error("s did not return sync actionCmd")
+	}
+	updated, openCmd := model.Update(keyPress("o"))
+	model = updated.(dashboardModel)
+	if openCmd == nil {
+		t.Error("o did not return open actionCmd")
+	}
+	updated, refreshCmd := model.Update(keyPress("r"))
+	model = updated.(dashboardModel)
+	if !model.loading || refreshCmd == nil {
+		t.Error("r did not trigger refresh")
+	}
+
+	updated, _ = model.Update(dashboardActionMsg{action: "sync", feature: "feature/dash"})
+	model = updated.(dashboardModel)
+	if model.message != "sync feature/dash finished" {
+		t.Errorf("action success message = %q", model.message)
+	}
+	updated, _ = model.Update(dashboardActionMsg{action: "sync", feature: "feature/dash", err: errors.New("conflict")})
+	model = updated.(dashboardModel)
+	if !strings.Contains(model.message, "sync feature/dash failed: conflict") {
+		t.Errorf("action failure message = %q", model.message)
+	}
+
+	model.detailOffset = 10
+	model = pressKeys(t, model, "pgup", "k")
+	if model.detailOffset >= 10 {
+		t.Errorf("pgup did not decrease detailOffset: %d", model.detailOffset)
+	}
+
+	// Filter with no matches.
+	model = pressKeys(t, model, "/", "z", "z", "z", "enter")
+	if !strings.Contains(model.render(), "No sessions match the filter.") {
+		t.Errorf("empty filter render = %q, want no-match message", model.render())
+	}
+
+	// Load error render.
+	updated, _ = model.Update(dashboardLoadedMsg{err: errors.New("corrupt state")})
+	model = updated.(dashboardModel)
+	if !strings.Contains(model.render(), "error: corrupt state") {
+		t.Errorf("error render = %q, want corrupt state", model.render())
+	}
+
+	for _, key := range []string{"q", "ctrl+c"} {
+		if _, quitCmd := model.Update(keyPress(key)); quitCmd == nil {
+			t.Errorf("key %q did not return tea.Quit", key)
+		}
+	}
+}
+
+func TestDashboardBadgesFormatAgeAndExec(t *testing.T) {
+	t.Parallel()
+
+	if got := formatAge(30 * time.Second); got != "0m" {
+		t.Errorf("formatAge(30s) = %q, want 0m", got)
+	}
+	if got := formatAge(45 * time.Minute); got != "45m" {
+		t.Errorf("formatAge(45m) = %q, want 45m", got)
+	}
+	if got := formatAge(5 * time.Hour); got != "5h" {
+		t.Errorf("formatAge(5h) = %q, want 5h", got)
+	}
+	if got := formatAge(3 * 24 * time.Hour); got != "3d" {
+		t.Errorf("formatAge(3d) = %q, want 3d", got)
+	}
+
+	badges := sessionBadges(dashboardSession{
+		drift: "unknown",
+		stale: "idle 15d",
+		repos: []dashboardRepository{{
+			status:    repositoryStatus{rebasing: true, missing: true, dirty: true},
+			untracked: []string{"a.txt"},
+		}},
+	})
+	for _, want := range []string{"rebasing", "!", "●", "?", "stale"} {
+		if !strings.Contains(badges, want) {
+			t.Errorf("sessionBadges() = %q, missing %q", badges, want)
+		}
+	}
+
+	// dashboardExec without and with pause.
+	var stdout, stderr bytes.Buffer
+	execNoPause := &dashboardExec{command: exec.Command("sh", "-c", "printf out; printf err >&2"), pause: false}
+	execNoPause.SetStdin(strings.NewReader(""))
+	execNoPause.SetStdout(&stdout)
+	execNoPause.SetStderr(&stderr)
+	if err := execNoPause.Run(); err != nil {
+		t.Fatalf("dashboardExec(pause=false) error = %v", err)
+	}
+	if stdout.String() != "out" || stderr.String() != "err" {
+		t.Errorf("dashboardExec output = (%q, %q), want (out, err)", stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	execPause := &dashboardExec{command: exec.Command("true"), pause: true}
+	execPause.SetStdin(strings.NewReader("ignored\n"))
+	execPause.SetStdout(&stdout)
+	if err := execPause.Run(); err != nil {
+		t.Fatalf("dashboardExec(pause=true) error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Press Enter to return to the dashboard…") {
+		t.Errorf("dashboardExec(pause=true) stdout = %q, want prompt", stdout.String())
+	}
+
+	file, err := os.CreateTemp(t.TempDir(), "not-a-tty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if isTerminal(file) {
+		t.Error("isTerminal(regular file) = true, want false")
+	}
+	if err := runDashboard(defaultStaleAfter); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
+		// Under `go test`, os.Stdin is not a terminal.
+		if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
+			t.Errorf("runDashboard() without terminal error = %v, want interactive terminal error", err)
+		}
 	}
 }

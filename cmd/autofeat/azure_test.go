@@ -236,6 +236,13 @@ func TestAddAzureBuildWorkspaceRequiresToken(t *testing.T) {
 	if !strings.Contains(err.Error(), "AZURE_DEVOPS_EXT_PAT") {
 		t.Errorf("error = %v, want it to name the token environment variable", err)
 	}
+
+	// Fallback to AZURE_DEVOPS_PAT when AZURE_DEVOPS_EXT_PAT is unset.
+	t.Setenv("AZURE_DEVOPS_PAT", "fallback-token")
+	got, err := azureDevOpsToken()
+	if err != nil || got != "fallback-token" {
+		t.Errorf("azureDevOpsToken() with AZURE_DEVOPS_PAT = (%q, %v), want (fallback-token, nil)", got, err)
+	}
 }
 
 func TestAddAzureBuildWorkspaceUnauthorizedLeavesNoSession(t *testing.T) {
@@ -268,10 +275,8 @@ func TestAddAzureBuildWorkspaceRejectsExistingSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	appBare, appFirst, _ := createAzureBareRepo(t, "app")
 	appURL := "https://dev.azure.example/org/proj/_git/app"
-	server := newAzureClassicServer(t, appURL, appFirst, "refs/heads/main")
-	redirectCloneURL(t, appURL, appBare)
+	server := newAzureClassicServer(t, appURL, "1111111111111111111111111111111111111111", "refs/heads/main")
 
 	err := run([]string{"new", "feature/az", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", server.URL})
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
@@ -279,66 +284,111 @@ func TestAddAzureBuildWorkspaceRejectsExistingSession(t *testing.T) {
 	}
 }
 
-func TestAddAzureBuildWorkspaceRejectsPreexistingDirectory(t *testing.T) {
-	requireMainGit(t)
-	t.Setenv("HOME", t.TempDir())
-	writeMainConfig(t, "code", "copilot")
-	t.Setenv("AZURE_DEVOPS_EXT_PAT", "test-token")
+func TestAddAzureBuildWorkspaceRejectsPreexistingPath(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, featureDir string)
+		check func(t *testing.T, featureDir string)
+	}{
+		{
+			name: "directory with user content",
+			setup: func(t *testing.T, featureDir string) {
+				if err := os.MkdirAll(featureDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(featureDir, "keep.txt"), []byte("user data\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, featureDir string) {
+				if _, err := os.Stat(filepath.Join(featureDir, "keep.txt")); err != nil {
+					t.Errorf("sentinel file was removed: %v", err)
+				}
+			},
+		},
+		{
+			name: "regular file",
+			setup: func(t *testing.T, featureDir string) {
+				if err := os.MkdirAll(filepath.Dir(featureDir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(featureDir, []byte("not a workspace\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, featureDir string) {
+				info, err := os.Stat(featureDir)
+				if err != nil || info.IsDir() {
+					t.Errorf("pre-existing file was replaced (stat err = %v, isDir = %v)", err, err == nil && info.IsDir())
+				}
+			},
+		},
+	}
 
-	appBare, appFirst, _ := createAzureBareRepo(t, "app")
-	appURL := "https://dev.azure.example/org/proj/_git/app"
-	server := newAzureClassicServer(t, appURL, appFirst, "refs/heads/main")
-	redirectCloneURL(t, appURL, appBare)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			writeMainConfig(t, "code", "copilot")
+			t.Setenv("AZURE_DEVOPS_EXT_PAT", "test-token")
 
-	// A pre-existing feature directory with user content must be left intact.
-	featureDir := filepath.Join(mainWorkspaceDir(t), featureDirectoryName("feature/az"))
-	if err := os.MkdirAll(featureDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	sentinel := filepath.Join(featureDir, "keep.txt")
-	if err := os.WriteFile(sentinel, []byte("user data\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+			appURL := "https://dev.azure.example/org/proj/_git/app"
+			server := newAzureClassicServer(t, appURL, "1111111111111111111111111111111111111111", "refs/heads/main")
+			featureDir := filepath.Join(mainWorkspaceDir(t), featureDirectoryName("feature/az"))
+			test.setup(t, featureDir)
 
-	err := run([]string{"new", "feature/az", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", server.URL})
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("run(new --azure-build) error = %v, want pre-existing-path error", err)
-	}
-	if _, statErr := os.Stat(sentinel); statErr != nil {
-		t.Errorf("sentinel file was removed: %v", statErr)
-	}
-	if _, err := state.GetSession("feature/az"); err == nil {
-		t.Error("session was created despite a pre-existing feature directory")
+			err := run([]string{"new", "feature/az", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", server.URL})
+			if err == nil || !strings.Contains(err.Error(), "already exists") {
+				t.Fatalf("run(new --azure-build) error = %v, want pre-existing-path error", err)
+			}
+			test.check(t, featureDir)
+			if _, err := state.GetSession("feature/az"); err == nil {
+				t.Error("session was created despite a pre-existing feature path")
+			}
+		})
 	}
 }
 
-func TestAddAzureBuildWorkspaceRejectsPreexistingFile(t *testing.T) {
+func TestAddAzureBuildWorkspaceFetchesUnadvertisedPullRefAndRollsBackSecondRepoFailure(t *testing.T) {
 	requireMainGit(t)
 	t.Setenv("HOME", t.TempDir())
 	writeMainConfig(t, "code", "copilot")
 	t.Setenv("AZURE_DEVOPS_EXT_PAT", "test-token")
 
-	appBare, appFirst, _ := createAzureBareRepo(t, "app")
+	// Create a bare repository with a commit only reachable via refs/pull/9/merge.
+	appBare, _, _ := createAzureBareRepo(t, "app")
+	work := createMainRepository(t)
+	writeAndCommitMainFile(t, work, "pr.txt", "pr\n", "pr commit")
+	prCommit := strings.TrimSpace(mainGitOutput(t, work, "rev-parse", "HEAD"))
+	runMainGit(t, work, "push", "-q", appBare, prCommit+":refs/pull/9/merge")
+
 	appURL := "https://dev.azure.example/org/proj/_git/app"
-	server := newAzureClassicServer(t, appURL, appFirst, "refs/heads/main")
+	server := newAzureClassicServer(t, appURL, prCommit, "refs/pull/9/merge")
 	redirectCloneURL(t, appURL, appBare)
 
-	// A regular file already sitting at the feature path must be preserved.
-	featureDir := filepath.Join(mainWorkspaceDir(t), featureDirectoryName("feature/az"))
-	if err := os.MkdirAll(mainWorkspaceDir(t), 0o755); err != nil {
+	if err := run([]string{"new", "feature/az-pr", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", server.URL}); err != nil {
+		t.Fatalf("run(new --azure-build PR ref) error = %v", err)
+	}
+	session, err := state.GetSession("feature/az-pr")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(featureDir, []byte("not a workspace\n"), 0o644); err != nil {
-		t.Fatal(err)
+	if head := strings.TrimSpace(mainGitOutput(t, session.Repos[0].WorktreePath, "rev-parse", "HEAD")); head != prCommit {
+		t.Errorf("HEAD = %q, want PR commit %q", head, prCommit)
 	}
 
-	err := run([]string{"new", "feature/az", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", server.URL})
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("run(new --azure-build) error = %v, want pre-existing-path error", err)
+	// Multi-repo YAML build where repo 1 (app) succeeds and repo 2 (lib) fails:
+	// rollbackAzureWorkspace must tear down the persisted partial session.
+	yamlServer := newAzureYAMLServer(t, appURL, prCommit, "1111111111111111111111111111111111111111")
+	libURL := yamlServer.URL + "/org/proj/_git/lib"
+	redirectCloneURL(t, libURL, filepath.Join(t.TempDir(), "missing-lib.git"))
+
+	if err := run([]string{"new", "feature/az-partial", "--azure-build", "42", "--azure-org", "org", "--azure-project", "proj", "--azure-url", yamlServer.URL}); err == nil {
+		t.Fatal("run(new --azure-build partial failure) error = nil, want second repo clone error")
 	}
-	info, statErr := os.Stat(featureDir)
-	if statErr != nil || info.IsDir() {
-		t.Errorf("pre-existing file was replaced (stat err = %v, isDir = %v)", statErr, statErr == nil && info.IsDir())
+	assertNoWorkspaceRemains(t, "feature/az-partial")
+
+	if got := shortCommit("abc123"); got != "abc123" {
+		t.Errorf("shortCommit(abc123) = %q, want abc123", got)
 	}
 }
 
