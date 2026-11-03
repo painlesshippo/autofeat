@@ -211,13 +211,14 @@ func listSessionsTo(output io.Writer) error {
 
 	var table bytes.Buffer
 	writer := tabwriter.NewWriter(&table, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "FEATURE\tCREATED\tLAST ACTIVITY\tREPOSITORIES\tDRIFT")
+	fmt.Fprintln(writer, "FEATURE\tCREATED\tLAST ACTIVITY\tREPOSITORIES\tARTIFACTS\tDRIFT")
 	for _, listing := range listings {
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%s\n",
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%d\t%d\t%s\n",
 			listing.name,
 			listing.session.CreatedAt.Format(time.RFC3339),
 			listing.lastActivity.UTC().Format(time.RFC3339),
 			len(listing.session.Repos),
+			len(listing.session.Artifacts),
 			listing.drift,
 		)
 	}
@@ -399,8 +400,27 @@ func statusSessionsTo(output io.Writer, selectors []string) error {
 			statusDetail(status),
 		)
 	}
+	if err := writer.Flush(); err != nil {
+		return err
+	}
 
-	return writer.Flush()
+	artifactsWritten := false
+	for _, featureName := range featureNames {
+		artifacts := currentState.Sessions[featureName].Artifacts
+		if len(artifacts) == 0 {
+			continue
+		}
+		if !artifactsWritten {
+			if _, err := fmt.Fprintln(output); err != nil {
+				return err
+			}
+			artifactsWritten = true
+		}
+		if err := writeArtifactTable(output, featureName, artifacts); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func inspectRepositoryStatus(featureName string, repository state.Repository, defaultBaseBranch string) repositoryStatus {
@@ -1405,6 +1425,9 @@ func teardownSession(featureName string, force bool) error {
 	if err := state.DeleteSession(featureName); err != nil {
 		return err
 	}
+	if err := printTeardownArtifacts(os.Stdout, featureName, session.Artifacts); err != nil {
+		return err
+	}
 	if err := hooks.Run(configuration.Hooks, hooks.PostTeardown, configuration.WorkspaceBaseDir); err != nil {
 		return err
 	}
@@ -1522,6 +1545,7 @@ func removeSessionRepository(featureName string, session state.Session, reposito
 	}
 
 	session.Repos = append(session.Repos[:repositoryIndex], session.Repos[repositoryIndex+1:]...)
+	dropRepositoryArtifactLinks(session.Artifacts, filepath.Base(repository.WorktreePath))
 	if err := state.UpdateSession(featureName, session); err != nil {
 		return err
 	}

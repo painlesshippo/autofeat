@@ -516,6 +516,34 @@ func normalizeCloneURL(value string) string {
 	return strings.ToLower(trimmed)
 }
 
+// SplitWebURL splits an Azure DevOps Services web URL into its organization
+// URL and the path segments that follow the organization, starting with the
+// project. orgURL is empty when a dev.azure.com URL has no organization. ok is
+// false when the host is not an Azure DevOps Services host.
+func SplitWebURL(u *url.URL) (orgURL string, rest []string, ok bool) {
+	segments := make([]string, 0, 4)
+	for _, segment := range strings.Split(strings.Trim(u.Path, "/"), "/") {
+		if segment != "" {
+			segments = append(segments, segment)
+		}
+	}
+
+	host := strings.ToLower(u.Host)
+	switch {
+	case host == "dev.azure.com":
+		// https://dev.azure.com/{org}/{project}/...
+		if len(segments) == 0 {
+			return "", nil, true
+		}
+		return u.Scheme + "://" + u.Host + "/" + segments[0], segments[1:], true
+	case strings.HasSuffix(host, ".visualstudio.com"):
+		// https://{org}.visualstudio.com/{project}/...
+		return u.Scheme + "://" + u.Host, segments, true
+	default:
+		return "", nil, false
+	}
+}
+
 // ParseBuildID parses a positive build identifier.
 func ParseBuildID(value string) (int, error) {
 	id, err := strconv.Atoi(strings.TrimSpace(value))

@@ -1,6 +1,6 @@
 ---
 name: autofeat
-description: "Manage disposable Git worktree sessions for concurrent AI-agent feature development. Use when creating, opening, running, inspecting, syncing, templating, removing, or tearing down autofeat feature sessions, including sessions built from Azure DevOps builds or opened in Dev Containers."
+description: "Manage disposable Git worktree sessions for concurrent AI-agent feature development. Use when creating, opening, running, inspecting, syncing, templating, removing, or tearing down autofeat feature sessions, or recording the artifacts (builds, work items, pull requests, Azure resources) a session produced, including sessions built from Azure DevOps builds or opened in Dev Containers."
 ---
 
 # Autofeat
@@ -26,6 +26,8 @@ session id and the Git branch name in every repository.
 | Abort a stuck sync rebase | `autofeat sync SELECTOR... --cancel` |
 | Detach one repo | `autofeat remove FEATURE (REPO \| PATH \| URL)` |
 | Delete sessions | `autofeat teardown SELECTOR...` |
+| Record an artifact you created | `autofeat artifact add FEATURE REF [--type TYPE] [--repo REPO]` |
+| List / forget artifacts | `autofeat artifact list FEATURE [--json]`, `artifact remove FEATURE REF [--type TYPE] [--repo REPO]` |
 | Templates | `autofeat template save NAME --from FEATURE`, `template list`, `template show NAME` |
 | Edit config/hooks | `autofeat config` |
 
@@ -42,13 +44,17 @@ session id and the Git branch name in every repository.
    changes. "Remove" or "tear down" alone is not authorization.
 5. Surface autofeat's warnings verbatim (dirty worktrees, unpushed commits in
    remote clones, rebase conflicts, hook failures).
-6. Do not hand-edit `$HOME/.autofeat/*.json` unless the user asks; prefer CLI
+6. Record every external artifact you create for a session (pipeline run, work
+   item, pull request, Azure resource, other URL) with `autofeat artifact add`.
+   Pass the URL or resource id; use `--type` only for plain ids.
+7. Do not hand-edit `$HOME/.autofeat/*.json` unless the user asks; prefer CLI
    commands.
 
 ## References
 
 - [Session Lifecycle](./references/session-lifecycle.md): creation sources,
-  base refs, Azure DevOps, opening, running, `list`/`status` output, sync.
+  base refs, Azure DevOps, opening, running, `list`/`status` output, sync,
+  artifacts.
 - [Safety And Recovery](./references/safety-and-recovery.md): remove,
   teardown, `--force`, rebase conflicts, hook failures.
 - [Templates And Configuration](./references/templates-and-config.md):

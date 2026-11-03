@@ -49,8 +49,8 @@ not run and the new repository is removed so the operation can be retried.
 
 `config.json`, `state.json`, and `templates.json` each include an independent
 `schema_version`. Config and template files currently use version 1, while the
-state file uses version 2. Existing unversioned files and version 1 state files
-are accepted and upgraded the next time autofeat writes them. A file created by
+state file uses version 3. Existing unversioned files and version 1 and 2 state
+files are accepted and upgraded the next time autofeat writes them. A file created by
 a newer, unsupported schema requires a newer autofeat binary. Unknown fields
 are rejected so manual editing mistakes do not silently discard data on the
 next write.
@@ -189,6 +189,9 @@ and `remove` and `teardown` use `--force`.
 | `autofeat teardown SELECTOR... [--force]` | Remove matching sessions and their worktrees. |
 | `autofeat list` | List active sessions, most recently active first, with their cached base drift. |
 | `autofeat dash [--stale-after DURATION]` | Browse sessions, review their diffs, and sync, open, or tear them down interactively. |
+| `autofeat artifact add FEATURE REF [--type TYPE] [--repo REPO]` | Record an external artifact on a session; its type is inferred from `REF`. |
+| `autofeat artifact list FEATURE [--json]` | List the artifacts recorded on a session. |
+| `autofeat artifact remove FEATURE REF [--type TYPE] [--repo REPO]` | Forget a recorded artifact by its reference or id. |
 | `autofeat template list` | List saved templates. |
 | `autofeat template show NAME` | Show the repositories in a template. |
 | `autofeat template save NAME --from FEATURE` | Save an active session as a template. |
@@ -204,7 +207,7 @@ autofeat config
 ```
 
 Bash and PowerShell completion suggest active feature names for `new`,
-`remove`, `open`, `sync`, `status`, and `teardown`. This lets `new` add
+`remove`, `open`, `sync`, `status`, `teardown`, and `artifact`. This lets `new` add
 a repository to an existing feature; a feature name that does not exist yet
 remains free-form. Commands that accept multiple selectors omit names already
 selected. Completion also includes each command's supported options.
@@ -594,6 +597,45 @@ terminal, and `sync` and `teardown` keep their output on screen until you press
 Enter. Like `status`, the dashboard itself never fetches, so merged detection
 uses the base branch as of the last `sync`. `dash` requires an interactive
 terminal.
+
+Record external artifacts that work on a session produced, such as pipeline
+builds, work items, pull requests, or Azure resources:
+
+```sh
+autofeat artifact add feature/potato "https://dev.azure.com/org/Project/_build/results?buildId=123"
+autofeat artifact add feature/potato AB#4567 --repo api
+autofeat artifact add feature/potato 98765 --type ado-build
+autofeat artifact list feature/potato --json
+autofeat artifact remove feature/potato 123
+```
+
+`artifact add` infers the type offline from the reference:
+
+| Reference | Type |
+| --- | --- |
+| `https://dev.azure.com/ORG/PROJECT/_build/results?buildId=N` | `ado-build` |
+| `.../_workitems/edit/N` or `AB#N` | `ado-work-item` |
+| `.../_git/REPO/pullrequest/N` or `!N` | `ado-pull-request` |
+| `.../_git/REPO/commit/SHA` | `ado-commit` |
+| `.../_git/REPO?version=GBBRANCH` | `ado-branch` |
+| `.../_git/REPO` | `ado-repo` |
+| `/subscriptions/ID/resourceGroups/RG[/providers/...]` or an Azure portal resource URL | `azure-resource` |
+| `https://github.com/OWNER/REPO/pull/N`, `/issues/N`, `/commit/SHA`, `/actions/runs/N` | `github-pull-request`, `github-issue`, `github-commit`, `github-run` |
+| Any other `http` or `https` URL | `link` |
+
+Both `dev.azure.com/ORG` and `ORG.visualstudio.com` hosts are recognized. Plain
+ids and other references need `--type`, which also overrides inference for
+Azure DevOps Server URLs. Adding a reference that is already recorded does
+nothing; URLs are compared with a case-insensitive scheme and host only, and
+plain ids are distinct per type and repository. `--repo` links the artifact to
+an attached repository by worktree name; the link is cleared if that repository
+is later removed. `artifact remove` accepts the recorded reference, an
+equivalent one, or an extracted id such as the build number. When that matches
+more than one artifact, narrow it with `--type` or `--repo`.
+
+`list` shows an `ARTIFACTS` count, `status` appends an artifact table for the
+selected sessions, and the `dash` detail pane lists them. `teardown` prints the
+session's artifacts after removing it so they are not lost silently.
 
 Print the build version, commit, and timestamp:
 

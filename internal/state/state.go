@@ -11,12 +11,14 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/painlesshippo/autofeat/internal/artifact"
 )
 
 const (
 	appDirectoryName     = ".autofeat"
 	stateFileName        = "state.json"
-	currentSchemaVersion = 2
+	currentSchemaVersion = 3
 	// DefaultBaseBranch is used when no global or repository-specific base is set.
 	DefaultBaseBranch = "master"
 )
@@ -35,10 +37,11 @@ type Repository struct {
 
 // Session describes a feature session and its attached repository worktrees.
 type Session struct {
-	CreatedAt     time.Time    `json:"created_at"`
-	FeatureDir    string       `json:"feature_dir"`
-	WorkspaceFile string       `json:"workspace_file"`
-	Repos         []Repository `json:"repos"`
+	CreatedAt     time.Time           `json:"created_at"`
+	FeatureDir    string              `json:"feature_dir"`
+	WorkspaceFile string              `json:"workspace_file"`
+	Repos         []Repository        `json:"repos"`
+	Artifacts     []artifact.Artifact `json:"artifacts,omitempty"`
 }
 
 // State is the complete persisted autofeat state.
@@ -237,9 +240,28 @@ func (state State) Validate() error {
 				return fmt.Errorf("session %q repos[%d]: worktree_path is required", name, index)
 			}
 		}
+		for index, recorded := range session.Artifacts {
+			if err := recorded.Validate(); err != nil {
+				return fmt.Errorf("session %q artifacts[%d]: %w", name, index, err)
+			}
+			if recorded.Repo != "" && !hasRepository(session, recorded.Repo) {
+				return fmt.Errorf("session %q artifacts[%d]: repo %q is not attached", name, index, recorded.Repo)
+			}
+		}
 	}
 
 	return nil
+}
+
+// hasRepository reports whether a repository whose worktree directory is named
+// directory is attached to session.
+func hasRepository(session Session, directory string) bool {
+	for _, repository := range session.Repos {
+		if filepath.Base(repository.WorktreePath) == directory {
+			return true
+		}
+	}
+	return false
 }
 
 func schemaVersion(contents []byte) (int, error) {

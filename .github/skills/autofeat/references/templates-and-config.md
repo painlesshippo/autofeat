@@ -10,7 +10,7 @@ autofeat new feature/other --template full-stack
 ```
 
 - Templates store ordered local paths and remote URLs only. They do not store
-  worktree paths, base refs, or the feature name.
+  worktree paths, base refs, artifacts, or the feature name.
 - All sources are validated before anything is created. A later failure rolls
   back repos already created.
 - Normal base-ref selection and `post-add` hooks apply.
@@ -20,7 +20,7 @@ autofeat new feature/other --template full-stack
 | File | Contents |
 | --- | --- |
 | `config.json` | Global settings (`autofeat config` opens it) |
-| `state.json` | Sessions, `default_base_branch`, remembered `repository_base_branches` |
+| `state.json` | Sessions (repos and artifacts), `default_base_branch`, remembered `repository_base_branches` |
 | `templates.json` | Saved templates |
 
 Every file has a `schema_version`, and unknown fields are rejected. Keep the
