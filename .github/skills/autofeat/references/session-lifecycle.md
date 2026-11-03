@@ -46,6 +46,8 @@ autofeat new bug/repro --azure-build 4821 --azure-org ORG --azure-project PROJ
   all sessions. Exits 0 regardless of repo health.
 - `STATE` values: `ready`, `dirty`, `behind-base`, `unpushed`, `remote-ahead`,
   `remote-diverged`, `rebasing`, `wrong-branch`, `detached`, `missing`, `error`.
+- `autofeat dash` is an interactive terminal UI for humans and fails without a
+  TTY. Do not run it; use `list` and `status` instead.
 
 ## Open
 

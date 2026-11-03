@@ -294,6 +294,7 @@ func TestCobraCompletionProtocol(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"__complete", "list", ""},
+		{"__complete", "dash", ""},
 		{"__complete", "config", ""},
 		{"__complete", "version", ""},
 		{"__complete", "template", "list", ""},

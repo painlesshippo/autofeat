@@ -431,6 +431,152 @@ func AheadBehind(destPath, baseRef string) (ahead, behind int, err error) {
 	return ahead, behind, nil
 }
 
+// Diff returns the changes a pull request from the worktree at destPath would
+// show against baseRef: the working tree compared to the merge-base of baseRef
+// and HEAD, followed by the full content of every untracked file.
+func Diff(destPath, baseRef string, color bool) (string, error) {
+	colorArg := "--color=never"
+	if color {
+		colorArg = "--color=always"
+	}
+	output, err := runStdout("-C", destPath, "diff", colorArg, "--merge-base", baseRef, "--")
+	if err != nil {
+		return "", fmt.Errorf("diff repository %q against %q: %w", destPath, baseRef, err)
+	}
+
+	untracked, err := UntrackedFiles(destPath)
+	if err != nil {
+		return "", err
+	}
+	var builder strings.Builder
+	builder.WriteString(output)
+	for _, path := range untracked {
+		// --no-index exits with status 1 whenever the files differ, which they
+		// always do against /dev/null, so only the output is meaningful.
+		command := exec.Command("git", "-C", destPath, "diff", colorArg, "--no-index", "--", os.DevNull, path)
+		fileDiff, err := command.Output()
+		var exitErr *exec.ExitError
+		if err != nil && !(errors.As(err, &exitErr) && exitErr.ExitCode() == 1) {
+			return "", fmt.Errorf("diff untracked file %q in repository %q: %w", path, destPath, err)
+		}
+		builder.Write(fileDiff)
+	}
+
+	return builder.String(), nil
+}
+
+// DiffStat returns a git diff --stat summary of the working tree at destPath
+// compared to the merge-base of baseRef and HEAD. Untracked files are not
+// included; see UntrackedFiles.
+func DiffStat(destPath, baseRef string) (string, error) {
+	output, err := runStdout("-C", destPath, "diff", "--color=never", "--stat", "--merge-base", baseRef, "--")
+	if err != nil {
+		return "", fmt.Errorf("summarize diff of repository %q against %q: %w", destPath, baseRef, err)
+	}
+
+	return output, nil
+}
+
+// UntrackedFiles lists files in destPath that are neither tracked nor ignored.
+func UntrackedFiles(destPath string) ([]string, error) {
+	output, err := runStdout("-C", destPath, "ls-files", "-z", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, fmt.Errorf("list untracked files in repository %q: %w", destPath, err)
+	}
+
+	files := []string{}
+	for _, path := range strings.Split(output, "\x00") {
+		if path != "" {
+			files = append(files, path)
+		}
+	}
+
+	return files, nil
+}
+
+// ChangesMerged reports whether baseRef already contains the changes of the
+// commits on HEAD. That holds after a merge commit, which leaves HEAD reachable
+// from baseRef but off its first-parent history, and after a rebase or squash
+// merge, which copies the changes into new commits. A HEAD on the first-parent
+// history of baseRef, such as a fresh session or a fast-forward merge, is not
+// considered merged. Only committed changes are examined.
+func ChangesMerged(destPath, baseRef string) (bool, error) {
+	ahead, _, err := AheadBehind(destPath, baseRef)
+	if err != nil {
+		return false, err
+	}
+	if ahead == 0 {
+		return mergedByMergeCommit(destPath, baseRef)
+	}
+
+	cherry, err := runStdout("-C", destPath, "cherry", baseRef, "HEAD")
+	if err != nil {
+		return false, fmt.Errorf("compare HEAD with %q in repository %q: %w", baseRef, destPath, err)
+	}
+	if allCherryPicked(cherry) {
+		return true, nil
+	}
+
+	mergeBase, err := runStdout("-C", destPath, "merge-base", baseRef, "HEAD")
+	if err != nil {
+		return false, fmt.Errorf("find merge-base of %q in repository %q: %w", baseRef, destPath, err)
+	}
+	// Squash the branch into one dangling commit so git cherry can compare
+	// its combined patch with the commits on baseRef.
+	identity := []string{
+		"GIT_AUTHOR_NAME=autofeat", "GIT_AUTHOR_EMAIL=autofeat@localhost",
+		"GIT_COMMITTER_NAME=autofeat", "GIT_COMMITTER_EMAIL=autofeat@localhost",
+	}
+	squashed, err := runWithEnv(identity, "-C", destPath, "commit-tree", "HEAD^{tree}", "-p", strings.TrimSpace(mergeBase), "-m", "autofeat merge check")
+	if err != nil {
+		return false, fmt.Errorf("squash HEAD in repository %q: %w", destPath, err)
+	}
+	cherry, err = runStdout("-C", destPath, "cherry", baseRef, strings.TrimSpace(squashed))
+	if err != nil {
+		return false, fmt.Errorf("compare HEAD with %q in repository %q: %w", baseRef, destPath, err)
+	}
+
+	return allCherryPicked(cherry), nil
+}
+
+// allCherryPicked reports whether git cherry output lists at least one commit
+// and marks every commit as already present upstream.
+func allCherryPicked(cherry string) bool {
+	lines := strings.Fields(strings.TrimSpace(cherry))
+	if len(lines) == 0 {
+		return false
+	}
+	for index := 0; index < len(lines); index += 2 {
+		if lines[index] != "-" {
+			return false
+		}
+	}
+	return true
+}
+
+// mergedByMergeCommit reports whether HEAD, already reachable from baseRef,
+// joined it through a merge commit rather than lying on its first-parent
+// history.
+func mergedByMergeCommit(destPath, baseRef string) (bool, error) {
+	// Walking first parents from baseRef stops at the first commit reachable
+	// from HEAD. The oldest commit walked has HEAD as its first parent exactly
+	// when HEAD is on the first-parent history.
+	walked, err := runStdout("-C", destPath, "rev-list", "--first-parent", "--parents", baseRef, "^HEAD")
+	if err != nil {
+		return false, fmt.Errorf("walk first parents of %q in repository %q: %w", baseRef, destPath, err)
+	}
+	lines := strings.Split(strings.TrimSpace(walked), "\n")
+	oldest := strings.Fields(lines[len(lines)-1])
+	if len(oldest) < 2 {
+		return false, nil
+	}
+	head, err := runStdout("-C", destPath, "rev-parse", "HEAD")
+	if err != nil {
+		return false, fmt.Errorf("resolve HEAD in repository %q: %w", destPath, err)
+	}
+	return oldest[1] != strings.TrimSpace(head), nil
+}
+
 // CachedBaseStatus resolves baseBranch without fetching and reports how HEAD
 // relates to it.
 func CachedBaseStatus(destPath, baseBranch string) (BaseStatus, error) {
@@ -686,6 +832,21 @@ func runWithEnv(env []string, args ...string) (string, error) {
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+
+	return string(output), nil
+}
+
+// runStdout runs git and returns only its standard output, so warnings written
+// to standard error cannot corrupt parsed or displayed output.
+func runStdout(args ...string) (string, error) {
+	output, err := exec.Command("git", args...).Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 
 	return string(output), nil
