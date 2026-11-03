@@ -176,7 +176,7 @@ func TestAddAzureBuildWorkspacePinsOverExistingRemoteBranch(t *testing.T) {
 
 	appBare, appFirst, appSecond := createAzureBareRepo(t, "app")
 	// origin/feature/az sits at the newer commit; the build resolved the older.
-	runMainGit(t, appBare, "update-ref", "refs/heads/feature/az", appSecond)
+	runMainGit(t, appBare, "--git-dir="+appBare, "update-ref", "refs/heads/feature/az", appSecond)
 
 	appURL := "https://dev.azure.example/org/proj/_git/app"
 	server := newAzureClassicServer(t, appURL, appFirst, "refs/heads/main")
@@ -441,8 +441,7 @@ func createAzureBareRepo(t *testing.T, name string) (barePath, first, second str
 	second = strings.TrimSpace(mainGitOutput(t, source, "rev-parse", "HEAD"))
 
 	barePath = filepath.Join(t.TempDir(), name+".git")
-	runMainGit(t, source, "init", "--bare", "-q", barePath)
-	runMainGit(t, barePath, "symbolic-ref", "HEAD", "refs/heads/main")
+	runMainGit(t, source, "init", "--bare", "-q", "--initial-branch=main", barePath)
 	runMainGit(t, source, "remote", "add", "origin", barePath)
 	runMainGit(t, source, "push", "-qu", "origin", "main")
 	return barePath, first, second

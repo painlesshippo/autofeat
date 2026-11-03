@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/painlesshippo/autofeat/internal/artifact"
 )
 
 func TestSaveToPathAndLoadFromPath(t *testing.T) {
@@ -39,7 +41,7 @@ func TestSaveToPathAndLoadFromPath(t *testing.T) {
 	if !strings.Contains(string(contents), `"is_remote_clone": true`) {
 		t.Errorf("state JSON does not contain is_remote_clone: %s", contents)
 	}
-	if !strings.Contains(string(contents), `"schema_version": 2`) {
+	if !strings.Contains(string(contents), `"schema_version": 3`) {
 		t.Errorf("state JSON does not contain schema version: %s", contents)
 	}
 
@@ -158,6 +160,52 @@ func TestLoadFromPathMigratesVersionOne(t *testing.T) {
 	}
 }
 
+func TestLoadFromPathMigratesVersionTwo(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	contents := `{"schema_version":2,"default_base_branch":"main","repository_base_branches":{},` +
+		`"sessions":{"feature":{"feature_dir":"/tmp/f","repos":[{"name":"repo","worktree_path":"/tmp/f/repo"}]}}}`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath() error = %v", err)
+	}
+	if state.SchemaVersion != currentSchemaVersion {
+		t.Errorf("SchemaVersion = %d, want %d", state.SchemaVersion, currentSchemaVersion)
+	}
+	if got := state.Sessions["feature"].Artifacts; len(got) != 0 {
+		t.Errorf("Artifacts = %+v, want none", got)
+	}
+}
+
+func TestArtifactsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	want := artifact.Artifact{Type: artifact.ADOBuild, Value: "https://dev.azure.com/o/p/_build/results?buildId=1", ID: "1", Repo: "repo", CreatedAt: createdAt}
+	input := State{Sessions: map[string]Session{"feature": {
+		Repos:     []Repository{{Name: "repo", WorktreePath: "/tmp/repo"}},
+		Artifacts: []artifact.Artifact{want},
+	}}}
+	if err := SaveToPath(path, input); err != nil {
+		t.Fatalf("SaveToPath() error = %v", err)
+	}
+
+	state, err := LoadFromPath(path)
+	if err != nil {
+		t.Fatalf("LoadFromPath() error = %v", err)
+	}
+	got := state.Sessions["feature"].Artifacts
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("Artifacts = %+v, want [%+v]", got, want)
+	}
+}
+
 func TestLoadFromPathRejectsInvalidSchemaVersion(t *testing.T) {
 	t.Parallel()
 
@@ -165,7 +213,7 @@ func TestLoadFromPathRejectsInvalidSchemaVersion(t *testing.T) {
 		version string
 		want    string
 	}{
-		"future":   {version: "3", want: "unsupported schema version 3"},
+		"future":   {version: "4", want: "unsupported schema version 4"},
 		"negative": {version: "-1", want: "non-negative integer"},
 		"null":     {version: "null", want: "non-negative integer"},
 		"string":   {version: `"1"`, want: "must be an integer"},
@@ -270,6 +318,14 @@ func TestSaveToPathValidatesState(t *testing.T) {
 		"blank base branch override": {
 			state: State{RepositoryBaseBranches: map[string]string{"/repo": " "}},
 			want:  "is required",
+		},
+		"unknown artifact type": {
+			state: State{Sessions: map[string]Session{"feature": {Artifacts: []artifact.Artifact{{Type: "bogus", Value: "x"}}}}},
+			want:  "artifacts[0]: unknown artifact type",
+		},
+		"artifact for unattached repository": {
+			state: State{Sessions: map[string]Session{"feature": {Artifacts: []artifact.Artifact{{Type: artifact.Link, Value: "https://x", Repo: "missing"}}}}},
+			want:  `repo "missing" is not attached`,
 		},
 	}
 	for name, test := range tests {

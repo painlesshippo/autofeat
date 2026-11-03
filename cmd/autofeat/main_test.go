@@ -1758,8 +1758,7 @@ func createRemoteMainRepository(t *testing.T) (string, string) {
 	sourcePath := createMainRepository(t)
 	runMainGit(t, sourcePath, "branch", "-M", "main")
 	remotePath := filepath.Join(t.TempDir(), "remote.git")
-	runMainGit(t, sourcePath, "init", "--bare", "-q", remotePath)
-	runMainGit(t, remotePath, "symbolic-ref", "HEAD", "refs/heads/main")
+	runMainGit(t, sourcePath, "init", "--bare", "-q", "--initial-branch=main", remotePath)
 	runMainGit(t, sourcePath, "remote", "add", "origin", remotePath)
 	runMainGit(t, sourcePath, "push", "-qu", "origin", "main")
 	return sourcePath, remotePath
@@ -2841,6 +2840,9 @@ func TestRemoveRepositoryFromSessionUpdatesStateAndWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	removedWorktree := before.Repos[1].WorktreePath
+	if err := addArtifactTo(&bytes.Buffer{}, "feature/remove", "!1", "", filepath.Base(removedWorktree)); err != nil {
+		t.Fatal(err)
+	}
 	if err := removeRepositoryFromSession("feature/remove", repositoryPaths[1], false, false); err != nil {
 		t.Fatalf("removeRepositoryFromSession() error = %v", err)
 	}
@@ -2851,6 +2853,9 @@ func TestRemoveRepositoryFromSessionUpdatesStateAndWorkspace(t *testing.T) {
 	}
 	if len(after.Repos) != 2 || after.Repos[0].OriginalPath != repositoryPaths[0] || after.Repos[1].OriginalPath != repositoryPaths[2] {
 		t.Fatalf("remaining repositories = %+v, want first and third in their original order", after.Repos)
+	}
+	if len(after.Artifacts) != 1 || after.Artifacts[0].Repo != "" {
+		t.Errorf("artifacts after removal = %+v, want one artifact without a repo link", after.Artifacts)
 	}
 	if _, err := os.Stat(removedWorktree); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("removed worktree still exists: Stat() error = %v", err)

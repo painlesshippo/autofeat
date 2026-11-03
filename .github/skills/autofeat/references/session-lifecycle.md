@@ -34,7 +34,7 @@ autofeat new bug/repro --azure-build 4821 --azure-org ORG --azure-project PROJ
 - Cloning uses normal Git credentials (helper/SSH) with read access to every
   repo. The PAT is used for REST calls only.
 - Clones the primary repo plus Git repository resources (Azure Repos, GitHub,
-  Bitbucket). Artifacts and non-Git resources are out of scope. Failures leave
+  Bitbucket). Pipeline artifacts and non-Git resources are out of scope. Failures leave
   no partial session.
 
 ## Inspect
@@ -46,6 +46,8 @@ autofeat new bug/repro --azure-build 4821 --azure-org ORG --azure-project PROJ
   all sessions. Exits 0 regardless of repo health.
 - `STATE` values: `ready`, `dirty`, `behind-base`, `unpushed`, `remote-ahead`,
   `remote-diverged`, `rebasing`, `wrong-branch`, `detached`, `missing`, `error`.
+- `list` includes an `ARTIFACTS` count; `status` appends a
+  `FEATURE TYPE ID REPO CREATED VALUE` table when sessions have artifacts.
 - `autofeat dash` is an interactive terminal UI for humans and fails without a
   TTY. Do not run it; use `list` and `status` instead.
 
@@ -76,3 +78,24 @@ autofeat sync FEATURE
   Tags and SHAs are resolved locally.
 - On conflict, sync stops and leaves the rebase in progress. See
   [Safety And Recovery](./safety-and-recovery.md#rebase-recovery).
+
+## Artifacts
+
+```sh
+autofeat artifact add FEATURE "https://dev.azure.com/org/proj/_build/results?buildId=123"
+autofeat artifact add FEATURE AB#4567 --repo api     # work item; !45 is a pull request
+autofeat artifact add FEATURE 98765 --type ado-build  # plain ids need --type
+autofeat artifact list FEATURE --json
+autofeat artifact remove FEATURE 123 --type ado-build # reference, equivalent URL, or id
+```
+
+- Types are inferred offline: `ado-build`, `ado-work-item`, `ado-pull-request`,
+  `ado-commit`, `ado-branch`, `ado-repo`, `azure-resource` (ARM id or portal
+  URL), `github-pull-request`, `github-issue`, `github-commit`, `github-run`,
+  and `link` for any other URL.
+- Re-adding an equivalent reference is a no-op. `--type` errors if it
+  contradicts an inferred type (`link` always works).
+- Plain ids are distinct per type and `--repo`. `artifact remove` errors when a
+  reference matches several artifacts; narrow it with `--type` or `--repo`.
+- `--repo` takes an attached worktree name; removing that repo clears the link.
+- `teardown` prints the session's artifacts after removing it.

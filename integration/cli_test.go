@@ -119,6 +119,45 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 	requireSuccess(t, result)
 	requireOutputContains(t, result.stdout, "FEATURE", "REPOSITORY", "WORKTREE", "STATE", featureName, repository.Name, "clean")
 
+	const buildURL = "https://dev.azure.com/org/Project/_build/results?buildId=42"
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "artifact", "add", featureName, buildURL, "--repo", repository.Name)
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "Recorded ado-build 42")
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "artifact", "add", featureName, buildURL)
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "already recorded")
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "artifact", "add", featureName, "123")
+	if result.err == nil {
+		t.Fatalf("artifact add accepted a plain number without --type; stdout:\n%s", result.stdout)
+	}
+	requireOutputContains(t, result.stderr, "--type")
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "artifact", "add", featureName, "AB#7")
+	requireSuccess(t, result)
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "artifact", "list", featureName, "--json")
+	requireSuccess(t, result)
+	var artifacts []struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+		Repo string `json:"repo"`
+	}
+	if err := json.Unmarshal([]byte(result.stdout), &artifacts); err != nil {
+		t.Fatalf("parse artifact list JSON: %v\n%s", err, result.stdout)
+	}
+	if len(artifacts) != 2 || artifacts[0].Type != "ado-build" || artifacts[0].ID != "42" || artifacts[0].Repo != repository.Name || artifacts[1].Type != "ado-work-item" {
+		t.Errorf("artifacts = %+v, want ado-build 42 on %s and ado-work-item", artifacts, repository.Name)
+	}
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "artifact", "remove", featureName, "7")
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "Removed ado-work-item 7")
+
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "list")
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "ARTIFACTS")
+	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "status", featureName)
+	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "TYPE", "ado-build", buildURL)
+
 	dirtyPath := filepath.Join(repository.WorktreePath, "dirty.txt")
 	if err := os.WriteFile(dirtyPath, []byte("dirty\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -137,6 +176,7 @@ func TestLocalFeatureLifecycle(t *testing.T) {
 
 	result = runAutofeat(autofeatBinaryPath, outsideRepository, environment, "teardown", featureName, "--force")
 	requireSuccess(t, result)
+	requireOutputContains(t, result.stdout, "Artifacts recorded on feature "+featureName, buildURL)
 	if _, err := os.Stat(wantFeatureDir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("feature directory still exists after forced teardown: %v", err)
 	}
@@ -254,8 +294,7 @@ func TestRemoteFeatureSyncLifecycle(t *testing.T) {
 	initializeRepository(t, sourcePath, environment)
 
 	remotePath := filepath.Join(t.TempDir(), "repository.git")
-	runRequiredCommand(t, sourcePath, environment, "git", "init", "--bare", "-q", remotePath)
-	runRequiredCommand(t, remotePath, environment, "git", "symbolic-ref", "HEAD", "refs/heads/main")
+	runRequiredCommand(t, sourcePath, environment, "git", "init", "--bare", "-q", "--initial-branch=main", remotePath)
 	runRequiredCommand(t, sourcePath, environment, "git", "remote", "add", "origin", remotePath)
 	runRequiredCommand(t, sourcePath, environment, "git", "push", "-qu", "origin", "main")
 	runRequiredCommand(t, sourcePath, environment, "git", "checkout", "-qb", "develop")

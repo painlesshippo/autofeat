@@ -724,6 +724,19 @@ func (m dashboardModel) renderDetail(width, height int) string {
 			lines = append(lines, dashboardYellowStyle.Render(fmt.Sprintf("  + %d untracked file(s)", count)))
 		}
 	}
+	if artifacts := session.session.Artifacts; len(artifacts) != 0 {
+		lines = append(lines, "", dashboardTitleStyle.Render("artifacts"))
+		for _, recorded := range artifacts {
+			line := fmt.Sprintf("  %s %s", recorded.Type, artifactLabel(recorded))
+			if recorded.Repo != "" {
+				line += " · " + recorded.Repo
+			}
+			if recorded.ID != "" {
+				line += " · " + recorded.Value
+			}
+			lines = append(lines, line)
+		}
+	}
 	for index, line := range lines {
 		lines[index] = truncate(line, width)
 	}

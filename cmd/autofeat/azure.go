@@ -90,33 +90,16 @@ func parseAzureBuildURL(rawURL, projectOverride string) (azureBuildTarget, error
 		return azureBuildTarget{}, err
 	}
 
-	segments := make([]string, 0, 4)
-	for _, segment := range strings.Split(strings.Trim(parsed.Path, "/"), "/") {
-		if segment != "" {
-			segments = append(segments, segment)
-		}
-	}
-
-	host := strings.ToLower(parsed.Host)
-	var orgURL, project string
+	orgURL, rest, ok := azuredevops.SplitWebURL(parsed)
 	switch {
-	case host == "dev.azure.com":
-		// https://dev.azure.com/{org}/{project}/_build/results
-		if len(segments) < 2 {
-			return azureBuildTarget{}, fmt.Errorf("Azure DevOps build URL %q does not include an organization and project", rawURL)
-		}
-		orgURL = parsed.Scheme + "://" + parsed.Host + "/" + segments[0]
-		project = decodePathSegment(segments[1])
-	case strings.HasSuffix(host, ".visualstudio.com"):
-		// https://{org}.visualstudio.com/{project}/_build/results
-		if len(segments) < 1 {
-			return azureBuildTarget{}, fmt.Errorf("Azure DevOps build URL %q does not include a project", rawURL)
-		}
-		orgURL = parsed.Scheme + "://" + parsed.Host
-		project = decodePathSegment(segments[0])
-	default:
+	case !ok:
 		return azureBuildTarget{}, fmt.Errorf("unrecognized Azure DevOps host %q; pass --azure-build <id> with --azure-org, --azure-project, and --azure-url instead", parsed.Host)
+	case orgURL == "":
+		return azureBuildTarget{}, fmt.Errorf("Azure DevOps build URL %q does not include an organization and project", rawURL)
+	case len(rest) == 0:
+		return azureBuildTarget{}, fmt.Errorf("Azure DevOps build URL %q does not include a project", rawURL)
 	}
+	project := decodePathSegment(rest[0])
 
 	if override := strings.TrimSpace(projectOverride); override != "" {
 		project = override

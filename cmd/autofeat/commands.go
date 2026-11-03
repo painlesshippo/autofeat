@@ -30,6 +30,7 @@ func newRootCommand() *cobra.Command {
 		newListCommand(),
 		newDashCommand(),
 		newTemplateCommand(),
+		newArtifactCommand(),
 		newConfigCommand(),
 		newVersionCommand(),
 		newCompletionCommand(rootCommand),
