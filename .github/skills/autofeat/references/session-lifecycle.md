@@ -8,7 +8,7 @@
 | Other local repo | `autofeat new FEATURE PATH` (any dir inside the repo) | Git worktree |
 | Remote URL | `autofeat new FEATURE URL` (`http://`, `https://`, `git@`) | Fresh clone |
 | Template | `--template NAME` | All template repos; feature must be new |
-| Azure DevOps build | `--azure-build URL\|ID` | Clone per build repo, pinned to the build's commit |
+| Azure DevOps build | `--azure-build URL\|ID` | Clone per build repo, pinned to the build's commit; feature must be new |
 
 - Re-running `new` with an existing feature attaches another repo.
 - Feature branch: reuse local branch, else cached `origin/FEATURE`, else
@@ -18,7 +18,8 @@
   SHAs, full refs, and revision expressions, and is remembered per repo.
 - Sources are auto-detected: URL prefixes mean remote, anything else is a
   local path. There are no `--local`/`--remote` flags.
-- `--template` cannot be combined with `--ref` or a positional source.
+- `--template`, `--azure-build`, and `--ref` are mutually exclusive, and
+  `--template`/`--azure-build` take no positional source.
 - Directory names are flattened (`feature/x` -> `feature-x`). Colliding names
   are rejected; choose another feature name.
 
@@ -32,7 +33,8 @@ autofeat new bug/repro --azure-build 4821 --azure-org ORG --azure-project PROJ
 
 - Requires `AZURE_DEVOPS_EXT_PAT` or `AZURE_DEVOPS_PAT` with Build (Read).
 - Cloning uses normal Git credentials (helper/SSH) with read access to every
-  repo. The PAT is used for REST calls only.
+  repo. The PAT is used for REST calls only; a PAT used as an HTTPS Git
+  password needs Code (Read).
 - Clones the primary repo plus Git repository resources (Azure Repos, GitHub,
   Bitbucket). Pipeline artifacts and non-Git resources are out of scope. Failures leave
   no partial session.
@@ -55,10 +57,13 @@ autofeat new bug/repro --azure-build 4821 --azure-org ORG --azure-project PROJ
 
 ```sh
 autofeat open FEATURE                                  # editor_cmd on .code-workspace
-autofeat open FEATURE --copilot                        # interactive headless_cmd
+autofeat open FEATURE --copilot                        # interactive headless_cmd (blocks)
 autofeat open FEATURE --devcontainer ./x/.devcontainer/devcontainer.json
 ```
 
+- `--copilot` and `--devcontainer` are mutually exclusive. `--copilot` runs
+  `headless_cmd` in the current terminal with the feature directory as its
+  root and waits for it to exit.
 - `--devcontainer` is required to be an explicit, readable file path (relative
   to cwd). Autofeat passes it through untouched. The config must mount worktree
   Git metadata if Git is needed inside the container. Requires a VS Code-family
@@ -74,10 +79,22 @@ autofeat sync FEATURE
 - Preconditions are checked for every repo before any work starts: repo
   present, on the feature branch, clean (including untracked files), and no
   rebase in progress.
-- Origin branches are fetched. Repos without `origin` use the local base.
-  Tags and SHAs are resolved locally.
-- On conflict, sync stops and leaves the rebase in progress. See
-  [Safety And Recovery](./safety-and-recovery.md#rebase-recovery).
+- Every origin-backed base is fetched, with retries, before any rebase, so a
+  network failure leaves the session untouched. Repos without `origin` use the
+  local base. Tags and SHAs are resolved locally.
+- If a rebase conflicts or fails, sync attempts to abort it and restore repos
+  already rebased to their pre-sync commits. Only `synchronization rolled back`
+  confirms a complete rollback. If the error says `could not be fully rolled
+  back`, inspect the repository errors and `autofeat status FEATURE` before
+  retrying. See
+  [Safety And Recovery](./safety-and-recovery.md#sync-conflicts-and-rollback).
+- `--keep-conflicts` instead stops at the conflict with the rebase in progress.
+- Only the feature branch is rewritten. `rerere` is enabled unless configured,
+  so recorded resolutions are replayed and the rebase continues. Commits
+  already in the base are dropped.
+- Every selected session is synced even if one fails. With several sessions,
+  a `Synchronized N of M sessions` summary is printed; any failure exits
+  non-zero.
 
 ## Artifacts
 

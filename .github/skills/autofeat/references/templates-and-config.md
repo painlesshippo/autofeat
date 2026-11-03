@@ -22,9 +22,17 @@ autofeat new feature/other --template full-stack
 | `config.json` | Global settings (`autofeat config` opens it) |
 | `state.json` | Sessions (repos and artifacts), `default_base_branch`, remembered `repository_base_branches` |
 | `templates.json` | Saved templates |
+| `state.json.lock` | Serializes state updates |
+| `worktree.lock` | Serializes Git worktree registration and removal |
+| `locks/` | Serializes `new`, `remove`, and `teardown` for the same feature directory |
 
-Every file has a `schema_version`, and unknown fields are rejected. Keep the
-version and existing fields if you edit one.
+Every JSON file has a `schema_version`, and unknown fields are rejected. Keep
+the version and existing fields if you edit one. `config.json` and `state.json`
+are written atomically. `templates.json` writes are neither atomic nor locked;
+do not overlap template saves with other template operations.
+
+These locks do not serialize `sync` or `sync --cancel` with other mutations of
+the same worktree. Lock files are safe to leave in place; never delete them.
 
 ## config.json
 
