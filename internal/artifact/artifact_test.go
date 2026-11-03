@@ -178,6 +178,37 @@ func TestKeyDistinguishesDifferentReferences(t *testing.T) {
 	}
 }
 
+func TestURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		artifact Artifact
+		want     string
+	}{
+		{"web URL", Artifact{Type: ADOBuild, Value: "https://dev.azure.com/org/Project/_build/results?buildId=123", ID: "123"}, "https://dev.azure.com/org/Project/_build/results?buildId=123"},
+		{"link", Artifact{Type: Link, Value: "http://example.com/a b"}, "http://example.com/a%20b"},
+		{"portal URL", Artifact{Type: AzureResource, Value: "https://portal.azure.com/#@tenant/resource/subscriptions/s/resourceGroups/rg/overview", ID: "/subscriptions/s/resourceGroups/rg"}, "https://portal.azure.com/#@tenant/resource/subscriptions/s/resourceGroups/rg/overview"},
+		{"ARM id", Artifact{Type: AzureResource, Value: "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/sites/app", ID: "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/sites/app"}, "https://portal.azure.com/#resource/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/sites/app"},
+		{"work item shorthand", Artifact{Type: ADOWorkItem, Value: "AB#4567", ID: "4567"}, ""},
+		{"pull request shorthand", Artifact{Type: ADOPullRequest, Value: "!42", ID: "42"}, ""},
+		{"plain id", Artifact{Type: ADOBuild, Value: "98765", ID: "98765"}, ""},
+		{"ARM id with another type", Artifact{Type: Link, Value: "/subscriptions/s/resourceGroups/rg"}, ""},
+		{"other scheme", Artifact{Type: Link, Value: "file:///etc/passwd"}, ""},
+		{"control character", Artifact{Type: Link, Value: "https://example.com/\x1b]8;;evil\x07"}, ""},
+		{"ARM id with control character", Artifact{Type: AzureResource, Value: "/subscriptions/s/resourceGroups/r\x1bg"}, "https://portal.azure.com/#resource/subscriptions/s/resourceGroups/r%1Bg"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := test.artifact.URL()
+			if got != test.want || ok != (test.want != "") {
+				t.Errorf("URL() = %q, %v; want %q", got, ok, test.want)
+			}
+		})
+	}
+}
+
 func TestValidate(t *testing.T) {
 	t.Parallel()
 

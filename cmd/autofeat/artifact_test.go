@@ -303,7 +303,7 @@ func TestDashboardDetailShowsArtifacts(t *testing.T) {
 	updated, _ := model.Update(tea.WindowSizeMsg{Width: 200, Height: 24})
 	updated, _ = updated.Update(dashboardLoadedMsg{sessions: sessions})
 	rendered := updated.(dashboardModel).render()
-	if !strings.Contains(rendered, "artifacts") || !strings.Contains(rendered, "ado-build 4 · api") {
+	if !strings.Contains(rendered, "artifacts") || !strings.Contains(rendered, "  ado-build ") || !strings.Contains(rendered, "4\x1b") || !strings.Contains(rendered, " · api") {
 		t.Errorf("dashboard detail lacks artifacts:\n%s", rendered)
 	}
 }

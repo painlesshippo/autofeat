@@ -647,8 +647,10 @@ equivalent one, or an extracted id such as the build number. When that matches
 more than one artifact, narrow it with `--type` or `--repo`.
 
 `list` shows an `ARTIFACTS` count, `status` appends an artifact table for the
-selected sessions, and the `dash` detail pane lists them. `teardown` prints the
-session's artifacts after removing it so they are not lost silently.
+selected sessions, and the `dash` detail pane lists them. In terminals that
+support hyperlinks, `dash` makes those labels clickable: URLs open directly and
+Azure resource ids open in the Azure portal. `teardown` prints the session's
+artifacts after removing it so they are not lost silently.
 
 Print the build version, commit, and timestamp:
 
