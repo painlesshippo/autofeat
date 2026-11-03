@@ -20,6 +20,7 @@ import (
 
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/painlesshippo/autofeat/internal/state"
+	"github.com/painlesshippo/autofeat/internal/vscode"
 )
 
 const defaultStaleAfter = 14 * 24 * time.Hour
@@ -40,6 +41,7 @@ type dashboardSession struct {
 	drift        string
 	repos        []dashboardRepository
 	stale        string
+	editorOpen   bool
 }
 
 func loadDashboardSessions(staleAfter time.Duration, now time.Time) ([]dashboardSession, error) {
@@ -65,6 +67,7 @@ func loadDashboardSessions(staleAfter time.Duration, now time.Time) ([]dashboard
 
 func inspectDashboardSession(session *dashboardSession, defaultBaseBranch string, staleAfter time.Duration, now time.Time) {
 	session.drift, session.lastActivity = inspectSessionListing(session.session, defaultBaseBranch)
+	session.editorOpen = vscode.WorkspaceOpen(session.session.WorkspaceFile)
 
 	repositories := append([]state.Repository(nil), session.session.Repos...)
 	sort.Slice(repositories, func(i, j int) bool {
@@ -559,6 +562,7 @@ var (
 	dashboardYellowStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 	dashboardRedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	dashboardMagentaStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+	dashboardCyanStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 )
 
 func (m dashboardModel) View() tea.View {
@@ -653,6 +657,9 @@ func (m dashboardModel) renderList(width, height int) string {
 
 func sessionBadges(session dashboardSession) string {
 	badges := []string{}
+	if session.editorOpen {
+		badges = append(badges, dashboardCyanStyle.Render("open"))
+	}
 	dirty, rebasing, problem := false, false, false
 	for _, repo := range session.repos {
 		dirty = dirty || repo.status.dirty || len(repo.untracked) != 0
@@ -688,6 +695,9 @@ func (m dashboardModel) renderDetail(width, height int) string {
 		dashboardTitleStyle.Render(session.name),
 		dashboardFaintStyle.Render(fmt.Sprintf("created %s ago · last activity %s ago · %s",
 			formatAge(now.Sub(session.session.CreatedAt)), formatAge(now.Sub(session.lastActivity)), session.session.FeatureDir)),
+	}
+	if session.editorOpen {
+		lines = append(lines, dashboardCyanStyle.Render("open in VS Code"))
 	}
 	if session.stale != "" {
 		lines = append(lines, dashboardMagentaStyle.Render("stale: "+session.stale+" · press t to tear down"))
