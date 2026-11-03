@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/painlesshippo/autofeat/internal/config"
 	"github.com/painlesshippo/autofeat/internal/devcontainer"
+	"github.com/painlesshippo/autofeat/internal/filelock"
 	gitcmd "github.com/painlesshippo/autofeat/internal/git"
 	"github.com/painlesshippo/autofeat/internal/hooks"
 	"github.com/painlesshippo/autofeat/internal/state"
@@ -643,29 +645,25 @@ func addRepositoryAtRef(featureName, repoRoot, requestedBaseBranch string) (bool
 	if err := os.MkdirAll(featureDir, 0o755); err != nil {
 		return false, fmt.Errorf("create feature directory: %w", err)
 	}
-	branchCreated, err := gitcmd.AddWorktreeAt(repoRoot, featureBranchName(featureName), worktreePath, baseRef)
+	branchCreated, err := addWorktree(repoRoot, featureBranchName(featureName), worktreePath, baseRef)
 	if err != nil {
 		return false, err
 	}
 	if err := hooks.Run(configuration.Hooks, hooks.PostAdd, worktreePath); err != nil {
-		removeErr := gitcmd.RemoveWorktree(worktreePath, true)
+		removeErr := removeWorktree(worktreePath, true)
 		if removeErr == nil && branchCreated {
 			removeErr = gitcmd.DeleteBranch(repoRoot, featureBranchName(featureName))
 		}
 		return false, errors.Join(err, removeErr)
 	}
 
-	session.Repos = append(session.Repos, state.Repository{
+	session, err = persistRepository(featureName, session, state.Repository{
 		Name:         repoName,
 		OriginalPath: repoRoot,
 		WorktreePath: worktreePath,
 		BaseBranch:   sessionBaseRef,
-	})
-	currentState.Sessions[featureName] = session
-	if requestedBaseBranch != "" {
-		currentState.RepositoryBaseBranches[repositoryKey] = requestedBaseBranch
-	}
-	if err := state.Save(currentState); err != nil {
+	}, repositoryKey, requestedBaseBranch)
+	if err != nil {
 		return branchCreated, err
 	}
 
@@ -743,26 +741,21 @@ func addRemoteRepositoryWithRef(featureName, remoteURL, requestedBaseBranch stri
 		return err
 	}
 
-	session.Repos = append(session.Repos, state.Repository{
+	session, err = persistRepository(featureName, session, state.Repository{
 		Name:          repoName,
 		OriginalPath:  remoteURL,
 		WorktreePath:  worktreePath,
 		IsRemoteClone: true,
 		BaseBranch:    sessionBaseRef,
-	})
+	}, repositoryKey, requestedBaseBranch)
+	if err != nil {
+		return err
+	}
+	cloneSucceeded = true
 
 	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
 		return err
 	}
-
-	currentState.Sessions[featureName] = session
-	if requestedBaseBranch != "" {
-		currentState.RepositoryBaseBranches[repositoryKey] = requestedBaseBranch
-	}
-	if err := state.Save(currentState); err != nil {
-		return err
-	}
-	cloneSucceeded = true
 
 	fmt.Printf("Cloned remote repo '%s' to feature '%s'\n", repoName, featureName)
 	return nil
@@ -1019,7 +1012,7 @@ func rollbackTemplateSession(featureName string, createdBranches map[string]bool
 			cleanupErr = errors.Join(cleanupErr, os.RemoveAll(repository.WorktreePath))
 			continue
 		}
-		removeErr := gitcmd.RemoveWorktree(repository.WorktreePath, true)
+		removeErr := removeWorktree(repository.WorktreePath, true)
 		cleanupErr = errors.Join(cleanupErr, removeErr)
 		if removeErr == nil && createdBranches[filepath.Clean(repository.OriginalPath)] {
 			cleanupErr = errors.Join(cleanupErr, gitcmd.DeleteBranch(repository.OriginalPath, featureBranchName(featureName)))
@@ -1415,7 +1408,7 @@ func teardownSession(featureName string, force bool) error {
 			continue
 		}
 
-		if err := gitcmd.RemoveWorktree(repo.WorktreePath, force); err != nil {
+		if err := removeWorktree(repo.WorktreePath, force); err != nil {
 			return err
 		}
 	}
@@ -1544,12 +1537,18 @@ func removeSessionRepository(featureName string, session state.Session, reposito
 		return err
 	}
 
-	session.Repos = append(session.Repos[:repositoryIndex], session.Repos[repositoryIndex+1:]...)
-	dropRepositoryArtifactLinks(session.Artifacts, filepath.Base(repository.WorktreePath))
-	if err := state.UpdateSession(featureName, session); err != nil {
+	var updated state.Session
+	if err := state.UpdateSession(featureName, func(session *state.Session) error {
+		session.Repos = slices.DeleteFunc(session.Repos, func(attached state.Repository) bool {
+			return attached.WorktreePath == repository.WorktreePath
+		})
+		dropRepositoryArtifactLinks(session.Artifacts, filepath.Base(repository.WorktreePath))
+		updated = *session
+		return nil
+	}); err != nil {
 		return err
 	}
-	if err := workspace.Write(session.WorkspaceFile, repositoryDirectoryNames(session.Repos)); err != nil {
+	if err := workspace.Write(updated.WorkspaceFile, repositoryDirectoryNames(updated.Repos)); err != nil {
 		return err
 	}
 
@@ -1635,7 +1634,7 @@ func removeRepositoryWorktree(repository state.Repository, force bool) error {
 		if err := os.RemoveAll(repository.WorktreePath); err != nil {
 			return fmt.Errorf("remove cloned repository %q: %w", repository.WorktreePath, err)
 		}
-	} else if err := gitcmd.RemoveWorktree(repository.WorktreePath, force); err != nil {
+	} else if err := removeWorktree(repository.WorktreePath, force); err != nil {
 		return err
 	}
 	return nil
@@ -1685,6 +1684,86 @@ func featureDirectoryName(featureName string) string {
 		return fallbackFeatureDirectoryName
 	}
 	return directoryName
+}
+
+// withFeatureLock runs action while holding a cross-process lock for the
+// feature's directory name. Commands that create, change, or remove a session
+// hold it so the feature directory ownership check and the workspace file write
+// see the latest state. Names that map to the same directory share one lock. The
+// lock is not reentrant, so take it once per command, never in helpers that
+// other locked operations call.
+func withFeatureLock(featureName string, action func() error) (err error) {
+	statePath, err := state.Path()
+	if err != nil {
+		return err
+	}
+	lockPath := filepath.Join(filepath.Dir(statePath), "locks", featureDirectoryName(featureName)+".lock")
+	unlock, err := filelock.Lock(lockPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = errors.Join(err, unlock())
+	}()
+
+	return action()
+}
+
+// addWorktree and removeWorktree serialize git worktree registration across
+// autofeat processes, because concurrent `git worktree add` can fail inside git
+// while it reads another worktree's half-written metadata.
+func addWorktree(repoRoot, branchName, worktreePath, baseRef string) (bool, error) {
+	var created bool
+	err := withWorktreeLock(func() error {
+		var err error
+		created, err = gitcmd.AddWorktreeAt(repoRoot, branchName, worktreePath, baseRef)
+		return err
+	})
+	return created, err
+}
+
+func removeWorktree(worktreePath string, force bool) error {
+	return withWorktreeLock(func() error {
+		return gitcmd.RemoveWorktree(worktreePath, force)
+	})
+}
+
+func withWorktreeLock(action func() error) (err error) {
+	statePath, err := state.Path()
+	if err != nil {
+		return err
+	}
+	unlock, err := filelock.Lock(filepath.Join(filepath.Dir(statePath), "worktree.lock"))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = errors.Join(err, unlock())
+	}()
+
+	return action()
+}
+
+// persistRepository appends repository to the latest persisted version of the
+// feature session, creating the session from fallback when it does not exist,
+// and records baseBranch for baseBranchKey when set. Merging into fresh state
+// keeps changes made by concurrent autofeat processes during slow git work.
+func persistRepository(featureName string, fallback state.Session, repository state.Repository, baseBranchKey, baseBranch string) (state.Session, error) {
+	var persisted state.Session
+	err := state.Update(func(currentState *state.State) error {
+		session, exists := currentState.Sessions[featureName]
+		if !exists {
+			session = fallback
+		}
+		session.Repos = append(session.Repos, repository)
+		currentState.Sessions[featureName] = session
+		if baseBranch != "" {
+			currentState.RepositoryBaseBranches[baseBranchKey] = baseBranch
+		}
+		persisted = session
+		return nil
+	})
+	return persisted, err
 }
 
 // featureDirectoryPaths resolves the feature directory and workspace file for a

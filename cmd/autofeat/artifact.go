@@ -81,32 +81,39 @@ func newArtifactRemoveCommand() *cobra.Command {
 }
 
 func addArtifactTo(output io.Writer, featureName, reference string, artifactType artifact.Type, repository string) error {
-	session, err := state.GetSession(featureName)
-	if err != nil {
-		return err
-	}
-	recorded, err := artifact.Parse(reference, artifactType)
-	if err != nil {
-		return err
-	}
-	if repository != "" {
-		index, err := findRepositoryByName(featureName, session, repository)
+	var recorded artifact.Artifact
+	duplicate := false
+	err := state.UpdateSession(featureName, func(session *state.Session) error {
+		var err error
+		recorded, err = artifact.Parse(reference, artifactType)
 		if err != nil {
 			return err
 		}
-		recorded.Repo = filepath.Base(session.Repos[index].WorktreePath)
-	}
-
-	for _, existing := range session.Artifacts {
-		if existing.Key() == recorded.Key() {
-			_, err := fmt.Fprintf(output, "Artifact %s %s is already recorded on feature %s\n", existing.Type, artifactLabel(existing), featureName)
-			return err
+		if repository != "" {
+			index, err := findRepositoryByName(featureName, *session, repository)
+			if err != nil {
+				return err
+			}
+			recorded.Repo = filepath.Base(session.Repos[index].WorktreePath)
 		}
-	}
 
-	recorded.CreatedAt = time.Now().UTC()
-	session.Artifacts = append(session.Artifacts, recorded)
-	if err := state.UpdateSession(featureName, session); err != nil {
+		for _, existing := range session.Artifacts {
+			if existing.Key() == recorded.Key() {
+				recorded = existing
+				duplicate = true
+				return nil
+			}
+		}
+
+		recorded.CreatedAt = time.Now().UTC()
+		session.Artifacts = append(session.Artifacts, recorded)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if duplicate {
+		_, err = fmt.Fprintf(output, "Artifact %s %s is already recorded on feature %s\n", recorded.Type, artifactLabel(recorded), featureName)
 		return err
 	}
 	_, err = fmt.Fprintf(output, "Recorded %s %s on feature %s\n", recorded.Type, artifactLabel(recorded), featureName)
@@ -134,30 +141,31 @@ func listArtifactsTo(output io.Writer, featureName string, asJSON bool) error {
 }
 
 func removeArtifactTo(output io.Writer, featureName, reference string, artifactType artifact.Type, repository string) error {
-	session, err := state.GetSession(featureName)
-	if err != nil {
-		return err
-	}
-	if artifactType != "" {
-		if _, err := artifact.ParseType(string(artifactType)); err != nil {
-			return err
+	var removed artifact.Artifact
+	err := state.UpdateSession(featureName, func(session *state.Session) error {
+		if artifactType != "" {
+			if _, err := artifact.ParseType(string(artifactType)); err != nil {
+				return err
+			}
 		}
-	}
-	if repository != "" {
-		repositoryIndex, err := findRepositoryByName(featureName, session, repository)
+		repositoryName := repository
+		if repositoryName != "" {
+			repositoryIndex, err := findRepositoryByName(featureName, *session, repositoryName)
+			if err != nil {
+				return err
+			}
+			repositoryName = filepath.Base(session.Repos[repositoryIndex].WorktreePath)
+		}
+		index, err := findArtifact(featureName, session.Artifacts, reference, artifactType, repositoryName)
 		if err != nil {
 			return err
 		}
-		repository = filepath.Base(session.Repos[repositoryIndex].WorktreePath)
-	}
-	index, err := findArtifact(featureName, session.Artifacts, reference, artifactType, repository)
-	if err != nil {
-		return err
-	}
 
-	removed := session.Artifacts[index]
-	session.Artifacts = append(session.Artifacts[:index], session.Artifacts[index+1:]...)
-	if err := state.UpdateSession(featureName, session); err != nil {
+		removed = session.Artifacts[index]
+		session.Artifacts = append(session.Artifacts[:index], session.Artifacts[index+1:]...)
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(output, "Removed %s %s from feature %s\n", removed.Type, artifactLabel(removed), featureName)

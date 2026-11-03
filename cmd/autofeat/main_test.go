@@ -2715,7 +2715,10 @@ func TestDetectBaseBranchFallsBackToStateDefault(t *testing.T) {
 	repoPath := createMainRepository(t)
 	runMainGit(t, repoPath, "branch", "-M", "trunk")
 
-	if err := state.Save(state.State{DefaultBaseBranch: "develop"}); err != nil {
+	if err := state.Update(func(currentState *state.State) error {
+		currentState.DefaultBaseBranch = "develop"
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := detectBaseBranch(repoPath)
@@ -2825,6 +2828,44 @@ func TestValidateFeatureName(t *testing.T) {
 		if err := validateFeatureName(invalid); err == nil {
 			t.Errorf("validateFeatureName(%q) error = nil, want error", invalid)
 		}
+	}
+}
+
+func TestWithFeatureLockSerializesFeaturesSharingADirectory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- withFeatureLock("feature/a", func() error {
+			close(holding)
+			<-release
+			return nil
+		})
+	}()
+	<-holding
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- withFeatureLock("feature-a", func() error { return nil })
+	}()
+	select {
+	case <-secondDone:
+		close(release)
+		t.Fatal("feature-a acquired the lock while feature/a held it")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := withFeatureLock("feature/b", func() error { return nil }); err != nil {
+		t.Errorf("lock unrelated feature: %v", err)
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Errorf("first lock: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Errorf("second lock: %v", err)
 	}
 }
 

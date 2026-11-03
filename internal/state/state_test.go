@@ -338,8 +338,10 @@ func TestSessionLifecycle(t *testing.T) {
 		t.Errorf("FeatureDir = %q, want %q", got.FeatureDir, session.FeatureDir)
 	}
 
-	session.FeatureDir = "/tmp/workspaces/feature1-moved"
-	if err := UpdateSession("feature1", session); err != nil {
+	if err := UpdateSession("feature1", func(session *Session) error {
+		session.FeatureDir = "/tmp/workspaces/feature1-moved"
+		return nil
+	}); err != nil {
 		t.Fatalf("UpdateSession() error = %v", err)
 	}
 	got, err = GetSession("feature1")
@@ -372,11 +374,53 @@ func TestSessionOperationsOnMissingSession(t *testing.T) {
 	if _, err := GetSession("missing"); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("GetSession(missing) error = %v, want ErrSessionNotFound", err)
 	}
-	if err := UpdateSession("missing", Session{}); !errors.Is(err, ErrSessionNotFound) {
+	if err := UpdateSession("missing", func(*Session) error { return nil }); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("UpdateSession(missing) error = %v, want ErrSessionNotFound", err)
 	}
 	if err := DeleteSession("missing"); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("DeleteSession(missing) error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestUpdate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := Update(func(state *State) error {
+		state.DefaultBaseBranch = "develop"
+		state.Sessions["feature1"] = Session{}
+		return nil
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	errChange := errors.New("change failed")
+	if err := Update(func(state *State) error {
+		state.DefaultBaseBranch = "discarded"
+		return errChange
+	}); !errors.Is(err, errChange) {
+		t.Fatalf("Update(failing change) error = %v, want %v", err, errChange)
+	}
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got.DefaultBaseBranch != "develop" {
+		t.Errorf("DefaultBaseBranch = %q, want develop (failed change must not be saved)", got.DefaultBaseBranch)
+	}
+	if _, ok := got.Sessions["feature1"]; !ok {
+		t.Errorf("Sessions = %v, want feature1", got.Sessions)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(home, ".autofeat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Errorf("temporary state file %q was left behind", entry.Name())
+		}
 	}
 }
 
