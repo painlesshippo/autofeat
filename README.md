@@ -609,11 +609,16 @@ A session is marked stale when one of these holds:
 
 Stale sessions are only highlighted. Press `t` to tear down the selected session
 after confirming; `s` syncs it, `o` opens it, `r` refreshes, and `/` filters by
-feature name. These keys run the corresponding `autofeat` command in the
-terminal, and `sync` and `teardown` keep their output on screen until you press
-Enter. Like `status`, the dashboard itself never fetches, so merged detection
-uses the base branch as of the last `sync`. `dash` requires an interactive
-terminal.
+feature name. Actions run the corresponding `autofeat` command in the
+background, so the dashboard stays on screen: the session shows a `sync…`,
+`teardown…`, or `open…` badge while its command runs, and the footer reports the
+result when it finishes. Press `l` to read the full output of the last action,
+such as rebase conflict instructions after a failed sync. Actions run without a
+terminal, so Git cannot prompt for credentials and hooks cannot read input. The
+dashboard does not quit with `q` while actions are running; `ctrl+c` quits
+anyway and lets them finish. Like `status`, the dashboard itself never fetches,
+so merged detection uses the base branch as of the last `sync`. `dash` requires
+an interactive terminal.
 
 Record external artifacts that work on a session produced, such as pipeline
 builds, work items, pull requests, or Azure resources:

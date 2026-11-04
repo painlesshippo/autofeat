@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -390,6 +388,80 @@ func wheel(t *testing.T, model dashboardModel, x int, button tea.MouseButton) da
 	return updated.(dashboardModel)
 }
 
+func TestDashboardModelRunsActionsInBackground(t *testing.T) {
+	t.Parallel()
+
+	executable := filepath.Join(t.TempDir(), "autofeat")
+	writeMainFile(t, filepath.Dir(executable), "autofeat", `#!/bin/sh
+echo "$1 $2 prompt=$GIT_TERMINAL_PROMPT"
+if [ "$1" = teardown ]; then
+	echo "autofeat: cannot teardown dirty worktree" >&2
+	exit 1
+fi
+`)
+	if err := os.Chmod(executable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	model := newDashboardModel(executable, defaultStaleAfter)
+	updated, _ := model.Update(dashboardLoadedMsg{sessions: []dashboardSession{
+		{name: "feature/a", lastActivity: time.Now(), drift: "current"},
+		{name: "feature/b", drift: "current"},
+	}})
+	model = updated.(dashboardModel)
+
+	model = pressKeys(t, model, "l")
+	if model.mode != dashboardList || model.message != "no action output yet" {
+		t.Errorf("l before any action: mode = %v, message = %q", model.mode, model.message)
+	}
+
+	updated, syncCmd := model.Update(keyPress("s"))
+	model = updated.(dashboardModel)
+	if syncCmd == nil || model.running["feature/a"] != "sync" || !strings.Contains(model.render(), "sync…") {
+		t.Fatalf("s did not start a background sync: running = %v\n%s", model.running, model.render())
+	}
+	for _, key := range []string{"s", "t"} {
+		updated, cmd := model.Update(keyPress(key))
+		model = updated.(dashboardModel)
+		if cmd != nil || model.mode != dashboardList || model.message != "feature/a is busy: sync is still running" {
+			t.Errorf("%s during sync: cmd = %v, mode = %v, message = %q", key, cmd != nil, model.mode, model.message)
+		}
+	}
+	if _, cmd := model.Update(keyPress("q")); cmd != nil {
+		t.Error("q quit while an action was running")
+	}
+	if _, cmd := model.Update(keyPress("j")); cmd != nil {
+		t.Error("navigating while an action runs returned a command")
+	}
+
+	updated, _ = model.Update(syncCmd())
+	model = updated.(dashboardModel)
+	if len(model.running) != 0 || model.message != "sync feature/a finished" || model.lastOutput != "sync feature/a prompt=0\n" {
+		t.Errorf("after sync: running = %v, message = %q, output = %q", model.running, model.message, model.lastOutput)
+	}
+
+	model = pressKeys(t, model, "t")
+	updated, teardownCmd := model.Update(keyPress("y"))
+	model = updated.(dashboardModel)
+	if teardownCmd == nil || model.running["feature/a"] != "teardown" {
+		t.Fatalf("y after t did not start a background teardown: running = %v", model.running)
+	}
+	updated, _ = model.Update(teardownCmd())
+	model = updated.(dashboardModel)
+	if want := "teardown feature/a failed: cannot teardown dirty worktree · l output"; model.message != want {
+		t.Errorf("teardown failure message = %q, want %q", model.message, want)
+	}
+
+	model = pressKeys(t, model, "l")
+	if rendered := model.render(); model.mode != dashboardOutput ||
+		!strings.Contains(rendered, "output of teardown feature/a") || !strings.Contains(rendered, "cannot teardown dirty worktree") {
+		t.Errorf("l did not show the teardown output:\n%s", rendered)
+	}
+	model = pressKeys(t, model, "esc")
+	if model.mode != dashboardList {
+		t.Errorf("esc in output view: mode = %v, want dashboardList", model.mode)
+	}
+}
+
 func TestDashboardModelDetailShowsSessionOpenInVSCode(t *testing.T) {
 	t.Parallel()
 
@@ -628,6 +700,11 @@ func TestDashboardInitViewDiffActionsAndStates(t *testing.T) {
 	if syncCmd == nil {
 		t.Error("s did not return sync actionCmd")
 	}
+	updated, _ = model.Update(dashboardActionMsg{action: "sync", feature: "feature/dash"})
+	model = updated.(dashboardModel)
+	if model.message != "sync feature/dash finished" {
+		t.Errorf("action success message = %q", model.message)
+	}
 	updated, openCmd := model.Update(keyPress("o"))
 	model = updated.(dashboardModel)
 	if openCmd == nil {
@@ -638,15 +715,9 @@ func TestDashboardInitViewDiffActionsAndStates(t *testing.T) {
 	if !model.loading || refreshCmd == nil {
 		t.Error("r did not trigger refresh")
 	}
-
-	updated, _ = model.Update(dashboardActionMsg{action: "sync", feature: "feature/dash"})
+	updated, _ = model.Update(dashboardActionMsg{action: "open", feature: "feature/dash", err: errors.New("conflict")})
 	model = updated.(dashboardModel)
-	if model.message != "sync feature/dash finished" {
-		t.Errorf("action success message = %q", model.message)
-	}
-	updated, _ = model.Update(dashboardActionMsg{action: "sync", feature: "feature/dash", err: errors.New("conflict")})
-	model = updated.(dashboardModel)
-	if !strings.Contains(model.message, "sync feature/dash failed: conflict") {
+	if !strings.Contains(model.message, "open feature/dash failed: conflict") {
 		t.Errorf("action failure message = %q", model.message)
 	}
 
@@ -710,30 +781,6 @@ func TestDashboardBadgesFormatAgeAndExec(t *testing.T) {
 	}
 	if badges := sessionBadges(dashboardSession{drift: "current", editorOpen: true}); !strings.Contains(badges, "open") {
 		t.Errorf("sessionBadges(editorOpen) = %q, missing %q", badges, "open")
-	}
-
-	// dashboardExec without and with pause.
-	var stdout, stderr bytes.Buffer
-	execNoPause := &dashboardExec{command: exec.Command("sh", "-c", "printf out; printf err >&2"), pause: false}
-	execNoPause.SetStdin(strings.NewReader(""))
-	execNoPause.SetStdout(&stdout)
-	execNoPause.SetStderr(&stderr)
-	if err := execNoPause.Run(); err != nil {
-		t.Fatalf("dashboardExec(pause=false) error = %v", err)
-	}
-	if stdout.String() != "out" || stderr.String() != "err" {
-		t.Errorf("dashboardExec output = (%q, %q), want (out, err)", stdout.String(), stderr.String())
-	}
-
-	stdout.Reset()
-	execPause := &dashboardExec{command: exec.Command("true"), pause: true}
-	execPause.SetStdin(strings.NewReader("ignored\n"))
-	execPause.SetStdout(&stdout)
-	if err := execPause.Run(); err != nil {
-		t.Fatalf("dashboardExec(pause=true) error = %v", err)
-	}
-	if !strings.Contains(stdout.String(), "Press Enter to return to the dashboard…") {
-		t.Errorf("dashboardExec(pause=true) stdout = %q, want prompt", stdout.String())
 	}
 
 	file, err := os.CreateTemp(t.TempDir(), "not-a-tty")

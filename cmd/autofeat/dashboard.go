@@ -4,7 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -225,6 +225,7 @@ const (
 	dashboardList dashboardMode = iota
 	dashboardDiff
 	dashboardConfirmTeardown
+	dashboardOutput
 )
 
 type dashboardLoadedMsg struct {
@@ -242,6 +243,7 @@ type dashboardDiffMsg struct {
 type dashboardActionMsg struct {
 	action  string
 	feature string
+	output  string
 	err     error
 }
 
@@ -263,9 +265,16 @@ type dashboardModel struct {
 	detailOffset  int
 	filtering     bool
 	filter        textinput.Model
-	diff          viewport.Model
-	diffRepo      int
-	diffLoaded    bool
+	// diff pages both repository diffs and the last action's output.
+	diff       viewport.Model
+	diffRepo   int
+	diffLoaded bool
+
+	// running maps a feature to its in-progress action. Update replaces the
+	// map instead of mutating it because models are copied by value.
+	running    map[string]string
+	lastAction string
+	lastOutput string
 
 	width  int
 	height int
@@ -316,13 +325,69 @@ func (m dashboardModel) diffCmd() tea.Cmd {
 	}
 }
 
-// actionCmd hands the terminal to an autofeat subcommand. Commands whose output
-// matters wait for Enter before the dashboard redraws over it.
-func (m dashboardModel) actionCmd(action, feature string, pause bool) tea.Cmd {
-	command := &dashboardExec{command: exec.Command(m.executable, action, feature), pause: pause}
-	return tea.Exec(command, func(err error) tea.Msg {
-		return dashboardActionMsg{action: action, feature: feature, err: err}
-	})
+// actionCmd runs an autofeat subcommand in the background so the dashboard
+// stays on screen. Output goes to a temporary file rather than a pipe, so
+// the subcommand can finish even if the dashboard exits first.
+func (m dashboardModel) actionCmd(action, feature string) tea.Cmd {
+	executable := m.executable
+	return func() tea.Msg {
+		output, err := runDashboardAction(executable, action, feature)
+		return dashboardActionMsg{action: action, feature: feature, output: output, err: err}
+	}
+}
+
+func runDashboardAction(executable, action, feature string) (string, error) {
+	file, err := os.CreateTemp("", "autofeat-dash-*.log")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+
+	command := exec.Command(executable, action, feature)
+	command.Stdout, command.Stderr = file, file
+	// Without a terminal, prompts would hang or corrupt the dashboard.
+	command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	runErr := command.Run()
+	output, err := os.ReadFile(file.Name())
+	if err != nil {
+		return "", errors.Join(runErr, err)
+	}
+	return string(output), runErr
+}
+
+func (m *dashboardModel) startAction(action, feature string) tea.Cmd {
+	if running, ok := m.running[feature]; ok {
+		m.message = fmt.Sprintf("%s is busy: %s is still running", feature, running)
+		return nil
+	}
+	m.running = maps.Clone(m.running)
+	if m.running == nil {
+		m.running = map[string]string{}
+	}
+	m.running[feature] = action
+	m.message = fmt.Sprintf("%s %s…", action, feature)
+	return m.actionCmd(action, feature)
+}
+
+func (m *dashboardModel) finishAction(msg dashboardActionMsg) {
+	m.running = maps.Clone(m.running)
+	delete(m.running, msg.feature)
+	m.lastAction = msg.action + " " + msg.feature
+	m.lastOutput = msg.output
+	if msg.err == nil {
+		m.message = m.lastAction + " finished"
+		return
+	}
+	reason := msg.err.Error()
+	lines := strings.Split(strings.TrimSpace(msg.output), "\n")
+	if last := strings.TrimSpace(lines[len(lines)-1]); last != "" {
+		reason = strings.TrimPrefix(last, "autofeat: ")
+	}
+	m.message = fmt.Sprintf("%s failed: %s", m.lastAction, reason)
+	if strings.TrimSpace(msg.output) != "" {
+		m.message += " · l output"
+	}
 }
 
 func (m dashboardModel) current() (dashboardSession, bool) {
@@ -401,7 +466,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case dashboardDiffMsg:
 		session, ok := m.current()
-		if !ok || session.name != msg.feature || m.diffRepo != msg.repository {
+		if m.mode != dashboardDiff || !ok || session.name != msg.feature || m.diffRepo != msg.repository {
 			return m, nil
 		}
 		m.diffLoaded = true
@@ -415,11 +480,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diff.GotoTop()
 		return m, nil
 	case dashboardActionMsg:
-		if msg.err != nil {
-			m.message = fmt.Sprintf("%s %s failed: %v", msg.action, msg.feature, msg.err)
-		} else {
-			m.message = fmt.Sprintf("%s %s finished", msg.action, msg.feature)
-		}
+		m.finishAction(msg)
 		m.loading = true
 		return m, m.loadCmd()
 	case tea.KeyPressMsg:
@@ -436,7 +497,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	if m.mode == dashboardDiff {
+	if m.mode == dashboardDiff || m.mode == dashboardOutput {
 		var cmd tea.Cmd
 		m.diff, cmd = m.diff.Update(msg)
 		return m, cmd
@@ -476,7 +537,15 @@ func (m dashboardModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.message = "teardown cancelled"
 			return m, nil
 		}
-		return m, m.actionCmd("teardown", m.confirmTarget, true)
+		return m, m.startAction("teardown", m.confirmTarget)
+	case dashboardOutput:
+		if key == "q" || key == "esc" || key == "l" {
+			m.mode = dashboardList
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.diff, cmd = m.diff.Update(msg)
+		return m, cmd
 	case dashboardDiff:
 		session, ok := m.current()
 		switch key {
@@ -503,6 +572,10 @@ func (m dashboardModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	session, ok := m.current()
 	switch key {
 	case "q", "esc":
+		if len(m.running) != 0 {
+			m.message = "actions are still running; wait for them or press ctrl+c to quit anyway"
+			return m, nil
+		}
 		return m, tea.Quit
 	case "up", "k":
 		m.selected = max(0, m.selected-1)
@@ -538,17 +611,35 @@ func (m dashboardModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "s":
 		if ok {
-			return m, m.actionCmd("sync", session.name, true)
+			return m, m.startAction("sync", session.name)
 		}
 	case "o":
 		if ok {
-			return m, m.actionCmd("open", session.name, false)
+			return m, m.startAction("open", session.name)
 		}
 	case "t":
-		if ok {
-			m.mode = dashboardConfirmTeardown
-			m.confirmTarget = session.name
+		if !ok {
+			break
 		}
+		if running, busy := m.running[session.name]; busy {
+			m.message = fmt.Sprintf("%s is busy: %s is still running", session.name, running)
+			break
+		}
+		m.mode = dashboardConfirmTeardown
+		m.confirmTarget = session.name
+	case "l":
+		if m.lastAction == "" {
+			m.message = "no action output yet"
+			break
+		}
+		output := m.lastOutput
+		if strings.TrimSpace(output) == "" {
+			output = "No output."
+		}
+		m.mode = dashboardOutput
+		m.resizeDiff()
+		m.diff.SetContent(output)
+		m.diff.GotoTop()
 	}
 	if m.currentName() != session.name {
 		m.detailOffset = 0
@@ -580,8 +671,12 @@ func (m dashboardModel) View() tea.View {
 }
 
 func (m dashboardModel) render() string {
-	if m.mode == dashboardDiff {
+	switch m.mode {
+	case dashboardDiff:
 		return m.renderDiff()
+	case dashboardOutput:
+		footer := truncate(dashboardFaintStyle.Render(fmt.Sprintf("↑/↓/pgup/pgdn scroll · esc back · %3.0f%%", m.diff.ScrollPercent()*100)), m.width)
+		return lipgloss.JoinVertical(lipgloss.Left, dashboardTitleStyle.Render(truncate("output of "+m.lastAction, m.width)), m.diff.View(), footer)
 	}
 
 	header := m.renderHeader()
@@ -637,7 +732,7 @@ func (m *dashboardModel) scrollDetail(delta int) {
 }
 
 func (m dashboardModel) updateMouseWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
-	if m.mode == dashboardDiff {
+	if m.mode == dashboardDiff || m.mode == dashboardOutput {
 		var cmd tea.Cmd
 		m.diff, cmd = m.diff.Update(msg)
 		return m, cmd
@@ -695,7 +790,7 @@ func (m dashboardModel) renderFooter() string {
 	if m.mode == dashboardConfirmTeardown {
 		return dashboardYellowStyle.Render(fmt.Sprintf("Tear down %s? Its worktrees and local branches are removed. [y/N]", m.confirmTarget))
 	}
-	help := "↑/↓ select · pgup/pgdn details · enter diff · s sync · o open · t teardown · / filter · , sort · r refresh · q quit"
+	help := "↑/↓ select · pgup/pgdn details · enter diff · s sync · o open · t teardown · l output · / filter · , sort · r refresh · q quit"
 	if m.filter.Value() != "" {
 		help = "filter: " + m.filter.Value() + " · " + help
 	}
@@ -712,6 +807,9 @@ func (m dashboardModel) renderList(width, height int) string {
 	for position := offset; position < len(m.visible) && len(lines) < height; position++ {
 		session := m.sessions[m.visible[position]]
 		badges := sessionBadges(session)
+		if action, ok := m.running[session.name]; ok {
+			badges = strings.TrimSpace(dashboardCyanStyle.Render(action+"…") + " " + badges)
+		}
 		age := formatAge(now.Sub(session.lastActivity))
 		name := truncate(session.name, max(4, width-lipgloss.Width(badges)-len(age)-3))
 		gap := max(1, width-lipgloss.Width(name)-len(age)-lipgloss.Width(badges)-2)
@@ -859,35 +957,6 @@ func truncate(text string, width int) string {
 		return text
 	}
 	return lipgloss.NewStyle().MaxWidth(width).Render(text)
-}
-
-// dashboardExec runs a subcommand with the dashboard's terminal and, when
-// pause is set, keeps its output on screen until Enter is pressed.
-type dashboardExec struct {
-	command *exec.Cmd
-	pause   bool
-	stdin   io.Reader
-	stdout  io.Writer
-}
-
-func (c *dashboardExec) SetStdin(r io.Reader) { c.stdin = r; c.command.Stdin = r }
-
-func (c *dashboardExec) SetStdout(w io.Writer) { c.stdout = w; c.command.Stdout = w }
-
-func (c *dashboardExec) SetStderr(w io.Writer) { c.command.Stderr = w }
-
-func (c *dashboardExec) Run() error {
-	err := c.command.Run()
-	if c.pause && c.stdout != nil && c.stdin != nil {
-		fmt.Fprint(c.stdout, "\nPress Enter to return to the dashboard…")
-		buffer := make([]byte, 1)
-		for {
-			if n, readErr := c.stdin.Read(buffer); readErr != nil || (n == 1 && (buffer[0] == '\n' || buffer[0] == '\r')) {
-				break
-			}
-		}
-	}
-	return err
 }
 
 func runDashboard(staleAfter time.Duration) error {
