@@ -424,6 +424,8 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.loadCmd()
 	case tea.KeyPressMsg:
 		return m.updateKey(msg)
+	case tea.MouseWheelMsg:
+		return m.updateMouseWheel(msg)
 	}
 
 	if m.filtering {
@@ -511,9 +513,9 @@ func (m dashboardModel) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "end", "G":
 		m.selected = max(0, len(m.visible)-1)
 	case "pgdown", "ctrl+d":
-		m.detailOffset += max(1, m.height/2)
+		m.scrollDetail(max(1, m.height/2))
 	case "pgup", "ctrl+u":
-		m.detailOffset = max(0, m.detailOffset-max(1, m.height/2))
+		m.scrollDetail(-max(1, m.height/2))
 	case "/":
 		m.filtering = true
 		return m, m.filter.Focus()
@@ -566,9 +568,13 @@ var (
 	dashboardLinkStyle     = lipgloss.NewStyle().Underline(true)
 )
 
+// dashboardWheelDetailLines matches the diff viewport's default wheel step.
+const dashboardWheelDetailLines = 3
+
 func (m dashboardModel) View() tea.View {
 	view := tea.NewView(m.render())
 	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
 	view.WindowTitle = "autofeat dash"
 	return view
 }
@@ -578,6 +584,88 @@ func (m dashboardModel) render() string {
 		return m.renderDiff()
 	}
 
+	header := m.renderHeader()
+	footer := m.renderFooterBlock()
+	bodyHeight := max(1, m.height-lipgloss.Height(header)-lipgloss.Height(footer))
+
+	var body string
+	switch {
+	case m.err != nil:
+		body = dashboardRedStyle.Render("error: " + m.err.Error())
+	case m.loading && len(m.sessions) == 0:
+		body = dashboardFaintStyle.Render("Inspecting sessions…")
+	case len(m.sessions) == 0:
+		body = "No sessions. Create one with `autofeat new FEATURE`."
+	case len(m.visible) == 0:
+		body = "No sessions match the filter."
+	default:
+		listWidth := m.listWidth()
+		list := m.renderList(listWidth, bodyHeight)
+		detail := m.renderDetail(m.detailWidth(), bodyHeight)
+		separator := dashboardFaintStyle.Render(strings.Repeat(" │ \n", bodyHeight))
+		body = lipgloss.JoinHorizontal(lipgloss.Top, list, strings.TrimSuffix(separator, "\n"), detail)
+	}
+	body = lipgloss.NewStyle().Height(bodyHeight).MaxHeight(bodyHeight).Render(body)
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+}
+
+func (m dashboardModel) listWidth() int {
+	return min(max(30, m.width*2/5), 60, max(1, (m.width-3)/2))
+}
+
+// detailWidth excludes the list and the three-column separator.
+func (m dashboardModel) detailWidth() int {
+	return max(1, m.width-m.listWidth()-3)
+}
+
+func (m dashboardModel) bodyHeight() int {
+	return max(1, m.height-lipgloss.Height(m.renderHeader())-lipgloss.Height(m.renderFooterBlock()))
+}
+
+// maxDetailOffset is the largest detailOffset that still fills the detail pane.
+func (m dashboardModel) maxDetailOffset() int {
+	lines, height := len(m.detailLines(m.detailWidth())), m.bodyHeight()
+	if lines <= height {
+		return 0
+	}
+	return lines - max(0, height-1)
+}
+
+func (m *dashboardModel) scrollDetail(delta int) {
+	m.detailOffset = max(0, min(m.detailOffset+delta, m.maxDetailOffset()))
+}
+
+func (m dashboardModel) updateMouseWheel(msg tea.MouseWheelMsg) (tea.Model, tea.Cmd) {
+	if m.mode == dashboardDiff {
+		var cmd tea.Cmd
+		m.diff, cmd = m.diff.Update(msg)
+		return m, cmd
+	}
+	if m.mode != dashboardList || m.filtering || m.err != nil || len(m.visible) == 0 {
+		return m, nil
+	}
+	step := 1
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		step = -1
+	case tea.MouseWheelDown:
+	default:
+		return m, nil
+	}
+	if msg.X >= m.listWidth() {
+		m.scrollDetail(step * dashboardWheelDetailLines)
+		return m, nil
+	}
+	selectedName := m.currentName()
+	m.selected = max(0, min(m.selected+step, len(m.visible)-1))
+	if m.currentName() != selectedName {
+		m.detailOffset = 0
+	}
+	return m, nil
+}
+
+func (m dashboardModel) renderHeader() string {
 	stale := 0
 	for _, session := range m.sessions {
 		if session.stale != "" {
@@ -593,31 +681,11 @@ func (m dashboardModel) render() string {
 	if m.loading {
 		header += dashboardFaintStyle.Render(" · refreshing…")
 	}
+	return truncate(header, m.width)
+}
 
-	header = truncate(header, m.width)
-	footer := lipgloss.NewStyle().Width(m.width).Render(m.renderFooter())
-	bodyHeight := max(1, m.height-lipgloss.Height(header)-lipgloss.Height(footer))
-
-	var body string
-	switch {
-	case m.err != nil:
-		body = dashboardRedStyle.Render("error: " + m.err.Error())
-	case m.loading && len(m.sessions) == 0:
-		body = dashboardFaintStyle.Render("Inspecting sessions…")
-	case len(m.sessions) == 0:
-		body = "No sessions. Create one with `autofeat new FEATURE`."
-	case len(m.visible) == 0:
-		body = "No sessions match the filter."
-	default:
-		listWidth := min(max(30, m.width*2/5), 60, max(1, (m.width-3)/2))
-		list := m.renderList(listWidth, bodyHeight)
-		detail := m.renderDetail(max(1, m.width-listWidth-3), bodyHeight)
-		separator := dashboardFaintStyle.Render(strings.Repeat(" │ \n", bodyHeight))
-		body = lipgloss.JoinHorizontal(lipgloss.Top, list, strings.TrimSuffix(separator, "\n"), detail)
-	}
-	body = lipgloss.NewStyle().Height(bodyHeight).MaxHeight(bodyHeight).Render(body)
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+func (m dashboardModel) renderFooterBlock() string {
+	return lipgloss.NewStyle().Width(m.width).Render(m.renderFooter())
 }
 
 func (m dashboardModel) renderFooter() string {
@@ -690,6 +758,18 @@ func sessionBadges(session dashboardSession) string {
 }
 
 func (m dashboardModel) renderDetail(width, height int) string {
+	lines := m.detailLines(width)
+	if len(lines) > height {
+		// The last row shows the scroll position, so height-1 detail lines fit.
+		visible := max(0, height-1)
+		offset := min(m.detailOffset, len(lines)-visible)
+		indicator := truncate(dashboardFaintStyle.Render(fmt.Sprintf("lines %d-%d of %d · pgup/pgdn scroll", offset+1, offset+visible, len(lines))), width)
+		lines = append(lines[offset:offset+visible:offset+visible], indicator)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m dashboardModel) detailLines(width int) []string {
 	session, _ := m.current()
 	now := m.now()
 	lines := []string{
@@ -755,14 +835,7 @@ func (m dashboardModel) renderDetail(width, height int) string {
 	for index, line := range lines {
 		lines[index] = truncate(line, width)
 	}
-	if len(lines) > height {
-		// The last row shows the scroll position, so height-1 detail lines fit.
-		visible := max(0, height-1)
-		offset := min(m.detailOffset, len(lines)-visible)
-		indicator := truncate(dashboardFaintStyle.Render(fmt.Sprintf("lines %d-%d of %d · pgup/pgdn scroll", offset+1, offset+visible, len(lines))), width)
-		lines = append(lines[offset:offset+visible:offset+visible], indicator)
-	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 func (m dashboardModel) renderDiff() string {

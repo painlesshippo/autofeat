@@ -591,7 +591,11 @@ repository's `status` fields and a `git diff --stat` summary. Press `enter` to
 review the full diff of the selected session as a pull request would show it:
 the working tree, including uncommitted and untracked files, compared to its
 merge-base with the base branch. Press `tab` to move between repositories and
-`esc` to return. Press `pgup` and `pgdn` to scroll long session details.
+`esc` to return. Press `pgup` and `pgdn` to scroll long session details. The
+mouse wheel scrolls the pane under the pointer: it moves the selection over the
+list, scrolls the details over the right pane, and scrolls the full diff. Because
+the dashboard captures the mouse, hold `Shift` to select text or click links in
+most terminals.
 
 A session is marked stale when one of these holds:
 
