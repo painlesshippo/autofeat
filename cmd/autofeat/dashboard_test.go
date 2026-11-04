@@ -313,6 +313,83 @@ func TestDashboardModelDetailScrollsAndFitsWidth(t *testing.T) {
 	}
 }
 
+func TestDashboardModelMouseWheelScrollsPaneUnderPointer(t *testing.T) {
+	t.Parallel()
+
+	repos := make([]dashboardRepository, 0, 8)
+	for index := range 8 {
+		repos = append(repos, dashboardRepository{
+			status:   repositoryStatus{repositoryName: fmt.Sprintf("repo-%d", index+1), branch: "feature/wide", baseBranch: "main", baseKnown: true, worktree: "clean"},
+			diffStat: "file.go | 1 +\n",
+		})
+	}
+	model := newDashboardModel("autofeat", defaultStaleAfter)
+	updated, _ := model.Update(dashboardLoadedMsg{sessions: []dashboardSession{
+		{name: "feature/wide", lastActivity: time.Now(), drift: "current", repos: repos},
+		{name: "feature/other", drift: "current"},
+	}})
+	model = updated.(dashboardModel)
+	if model.View().MouseMode != tea.MouseModeCellMotion {
+		t.Fatal("dashboard view does not enable mouse wheel events")
+	}
+	detailX := model.listWidth() + 3
+
+	model = wheel(t, model, detailX, tea.MouseWheelDown)
+	if model.selected != 0 || model.detailOffset != dashboardWheelDetailLines {
+		t.Errorf("wheel down over detail: selected = %d, detailOffset = %d; want 0, %d", model.selected, model.detailOffset, dashboardWheelDetailLines)
+	}
+	model = wheel(t, model, detailX, tea.MouseWheelUp)
+	if model.detailOffset != 0 {
+		t.Errorf("wheel up over detail: detailOffset = %d, want 0", model.detailOffset)
+	}
+
+	maxOffset := model.maxDetailOffset()
+	if maxOffset == 0 {
+		t.Fatal("detail fits the pane; the test needs scrollable details")
+	}
+	for range 50 {
+		model = wheel(t, model, detailX, tea.MouseWheelDown)
+	}
+	if model.detailOffset != maxOffset {
+		t.Errorf("detailOffset after scrolling past the end = %d, want %d", model.detailOffset, maxOffset)
+	}
+	if rendered := model.render(); !strings.Contains(rendered, "repo-8") {
+		t.Errorf("render at the bottom of the detail does not reveal repo-8:\n%s", rendered)
+	}
+	model = pressKeys(t, model, "pgdown")
+	if model.detailOffset != maxOffset {
+		t.Errorf("pgdown at the bottom moved detailOffset to %d, want %d", model.detailOffset, maxOffset)
+	}
+
+	model = wheel(t, model, 0, tea.MouseWheelDown)
+	if model.selected != 1 || model.detailOffset != 0 {
+		t.Errorf("wheel down over list: selected = %d, detailOffset = %d; want 1, 0", model.selected, model.detailOffset)
+	}
+	model = wheel(t, model, 0, tea.MouseWheelDown)
+	if model.selected != 1 {
+		t.Errorf("wheel down past the last session: selected = %d, want 1", model.selected)
+	}
+	model = wheel(t, model, 0, tea.MouseWheelUp)
+	if model.selected != 0 {
+		t.Errorf("wheel up over list: selected = %d, want 0", model.selected)
+	}
+
+	model.mode = dashboardDiff
+	model.diff.SetWidth(80)
+	model.diff.SetHeight(5)
+	model.diff.SetContent(strings.Repeat("line\n", 50))
+	model = wheel(t, model, 0, tea.MouseWheelDown)
+	if model.diff.YOffset() == 0 || model.selected != 0 {
+		t.Errorf("wheel in diff mode: diff offset = %d, selected = %d; want scrolled diff, 0", model.diff.YOffset(), model.selected)
+	}
+}
+
+func wheel(t *testing.T, model dashboardModel, x int, button tea.MouseButton) dashboardModel {
+	t.Helper()
+	updated, _ := model.Update(tea.MouseWheelMsg{X: x, Y: 2, Button: button})
+	return updated.(dashboardModel)
+}
+
 func TestDashboardModelDetailShowsSessionOpenInVSCode(t *testing.T) {
 	t.Parallel()
 
